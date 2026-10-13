@@ -29,3 +29,39 @@ test("firstLine and default args", () => {
   assert.deepEqual(defaultAgentArgs("claude"), ["--allowedTools", "Bash(pack-leader:*)"]);
   assert.deepEqual(defaultAgentArgs("codex"), []);
 });
+
+test("parseArgs: repeated value flags accumulate, repeated bare flags stay true", () => {
+  const a = parseArgs(["--depends-on", "a", "--depends-on", "b", "--depends-on=c", "--wait", "--wait"]);
+  assert.equal(str(a, "depends-on"), "a,b,c");
+  assert.deepEqual(list(a, "depends-on"), ["a", "b", "c"]);
+  assert.equal(a.flags.get("wait"), true);
+  assert.equal(has(a, "wait"), true);
+  // A bare repeat does not discard a value given earlier.
+  const b = parseArgs(["--x", "v", "--x"]);
+  assert.equal(str(b, "x"), "v");
+  // A value after a bare flag replaces the `true`.
+  const c = parseArgs(["--x", "--x", "v"]);
+  assert.equal(str(c, "x"), "v");
+});
+
+test("parseArgs: --k= is an empty string value", () => {
+  const a = parseArgs(["--k="]);
+  assert.equal(has(a, "k"), true);
+  assert.equal(str(a, "k"), "");
+  assert.deepEqual(list(a, "k"), []);
+  assert.equal(num(a, "k", 3), 0);
+  assert.equal(str(parseArgs(["--k=", "--k=v"]), "k"), ",v");
+});
+
+test("parseArgs: a single-dash token is a positional, or a value when it follows a flag", () => {
+  assert.deepEqual(parseArgs(["-x", "y"]).positional, ["-x", "y"]);
+  assert.equal(parseArgs(["-x"]).flags.size, 0);
+  assert.equal(str(parseArgs(["--spec", "-x"]), "spec"), "-x");
+  assert.deepEqual(parseArgs(["-"]).positional, ["-"]);
+});
+
+test("num on a bare flag falls back", () => {
+  assert.equal(num(parseArgs(["--timeout"]), "timeout", 7), 7);
+  assert.equal(num(parseArgs(["--timeout", "--wait"]), "timeout", 7), 7);
+  assert.equal(num(parseArgs([]), "timeout", 7), 7);
+});

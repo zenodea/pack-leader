@@ -30,8 +30,15 @@ export function width(s: string): number {
   return [...s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")].length;
 }
 
-/** Cut a (possibly styled) line to `max` printable cells, keeping escape sequences and closing styling. */
-export function truncate(s: string, max: number): string {
+/** Closes everything this module can open: bold/dim, inverse, and a foreground colour. Not a full reset. */
+export const closeStyles = `${esc("22")}${esc("27")}${esc("39")}`;
+
+/**
+ * Cut a (possibly styled) line to `max` printable cells, keeping escape sequences.
+ * A truncated result ends with `close` (default `closeStyles`), which shuts any style the
+ * cut could have left open without cancelling a style the caller wraps around the result.
+ */
+export function truncate(s: string, max: number, close: string = closeStyles): string {
   if (max <= 0) return "";
   if (width(s) <= max) return s;
   let out = "";
@@ -50,7 +57,7 @@ export function truncate(s: string, max: number): string {
     n++;
     i += ch.length;
   }
-  return out + "…" + reset;
+  return out + "…" + close;
 }
 
 export function pad(s: string, w: number): string {

@@ -2,6 +2,7 @@
 // messages, in one JSON file written atomically under a directory lock. Every
 // pack-leader command is a short-lived process, so the file is the only shared memory.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { ensureDir, lockDir, logFile, stateDir, stateFile } from "./paths.ts";
 import type { AgentStatus } from "./herdr.ts";
 
@@ -97,11 +98,38 @@ export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, worke
 
 export const now = () => new Date().toISOString();
 
-export function load(file = stateFile): State {
+/**
+ * A missing file is an empty state. A file that exists but cannot be parsed,
+ * or has a version this build does not understand, is moved aside to
+ * `<file>.corrupt-<ISO timestamp>` and logged as a `state.corrupt` event, so
+ * the next writer starts from an empty state instead of overwriting the only
+ * copy of whatever was there.
+ */
+export function load(file = stateFile, logTo = logFile): State {
+  let raw: string;
   try {
-    const s = JSON.parse(readFileSync(file, "utf8")) as State;
-    if (s && s.version === 1) return { ...emptyState(), ...s };
-  } catch {}
+    raw = readFileSync(file, "utf8");
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return emptyState();
+    throw err;
+  }
+  let reason: string;
+  try {
+    const s = JSON.parse(raw) as State;
+    if (s && typeof s === "object" && s.version === 1) return { ...emptyState(), ...s };
+    reason = `unsupported state version ${JSON.stringify(s?.version)}`;
+  } catch (err: any) {
+    reason = `parse error: ${err?.message ?? String(err)}`;
+  }
+  const base = `${file}.corrupt-${now().replace(/[:.]/g, "-")}`;
+  let renamed_to = base;
+  for (let n = 1; existsSync(renamed_to); n++) renamed_to = `${base}-${n}`;
+  try {
+    renameSync(file, renamed_to);
+  } catch (err: any) {
+    throw new Error(`state file ${file} is corrupt (${reason}) and could not be moved aside: ${err?.message ?? err}`);
+  }
+  log({ event: "state.corrupt", file, renamed_to, reason }, logTo);
   return emptyState();
 }
 
@@ -161,11 +189,11 @@ export function nextId(state: State, prefix: string): string {
 }
 
 /** An append-only trail of what happened, for the sidebar's log and for debugging. */
-export function log(entry: Record<string, unknown>): void {
+export function log(entry: Record<string, unknown>, file = logFile): void {
   try {
-    ensureDir(stateDir);
-    if (existsSync(logFile) && statSync(logFile).size > 2_000_000) writeFileSync(logFile, "");
-    appendFileSync(logFile, JSON.stringify({ t: now(), ...entry }) + "\n", { mode: 0o600 });
+    ensureDir(dirname(file));
+    if (existsSync(file) && statSync(file).size > 2_000_000) writeFileSync(file, "");
+    appendFileSync(file, JSON.stringify({ t: now(), ...entry }) + "\n", { mode: 0o600 });
   } catch {}
 }
 
@@ -181,8 +209,12 @@ export const runMessages = (state: State, runId: string): Message[] => state.mes
  * orchestrates, the run this pane works for, the only active run in this
  * workspace, the only active run at all.
  */
-export function resolveRun(state: State, opts: { runId?: string; paneId?: string | null; workspaceId?: string | null }): Run {
-  const id = opts.runId || process.env.PACK_RUN_ID;
+export function resolveRun(
+  state: State,
+  opts: { runId?: string; paneId?: string | null; workspaceId?: string | null },
+  env: NodeJS.ProcessEnv = process.env,
+): Run {
+  const id = opts.runId || env.PACK_RUN_ID;
   if (id) {
     const r = state.runs[id];
     if (!r) throw new Error(`no run ${id}`);

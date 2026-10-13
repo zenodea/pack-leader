@@ -14,11 +14,36 @@ export function workerContext(flags: { task?: string; dispatch?: string; worker?
   return { run_id, worker, task_id: flags.task ?? env.PACK_TASK_ID ?? null, dispatch_id: flags.dispatch ?? env.PACK_DISPATCH_ID ?? null };
 }
 
+const MAX_MESSAGES = 2000;
+
 function message(state: State, m: Omit<Message, "id" | "ts" | "acked"> & { acked?: boolean }): Message {
   const msg: Message = { id: nextId(state, "m"), ts: now(), acked: false, ...m };
   state.messages.push(msg);
-  if (state.messages.length > 2000) state.messages.splice(0, state.messages.length - 2000);
+  prune(state);
   return msg;
+}
+
+/**
+ * Keep the log bounded without losing anything still owed: drop the oldest
+ * acked heartbeats first, then other acked messages. Unacked messages (an
+ * unanswered ask, an unseen done, an undelivered followup) are never dropped,
+ * so the cap is exceeded rather than silently losing one.
+ */
+function prune(state: State): void {
+  let excess = state.messages.length - MAX_MESSAGES;
+  if (excess <= 0) return;
+  const drop = new Set<string>();
+  for (const pass of [(m: Message) => m.acked && m.type === "heartbeat", (m: Message) => m.acked]) {
+    for (const m of state.messages) {
+      if (excess <= 0) break;
+      if (!drop.has(m.id) && pass(m)) {
+        drop.add(m.id);
+        excess--;
+      }
+    }
+    if (excess <= 0) break;
+  }
+  if (drop.size) state.messages = state.messages.filter((m) => !drop.has(m.id));
 }
 
 /** Wake the orchestrator when it sits idle: it may have stopped waiting. Best effort. */
@@ -101,10 +126,14 @@ export async function ask(ctx: WorkerContext, o: { body?: string; resumeId?: str
   }
 }
 
-/** Follow-ups addressed to this worker, marked read. */
+/**
+ * Follow-ups addressed to this worker, marked read. Replies the worker never
+ * collected (its `pack-leader ask` timed out before the orchestrator answered)
+ * are returned the same way, so a late answer still reaches it.
+ */
 export async function inbox(ctx: WorkerContext): Promise<Message[]> {
   return update((state) => {
-    const mine = state.messages.filter((m) => m.run_id === ctx.run_id && m.to === ctx.worker && m.type === "followup" && !m.acked);
+    const mine = state.messages.filter((m) => m.run_id === ctx.run_id && m.to === ctx.worker && (m.type === "followup" || m.type === "reply") && !m.acked);
     for (const m of mine) {
       m.acked = true;
       m.delivered = true;
@@ -136,23 +165,47 @@ export async function send(run: Run, worker: string, body: string, force: boolea
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${worker}" in run ${run.id}`);
     return message(state, { run_id: run.id, type: "followup", from: "orchestrator", to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false });
   });
-  let delivered = false;
+  let ready = false;
   try {
     const a = await getAgent(worker);
-    if (force || a.agent_status === "idle" || a.agent_status === "done") {
-      await agentPrompt(worker, `[Pack Leader follow-up from the orchestrator] ${body}`);
-      delivered = true;
-    }
+    ready = force || a.agent_status === "idle" || a.agent_status === "done";
   } catch {}
-  if (delivered) await update((state) => {
-    const m = state.messages.find((m) => m.id === msg.id);
-    if (m) {
-      m.delivered = true;
-      m.acked = true;
-    }
-  });
+  // A concurrent sync() may deliver the queued message first; claim() decides who prompts.
+  const delivered = ready ? await deliver(msg.id, worker, body) : false;
   log({ event: "orchestrator.send", run: run.id, to: worker, delivered });
-  return { message: msg, delivered };
+  return { message: { ...msg, delivered, acked: delivered }, delivered };
+}
+
+const followupPrompt = (body: string) => `[Pack Leader follow-up from the orchestrator] ${body}`;
+
+/**
+ * Prompt a worker with a queued followup. The message is claimed (delivered +
+ * acked) inside the lock before the prompt goes out, so a concurrent sync() or
+ * send() cannot prompt it a second time; if the prompt fails, the claim is
+ * reverted so a later pass retries it. True when this call delivered it.
+ */
+async function deliver(id: string, worker: string, body: string): Promise<boolean> {
+  const claimed = await update((state) => {
+    const m = state.messages.find((m) => m.id === id);
+    if (!m || m.delivered || m.acked) return false;
+    m.delivered = true;
+    m.acked = true;
+    return true;
+  });
+  if (!claimed) return false;
+  try {
+    await agentPrompt(worker, followupPrompt(body));
+    return true;
+  } catch {
+    await update((state) => {
+      const m = state.messages.find((m) => m.id === id);
+      if (m) {
+        m.delivered = false;
+        m.acked = false;
+      }
+    }).catch(() => {});
+    return false;
+  }
 }
 
 export async function ack(run: Run, ids: string[]): Promise<number> {
@@ -218,20 +271,12 @@ export async function sync(): Promise<Message[]> {
         }
       }
       if (a && (status === "idle" || status === "done")) {
-        for (const m of state.messages) if (m.to === w.name && m.type === "followup" && !m.delivered) toDeliver.push({ worker: w.name, body: m.body, id: m.id });
+        for (const m of state.messages) if (m.to === w.name && m.type === "followup" && !m.delivered && !m.acked) toDeliver.push({ worker: w.name, body: m.body, id: m.id });
       }
     }
     return out;
   });
-  for (const d of toDeliver) {
-    try {
-      await agentPrompt(d.worker, `[Pack Leader follow-up from the orchestrator] ${d.body}`);
-      await update((state) => {
-        const m = state.messages.find((m) => m.id === d.id);
-        if (m) (m.delivered = true), (m.acked = true);
-      });
-    } catch {}
-  }
+  for (const d of toDeliver) await deliver(d.id, d.worker, d.body);
   for (const m of created) log({ event: "attention", run: m.run_id, worker: m.from, status: m.status });
   return created;
 }
