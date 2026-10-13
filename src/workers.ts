@@ -2,6 +2,7 @@
 // and the task handed over as the first prompt with a preamble that tells the
 // worker how to report back. Also stopping and releasing one.
 import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, paneClose, paneSplit, tabClose, tabCreate, HerdrError } from "./herdr.ts";
+import { EXITED_SUMMARY, touch } from "./inbox.ts";
 import { load, log, nextId, now, ready, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
 import { archiveScreen, createDispatch, settleDispatch } from "./dispatch.ts";
 
@@ -355,6 +356,7 @@ async function markDispatched(name: string, paneId: string): Promise<void> {
     const w = state.workers[name];
     if (!w) return;
     w.worked = false;
+    touch(w);
     w.seq_at_dispatch = seq;
     w.last_seq = seq;
   });
@@ -411,4 +413,38 @@ export const workerSummary = (w: Worker, state: State) => ({
   status: w.last_status,
   started_at: w.started_at,
   retained: w.retained,
+  last_seen: w.last_seen,
+  liveness: w.liveness ?? null,
+  liveness_reason: w.liveness_reason ?? null,
+  ...(w.missing_since ? { missing_since: w.missing_since } : {}),
+  ...(w.stalled_since ? { stalled_since: w.stalled_since } : {}),
+  attention: workerAttention(state, w),
+  next_action: nextAction(state, w),
 });
+
+/** The worker's unacked questions and alerts for the orchestrator, oldest first. */
+const openFor = (state: State, w: Worker) =>
+  state.messages.filter((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && !m.acked && (m.type === "ask" || m.type === "attention"));
+
+/** What is waiting on the orchestrator for this worker: "ask", or an attention status (idle, blocked, exited, unverifiable, stalled, ...). */
+export function workerAttention(state: State, w: Worker): { categories: string[]; requires_action: boolean } {
+  const categories = [...new Set(openFor(state, w).map((m) => (m.type === "ask" ? "ask" : m.status ?? "attention")))];
+  return { categories, requires_action: categories.length > 0 };
+}
+
+/**
+ * The literal argv the orchestrator should run next for this worker, or null
+ * when nothing is required: answer an open question first, then release a
+ * worker whose pane is gone with its task open, then read the screen of one
+ * with any other open alert. `<answer>` is a placeholder to fill in.
+ */
+export function nextAction(state: State, w: Worker): string[] | null {
+  const open = openFor(state, w);
+  const q = open.find((m) => m.type === "ask");
+  if (q) return ["pack-leader", "reply", q.id, "--body", "<answer>"];
+  const t = w.task_id ? state.tasks[w.task_id] : null;
+  const owing = t?.status === "dispatched" || (t?.status === "failed" && t.outcome?.summary === EXITED_SUMMARY);
+  if (w.liveness === "exited" && owing) return ["pack-leader", "worker", "release", w.name, "--force"];
+  if (open.length) return ["pack-leader", "worker", "read", w.name];
+  return null;
+}

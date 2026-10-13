@@ -23,11 +23,11 @@ import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
 import { agentFocus, agentRead, getPane, notify, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
-import { ack, ask, check, done, heartbeat, inbox, reply, send, sync, workerContext } from "./inbox.ts";
+import { ack, ask, check, done, heartbeat, herdrWarning, inbox, reply, send, sync, workerContext } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
 import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Run, type State, unacked, update } from "./state.ts";
 import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
-import { DEFAULT_KIND, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
+import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
 import { guide, installSkill } from "./skill.ts";
 
 const out = (v: unknown) => process.stdout.write(JSON.stringify(v, null, 2) + "\n");
@@ -216,7 +216,8 @@ async function main(): Promise<void> {
         await sync().catch(() => {});
         const state = load();
         const run = currentRun(args, state);
-        out({ workers: runWorkers(state, run.id).map((w) => workerSummary(w, state)) });
+        const warning = herdrWarning(run);
+        out({ workers: runWorkers(state, run.id).map((w) => workerSummary(w, state)), ...(warning ? { warning } : {}) });
         return;
       }
       if (!name) throw new Error(`usage: pack-leader worker ${sub} NAME`);
@@ -225,7 +226,8 @@ async function main(): Promise<void> {
         const state = load();
         const w = state.workers[name];
         if (!w) throw new Error(`no worker "${name}"`);
-        out({ worker: workerSummary(w, state), task: w.task_id ? state.tasks[w.task_id] : null, messages: state.messages.filter((m) => m.from === name || m.to === name).slice(-10) });
+        const warning = herdrWarning(state.runs[w.run_id]);
+        out({ worker: workerSummary(w, state), task: w.task_id ? state.tasks[w.task_id] : null, messages: state.messages.filter((m) => m.from === name || m.to === name).slice(-10), ...(warning ? { warning } : {}) });
         return;
       }
       if (sub === "read") {
@@ -435,7 +437,9 @@ async function openSidebar(target: string, onLeft = false, focus = false): Promi
 
 function view(state: State, run: Run) {
   const perTask = dispatchCounts(state, run);
+  const warning = herdrWarning(run);
   return {
+    ...(warning ? { warning } : {}),
     run,
     tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t), ready: ready(state, t), dispatches: perTask.get(t.id) ?? 0 })),
     workers: runWorkers(state, run.id).map((w) => workerSummary(w, state)),
@@ -449,15 +453,24 @@ function dispatchCounts(state: State, run: Run): Map<string, number> {
   return n;
 }
 
-const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕") };
+const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕"), unverifiable: fg.red("?"), stalled: fg.red("◌") };
+
+/** An argv as one shell line, quoting what needs it. */
+const shellLine = (argv: string[]) => argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
 
 function statusText(state: State, run: Run): string {
   const lines = [`${bold("" + run.id)} ${run.objective}`, dim(`orchestrator ${run.orchestrator.pane_id ?? "?"} · ${run.orchestrator.cwd}`), ""];
+  const warning = herdrWarning(run);
+  if (warning) lines.splice(2, 0, fg.red(`warning: ${warning}`));
   const perTask = dispatchCounts(state, run);
   for (const w of runWorkers(state, run.id)) {
     const t = w.task_id ? state.tasks[w.task_id] : null;
     const n = t ? perTask.get(t.id) ?? 0 : 0;
-    lines.push(`${glyph[w.last_status] ?? "?"} ${bold(w.name)} ${dim(w.pane_id)} ${t ? `${t.id} ${t.status}${n > 1 ? dim(` (${n} dispatches)`) : ""} · ${t.title}` : dim("no task")}`);
+    const shown = w.liveness === "unverifiable" ? "unverifiable" : w.stalled_since ? "stalled" : w.last_status;
+    const live = w.liveness ? (w.liveness === "live" ? dim(w.liveness) : fg.red(w.liveness)) + dim(` (${w.liveness_reason ?? "?"})`) : dim("liveness ?");
+    lines.push(`${glyph[shown] ?? "?"} ${bold(w.name)} ${dim(w.pane_id)} ${live} ${t ? `${t.id} ${t.status}${n > 1 ? dim(` (${n} dispatches)`) : ""} · ${t.title}` : dim("no task")}`);
+    const next = nextAction(state, w);
+    if (next) lines.push(`  ${fg.yellow("next:")} ${shellLine(next)}`);
   }
   const pending = runTasks(state, run.id).filter((t) => t.status === "pending");
   if (pending.length) lines.push("", dim("pending: ") + pending.map((t) => `${t.id}${ready(state, t) ? "" : "(waits)"} ${t.title}`).join(", "));
@@ -478,11 +491,13 @@ Orchestrator (the agent you talk to):
   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--cwd D] [--placement tab|split] [--direction right|down] [-- agent args]
                                                 hidden tab by default; split puts it next to you
   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME
+                                                rows carry liveness, attention and next_action (argv to run);
                                                 read falls back to the screen archived at release
   pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention]
+                                                --wait: a JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
   pack-leader reply ASK_ID --body "..."
   pack-leader send NAME "text" [--now]
   pack-leader status [--json]

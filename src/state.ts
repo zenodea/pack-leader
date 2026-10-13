@@ -19,6 +19,8 @@ export type Run = {
   orchestrator: { pane_id: string | null; workspace_id: string | null; tab_id: string | null; cwd: string };
   /** The sidebar pane pack-leader opened for this run, if any. */
   sidebar_pane_id?: string | null;
+  /** Set while sync() cannot reach herdr: worker liveness verdicts are stale until it clears. */
+  herdr_unreachable_since?: string | null;
 };
 
 export type Task = {
@@ -60,7 +62,23 @@ export type Worker = {
   /** herdr's state_change_seq when the dispatch was prompted. */
   seq_at_dispatch?: number;
   retained: boolean;
+  /** sync()'s verdict: agent seen in its pane, pane alive but no agent past the grace, or pane gone twice running. */
+  liveness?: Liveness;
+  liveness_reason?: string;
+  /** The first sync that did not find the pane; a second one in a row makes it exited. */
+  missing_since?: string | null;
+  /** The first sync that found the pane without an agent. */
+  agent_missing_since?: string | null;
+  /** The dispatch an `unverifiable` attention was raised for (once per dispatch). */
+  unverifiable_dispatch?: string | null;
+  /** When a `stalled` attention was raised; cleared by any sign of life (heartbeat, ask, done, herdr state change). */
+  stalled_since?: string | null;
 };
+
+/** What an attention message is about: herdr's agent state, or Pack Leader's own liveness findings. */
+export type AttentionStatus = AgentStatus | "exited" | "unverifiable" | "stalled";
+
+export type Liveness = "live" | "unverifiable" | "exited";
 
 export type Message = {
   id: string;
@@ -76,7 +94,7 @@ export type Message = {
   outcome?: "succeeded" | "failed";
   files_modified?: string[];
   report_path?: string | null;
-  status?: AgentStatus | "exited";
+  status?: AttentionStatus;
   /** For a reply: the ask it answers. */
   reply_to?: string;
   /** Acknowledged by the orchestrator (or read by the worker, for followups). */

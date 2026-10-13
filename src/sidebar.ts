@@ -10,8 +10,9 @@ import { sync } from "./inbox.ts";
 
 type Live = Map<string, { status: AgentStatus; title: string | null; agent: string | null }>;
 
-const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕") };
-const word: Record<string, string> = { idle: "idle", done: "done", working: "working", blocked: "BLOCKED", unknown: "?", exited: "gone" };
+const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕"), unverifiable: fg.red("?"), stalled: fg.red("◌") };
+const word: Record<string, string> = { idle: "idle", done: "done", working: "working", blocked: "BLOCKED", unknown: "?", exited: "gone", unverifiable: "NO AGENT", stalled: "STALLED" };
+const alarming = new Set(["blocked", "unverifiable", "stalled"]);
 
 function elapsed(iso: string): string {
   const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
@@ -46,7 +47,8 @@ export async function runSidebar(): Promise<void> {
     return list;
   };
 
-  const statusOf = (w: Worker): string => live.get(w.pane_id)?.status ?? (w.last_status === "exited" ? "exited" : "exited");
+  const statusOf = (w: Worker): string =>
+    w.liveness === "unverifiable" ? "unverifiable" : w.stalled_since ? "stalled" : live.get(w.pane_id)?.status ?? "exited";
 
   const draw = () => {
     const cols = out.columns || 30;
@@ -71,7 +73,7 @@ export async function runSidebar(): Promise<void> {
         const inner = cols - 4;
         // agent · runtime · objective, then the last thing it said
         const agent = `${glyph[st] ?? "?"} ${bold(w.name)} ${dim(w.kind)}`;
-        const runtime = `${dim("runtime")} ${elapsed(w.started_at)} ${dim("·")} ${st === "blocked" ? fg.red(word[st]!) : word[st] ?? st}`;
+        const runtime = `${dim("runtime")} ${elapsed(w.started_at)} ${dim("·")} ${alarming.has(st) ? fg.red(word[st]!) : word[st] ?? st}`;
         const objective = t ? `${t.status === "dispatched" ? "" : dim(t.status + ": ")}${t.title}` : dim("no task");
         const hb = [...state.messages].reverse().find((m) => m.from === w.name && (m.type === "heartbeat" || m.type === "done" || m.type === "ask") && m.run_id === run.id);
         const note = hb ? `${hb.type === "ask" ? fg.magenta("asks: ") : hb.type === "done" ? (hb.outcome === "failed" ? fg.red("failed: ") : fg.green("done: ")) : dim("↳ ")}${hb.body}` : "";

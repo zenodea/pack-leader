@@ -93,6 +93,12 @@ worker's pane, `r` previews its last lines.
 - `pack-leader check --wait` subscribes to herdr's events and reconciles each worker's
   live state: a worker that goes idle, blocked or away without `pack-leader done`
   becomes an `attention` message the orchestrator must acknowledge.
+- Each sync also judges liveness (`live`, `unverifiable` when the agent quit but
+  its pane stays open, `exited` when the pane is gone twice running) and raises
+  `stalled` when a worker owing a report shows no sign of life for
+  `PACK_STALL_MS` (default 20 min). `pack-leader worker list` and `status` give each
+  worker a `next_action`: the exact command to run next. `check --wait` prints a
+  JSON heartbeat line to stderr every `PACK_WAIT_HEARTBEAT_MS` (15 s; 0 off).
 - The guide's shape (role table, task-spec contract, worker obligations,
   completion accounting) is adapted from [Orca](https://github.com/stablyai/orca)'s
   orchestration skill (MIT), rewritten for herdr's primitives.

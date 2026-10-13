@@ -1,7 +1,7 @@
 // Messages between the orchestrator and its workers, and the sync that turns
 // herdr's live agent states into attention messages the orchestrator must ack.
 import { agentPrompt, getAgent, listAgents, listPanes, type AgentStatus, subscribe } from "./herdr.ts";
-import { log, nextId, now, type Message, type Run, type State, unacked, update, load } from "./state.ts";
+import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load } from "./state.ts";
 import { settleDispatch } from "./dispatch.ts";
 
 export type WorkerContext = { run_id: string; worker: string; task_id: string | null; dispatch_id: string | null };
@@ -60,6 +60,12 @@ export async function nudgeOrchestrator(run: Run, text: string): Promise<boolean
   }
 }
 
+/** A sign of life from the worker: refresh last_seen and let a later stall raise attention again. */
+export function touch(w: Worker): void {
+  w.last_seen = now();
+  w.stalled_since = null;
+}
+
 // ---- worker side -----------------------------------------------------------
 
 export async function done(ctx: WorkerContext, o: { outcome: "succeeded" | "failed"; summary: string; files: string[]; reportPath: string | null }): Promise<Message> {
@@ -78,6 +84,7 @@ export async function done(ctx: WorkerContext, o: { outcome: "succeeded" | "fail
     t.updated_at = now();
     t.outcome = { summary: o.summary, files_modified: o.files, report_path: o.reportPath };
     settleDispatch(state, dispatch, o.outcome);
+    touch(w);
     const msg = message(state, { run_id: run.id, type: "done", from: ctx.worker, to: "orchestrator", task_id: t.id, dispatch_id: dispatch, body: o.summary, outcome: o.outcome, files_modified: o.files, report_path: o.reportPath });
     return { msg, run };
   });
@@ -90,7 +97,7 @@ export async function heartbeat(ctx: WorkerContext, body: string): Promise<Messa
   return update((state) => {
     const w = state.workers[ctx.worker];
     if (!w) throw new Error(`worker "${ctx.worker}" is not registered`);
-    w.last_seen = now();
+    touch(w);
     return message(state, { run_id: ctx.run_id, type: "heartbeat", from: ctx.worker, to: "orchestrator", task_id: ctx.task_id ?? w.task_id, dispatch_id: ctx.dispatch_id ?? w.dispatch_id, body, acked: true });
   });
 }
@@ -104,6 +111,7 @@ export async function ask(ctx: WorkerContext, o: { body?: string; resumeId?: str
     const r = await update((state) => {
       const w = state.workers[ctx.worker];
       if (!w) throw new Error(`worker "${ctx.worker}" is not registered`);
+      touch(w);
       const msg = message(state, { run_id: ctx.run_id, type: "ask", from: ctx.worker, to: "orchestrator", task_id: ctx.task_id ?? w.task_id, dispatch_id: ctx.dispatch_id ?? w.dispatch_id, body: o.body! });
       return { msg, run: state.runs[ctx.run_id]! };
     });
@@ -111,6 +119,12 @@ export async function ask(ctx: WorkerContext, o: { body?: string; resumeId?: str
     run = r.run;
     log({ event: "worker.ask", run: ctx.run_id, worker: ctx.worker, id: askId });
     await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} asks a question (${askId}). Run \`pack-leader check\` and answer it with \`pack-leader reply ${askId} --body "..."\`.`);
+  } else {
+    // Still waiting on an earlier question is a sign of life too.
+    await update((state) => {
+      const w = state.workers[ctx.worker];
+      if (w) touch(w);
+    }).catch(() => {});
   }
   const deadline = Date.now() + o.timeoutMs;
   for (;;) {
@@ -218,39 +232,94 @@ export async function ack(run: Run, ids: string[]): Promise<number> {
   });
 }
 
-/**
- * Reconcile workers with herdr: record status changes, turn a worker going
- * idle/blocked/away without a report into an attention message, and deliver
- * queued follow-ups to workers that became ready. Returns what changed.
- */
 /** A worker's pane and agent take a few seconds to show up; absence before that means nothing. */
-const START_GRACE_MS = 30_000;
+export const START_GRACE_MS = 30_000;
 
+/** A non-negative integer from the environment, or the default; 0 is a valid value (it disables). */
+export function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 ? v : fallback;
+}
+
+/** Owing a report with no sign of life for this long raises a `stalled` attention. PACK_STALL_MS=0 disables. */
+export const stallMs = () => envMs("PACK_STALL_MS", 20 * 60_000);
+
+/** The warning check/status/worker list print while sync() cannot reach herdr. */
+export function herdrWarning(run: Run | undefined): string | undefined {
+  return run?.herdr_unreachable_since ? `herdr unreachable since ${run.herdr_unreachable_since}; worker liveness is as last seen` : undefined;
+}
+
+/**
+ * Reconcile workers with herdr: record status changes, judge each worker's
+ * liveness, turn a worker going idle/blocked/away/silent without a report into
+ * an attention message, and deliver queued follow-ups to workers that became
+ * ready. Returns the attention messages it raised.
+ *
+ * Liveness: agent in its pane → live; pane alive but no agent for longer than
+ * START_GRACE_MS → unverifiable; pane missing from two syncs in a row →
+ * exited. When herdr cannot be reached the verdicts stay as they were and the
+ * run records `herdr_unreachable_since`.
+ */
 export async function sync(): Promise<Message[]> {
   const agents = await listAgents().catch(() => null);
   const panes = await listPanes().catch(() => null);
-  if (!agents || !panes) return [];
+  if (!agents || !panes) {
+    if (activeRuns(load()).some((r) => !r.herdr_unreachable_since)) {
+      await update((state) => {
+        for (const r of activeRuns(state)) r.herdr_unreachable_since ??= now();
+      }).catch(() => {});
+    }
+    return [];
+  }
   const byPane = new Map(agents.map((a) => [a.pane_id, a]));
   const paneIds = new Set(panes.map((p) => p.pane_id));
   const toDeliver: { worker: string; body: string; id: string }[] = [];
   const created = await update((state) => {
     const out: Message[] = [];
+    for (const r of activeRuns(state)) if (r.herdr_unreachable_since) r.herdr_unreachable_since = null;
     for (const w of Object.values(state.workers)) {
       const run = state.runs[w.run_id];
       if (!run || run.status !== "active") continue;
       const a = byPane.get(w.pane_id);
-      // A pane that exists without a recognized agent is starting (or the agent quit to a shell): not gone.
-      const young = Date.now() - Date.parse(w.started_at) < START_GRACE_MS;
-      const status: AgentStatus | "exited" = a ? a.agent_status : paneIds.has(w.pane_id) || young ? "unknown" : "exited";
+      const t = Date.now();
+
+      // Pane presence: one miss could be a race with a layout change, two in a row is gone.
+      const paneAlive = paneIds.has(w.pane_id);
+      const paneGone = !paneAlive && Boolean(w.missing_since);
+      if (paneAlive) w.missing_since = null;
+      else w.missing_since ??= now();
+      // Agent presence inside a live pane: absent past the grace means it quit (or never came up).
+      if (a || !paneAlive) w.agent_missing_since = null;
+      else w.agent_missing_since ??= now();
+
+      if (paneGone) {
+        w.liveness = "exited";
+        w.liveness_reason = `pane ${w.pane_id} missing since ${w.missing_since}`;
+      } else if (paneAlive && a) {
+        w.liveness = "live";
+        w.liveness_reason = `agent ${a.agent_status}`;
+      } else if (paneAlive && t - Date.parse(w.agent_missing_since!) > START_GRACE_MS) {
+        w.liveness = "unverifiable";
+        w.liveness_reason = "agent gone, pane alive";
+      } else if (paneAlive) {
+        w.liveness = "live";
+        w.liveness_reason = "pane alive, agent not seen yet";
+      } // else: first miss, verdict unchanged
+
+      // A missing pane keeps its last status until the second miss.
+      const status: AgentStatus | "exited" = paneGone ? "exited" : a ? a.agent_status : paneAlive ? "unknown" : w.last_status;
       const seq = a?.state_change_seq ?? 0;
       const task = w.task_id ? state.tasks[w.task_id] : null;
       const owes = task?.status === "dispatched";
       const changed = status !== w.last_status || (a && seq !== w.last_seq);
       if (status === "working") w.worked = true;
       if (changed) {
+        // Only the agent itself changing state is a sign of life; its pane disappearing is not.
+        if (a) touch(w);
         w.last_status = status;
         w.last_seq = seq;
-        w.last_seen = now();
         // Idle right after the prompt is the agent reading it, not a finished turn: require a working phase first
         // (or two state changes since the dispatch, in case the poll missed it). Blocked and exited count at once.
         const turned = w.worked || (w.seq_at_dispatch !== undefined && seq >= w.seq_at_dispatch + 2);
@@ -269,10 +338,27 @@ export async function sync(): Promise<Message[]> {
         if (status === "exited" && owes && task) {
           task.status = "failed";
           task.updated_at = now();
-          task.outcome = { summary: "worker exited before reporting", files_modified: [], report_path: null };
+          task.outcome = { summary: EXITED_SUMMARY, files_modified: [], report_path: null };
           settleDispatch(state, task.dispatch_id, "failed");
         }
       }
+
+      if (owes && w.liveness === "unverifiable" && w.unverifiable_dispatch !== w.dispatch_id) {
+        w.unverifiable_dispatch = w.dispatch_id;
+        const body = `${w.name}'s pane ${w.pane_id} is alive but no agent has been seen in it for over ${START_GRACE_MS / 1000}s (agent gone, pane alive); it owes a report on task ${task!.id}. Read its screen with \`pack-leader worker read ${w.name}\`, then re-prompt it or \`pack-leader worker release ${w.name} --force\`.`;
+        out.push(message(state, { run_id: w.run_id, type: "attention", from: w.name, to: "orchestrator", task_id: w.task_id, dispatch_id: w.dispatch_id, body, status: "unverifiable" }));
+      }
+
+      // Stalled: owes a report, no sign of life for PACK_STALL_MS. An open question is the orchestrator's move, not a stall.
+      const limit = stallMs();
+      const silentFor = t - Date.parse(w.last_seen);
+      const asking = state.messages.some((m) => m.type === "ask" && m.from === w.name && m.run_id === w.run_id && !m.acked);
+      if (owes && limit > 0 && w.liveness === "live" && !w.stalled_since && !asking && silentFor > limit) {
+        w.stalled_since = now();
+        const body = `${w.name} has shown no sign of life for ${Math.round(silentFor / 60_000)} min (no heartbeat, question or herdr state change) while task ${task!.id} is open. Read its screen with \`pack-leader worker read ${w.name}\`.`;
+        out.push(message(state, { run_id: w.run_id, type: "attention", from: w.name, to: "orchestrator", task_id: w.task_id, dispatch_id: w.dispatch_id, body, status: "stalled" }));
+      }
+
       if (a && (status === "idle" || status === "done")) {
         for (const m of state.messages) if (m.to === w.name && m.type === "followup" && !m.delivered && !m.acked) toDeliver.push({ worker: w.name, body: m.body, id: m.id });
       }
@@ -284,27 +370,57 @@ export async function sync(): Promise<Message[]> {
   return created;
 }
 
-export type CheckResult = { result: "message"; message: Message; pending: number } | { result: "empty"; pending: 0 } | { result: "timeout"; pending: 0 };
+/** The outcome summary sync() records when a worker's pane disappears with its task open. */
+export const EXITED_SUMMARY = "worker exited before reporting";
 
-/** The oldest unacknowledged delivery for the orchestrator, optionally waiting for one. */
-export async function check(run: Run, o: { wait: boolean; timeoutMs: number; types?: string[] }): Promise<CheckResult> {
+export type CheckResult = ({ result: "message"; message: Message; pending: number } | { result: "empty"; pending: 0 } | { result: "timeout"; pending: 0 }) & { warning?: string };
+
+/** One line for stderr while `check --wait` blocks, so a supervisor can tell waiting from hung. */
+export function waitHeartbeat(state: State, runId: string, elapsedMs: number): Record<string, unknown> {
+  const warning = herdrWarning(state.runs[runId]);
+  return {
+    waiting: true,
+    elapsed_ms: elapsedMs,
+    pending: runTasks(state, runId).filter((t) => t.status === "dispatched").length,
+    workers: Object.fromEntries(runWorkers(state, runId).map((w) => [w.name, w.liveness ?? "unknown"])),
+    ...(warning ? { warning } : {}),
+  };
+}
+
+/**
+ * The oldest unacknowledged delivery for the orchestrator, optionally waiting
+ * for one. While waiting, a heartbeat line goes to stderr every `heartbeatMs`
+ * (PACK_WAIT_HEARTBEAT_MS, default 15 s; 0 disables); stdout stays the single result.
+ */
+export async function check(run: Run, o: { wait: boolean; timeoutMs: number; types?: string[]; heartbeatMs?: number }): Promise<CheckResult> {
+  const started = Date.now();
   const pick = (state: State): CheckResult | null => {
     const all = unacked(state, run.id).filter((m) => !o.types || o.types.includes(m.type));
     const m = all[0];
     return m ? { result: "message", message: m, pending: all.length - 1 } : null;
   };
+  const warned = (r: CheckResult): CheckResult => {
+    const warning = herdrWarning(load().runs[run.id]);
+    return warning ? { ...r, warning } : r;
+  };
   await sync();
   const first = pick(load());
-  if (first) return first;
-  if (!o.wait) return { result: "empty", pending: 0 };
+  if (first) return warned(first);
+  if (!o.wait) return warned({ result: "empty", pending: 0 });
 
   const deadline = Date.now() + o.timeoutMs;
+  const every = o.heartbeatMs ?? envMs("PACK_WAIT_HEARTBEAT_MS", 15_000);
+  const beat = every > 0 ? setInterval(() => {
+    try {
+      process.stderr.write(JSON.stringify(waitHeartbeat(load(), run.id, Date.now() - started)) + "\n");
+    } catch {}
+  }, every) : null;
   let poke: (() => void) | null = null;
   const stop = subscribe([{ type: "pane.updated" }, { type: "pane.closed" }, { type: "pane.exited" }], () => poke?.());
   try {
     for (;;) {
       const left = deadline - Date.now();
-      if (left <= 0) return { result: "timeout", pending: 0 };
+      if (left <= 0) return warned({ result: "timeout", pending: 0 });
       await new Promise<void>((r) => {
         poke = r;
         setTimeout(r, Math.min(left, 1500));
@@ -312,9 +428,10 @@ export async function check(run: Run, o: { wait: boolean; timeoutMs: number; typ
       poke = null;
       await sync();
       const m = pick(load());
-      if (m) return m;
+      if (m) return warned(m);
     }
   } finally {
     stop();
+    if (beat) clearInterval(beat);
   }
 }

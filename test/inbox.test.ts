@@ -12,6 +12,7 @@ const dir = mkdtempSync(join(tmpdir(), "pack-leader-inbox-"));
 const sock = join(dir, "herdr.sock");
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
+process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 
 const { emptyState, load, save } = await import("../src/state.ts");
 const { done, heartbeat, inbox, send, sync } = await import("../src/inbox.ts");

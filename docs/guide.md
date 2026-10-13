@@ -72,6 +72,10 @@ shows one when the user asks.
 `pack-leader check --wait` blocks until the oldest unread message arrives, so give
 the shell tool a timeout at least as long (10 minutes is the usual ceiling).
 A `timeout` result is a checkpoint: look at `pack-leader status`, then wait again.
+While it waits, `check --wait` writes one JSON line to stderr every 15 s,
+`{"waiting":true,"elapsed_ms":n,"pending":n,"workers":{"api":"live"}}`
+(`pending` counts dispatched tasks still owing a report); stdout stays the single
+final result. `PACK_WAIT_HEARTBEAT_MS` sets the interval, `0` turns it off.
 
 Process every message, then acknowledge it and wait for the next:
 
@@ -79,12 +83,30 @@ Process every message, then acknowledge it and wait for the next:
 | ----------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `done`      | The worker settled its task (`outcome` succeeded/failed)  | Verify if needed, then reuse (`pack-leader worker prompt`), `retain`, or `release` the worker  |
 | `ask`       | The worker is blocked on a question                       | `pack-leader reply <id> --body "<answer>"`                                                      |
-| `attention` | The worker settled or vanished without reporting          | `pack-leader worker read <name>`; re-prompt it to run `pack-leader done`, or release with `--force`    |
+| `attention` | The worker settled, vanished, or went quiet without reporting; `status` says which: `idle`/`done`, `blocked`, `exited` (pane gone), `unverifiable` (agent gone, pane alive), `stalled` (no sign of life for `PACK_STALL_MS`, default 20 min) | `pack-leader worker read <name>`; re-prompt it to run `pack-leader done`, or release with `--force`    |
 
 ```bash
 pack-leader reply m7 --body "Use the existing helper in src/net.ts; do not add a dependency."
 pack-leader check --ack m7 --wait --timeout 540000
 ```
+
+`pack-leader worker list` (and `worker show`, `status`) tells you what each
+worker needs. Every row has `liveness` (`live`: agent seen in its pane;
+`unverifiable`: pane alive but no agent for 30 s; `exited`: pane missing from
+two syncs in a row), `attention: {categories, requires_action}` from its
+unacked asks and alerts, and `next_action`: the literal argv to run next, or
+`null` when nothing is required. Run it as given, filling in `<answer>`:
+
+```json
+["pack-leader", "reply", "m7", "--body", "<answer>"]     open question
+["pack-leader", "worker", "read", "api"]                 idle without a report, blocked, stalled, unverifiable
+["pack-leader", "worker", "release", "api", "--force"]   pane gone with its task open
+```
+
+A `warning` on `check`, `status` or `worker list` means herdr could not be
+reached: liveness is as last seen, so do not release anything on it alone.
+Heartbeats, asks, reports and any herdr state change refresh a worker's
+`last_seen`; a heartbeat after a `stalled` alert re-arms it.
 
 Use `pack-leader task create` with `--depends-on` for planned fan-out with ordering,
 then `pack-leader worker start <name> --task <id>` when `pack-leader task list` shows the

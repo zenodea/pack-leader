@@ -208,6 +208,7 @@ test("sync settles the dispatch of a worker that exited owing a report", async (
   save(s);
   handler = (method) => (method === "agent.list" ? { agents: [] } : method === "pane.list" ? { panes: [] } : {});
   await sync();
+  await sync(); // a pane counts as gone after two consecutive syncs without it
   const d = load().dispatches![r.task.dispatch_id!]!;
   assert.equal(load().tasks[r.task.id]!.status, "failed");
   assert.equal(d.outcome, "failed");
