@@ -209,6 +209,7 @@ async function main(): Promise<void> {
         if (direction !== "right" && direction !== "down") throw new Error("--direction must be right or down");
         const placement = str(args, "placement") ?? (has(args, "direction") ? "split" : "tab");
         if (placement !== "tab" && placement !== "split") throw new Error("--placement must be tab or split");
+        if (has(args, "worktree") && !str(args, "worktree")) throw new Error("--worktree takes new or a path");
         const r = await startWorker({
           run,
           name,
@@ -225,8 +226,11 @@ async function main(): Promise<void> {
           extraArgs: args.rest,
           noDefaultArgs: has(args, "no-default-args"),
           timeoutMs: num(args, "timeout", 45_000),
+          worktree: str(args, "worktree"),
+          base: str(args, "base"),
+          branch: str(args, "branch"),
         });
-        out({ worker: { name: r.worker.name, kind: r.worker.kind, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd }, task: taskSummary(r.task), ...(r.warning ? { warning: r.warning } : {}) });
+        out({ worker: { name: r.worker.name, kind: r.worker.kind, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd, worktree: r.worker.worktree ?? null }, task: taskSummary(r.task), ...(r.warning ? { warning: r.warning } : {}) });
         if (r.warning) process.exitCode = 1;
         return;
       }
@@ -290,7 +294,7 @@ async function main(): Promise<void> {
       }
       if (sub === "release") {
         const run = currentRun(args);
-        out({ released: name, ...(await releaseWorker(run, name, { force: has(args, "force"), keepPane: has(args, "keep-pane") })) });
+        out({ released: name, ...(await releaseWorker(run, name, { force: has(args, "force"), keepPane: has(args, "keep-pane"), removeWorktree: has(args, "remove-worktree") })) });
         return;
       }
       if (sub === "resend") {
@@ -535,6 +539,7 @@ function statusText(state: State, run: Run): string {
     const shown = w.liveness === "unverifiable" ? "unverifiable" : w.stalled_since ? "stalled" : w.last_status;
     const live = w.liveness ? (w.liveness === "live" ? dim(w.liveness) : fg.red(w.liveness)) + dim(` (${w.liveness_reason ?? "?"})`) : dim("liveness ?");
     lines.push(`${glyph[shown] ?? "?"} ${bold(w.name)} ${dim(w.pane_id)} ${live} ${t ? `${t.id} ${t.status}${n > 1 ? dim(` (${n} dispatches)`) : ""} · ${t.title}` : dim("no task")}`);
+    if (w.worktree) lines.push(dim(`  worktree ${w.worktree.branch ?? "(detached)"} · ${w.worktree.path}`));
     const next = nextAction(state, w);
     if (next) lines.push(`  ${fg.yellow("next:")} ${shellLine(next)}`);
   }
@@ -563,6 +568,9 @@ Orchestrator (the agent you talk to):
   pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
+  pack-leader worker start NAME ... --worktree new|PATH [--base REF] [--branch B]
+                                                its own git worktree: new is <repo>-wt/NAME on branch pack/RUN/NAME
+                                                (or $PACK_WORKTREE_DIR/NAME); release keeps it unless --remove-worktree
   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
                                                 --wait: a JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
   pack-leader reply ASK_ID --body "..." [--free]     an ask with options takes one (or a unique prefix); --free for free text

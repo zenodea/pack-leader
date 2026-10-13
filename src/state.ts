@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, w
 import { dirname } from "node:path";
 import { ensureDir, lockDir, logFile, stateDir, stateFile } from "./paths.ts";
 import type { AgentStatus } from "./herdr.ts";
+import type { WorktreeInfo, WorktreeRecord } from "./worktree.ts";
 
 export type TaskStatus = "pending" | "dispatched" | "succeeded" | "failed" | "blocked";
 export type MessageType = "done" | "ask" | "reply" | "heartbeat" | "note" | "followup" | "attention";
@@ -71,8 +72,10 @@ export type Worker = {
   agent_missing_since?: string | null;
   /** The dispatch an `unverifiable` attention was raised for (once per dispatch). */
   unverifiable_dispatch?: string | null;
-  /** When a `stalled` attention was raised; cleared by any sign of life (heartbeat, ask, done, herdr state change). */
+  /** When a `stalled` attention was raised; cleared by any sign of life (heartbeat, ask, note, send, done, herdr state change). */
   stalled_since?: string | null;
+  /** The git worktree the worker runs in (`worker start --worktree`). */
+  worktree?: WorktreeInfo | null;
 };
 
 /** What an attention message is about: herdr's agent state, or Pack Leader's own liveness findings. */
@@ -143,9 +146,11 @@ export type State = {
   /** Optional: files written before dispatch records existed have none. */
   dispatches?: Record<string, Dispatch>;
   seq: number;
+  /** Optional, like `dispatches`. Every worktree a worker was started in, by path; outlives the worker so release can say where the work is. */
+  worktrees?: Record<string, WorktreeRecord>;
 };
 
-export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, workers: {}, messages: [], dispatches: {}, seq: 0 });
+export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, workers: {}, messages: [], dispatches: {}, worktrees: {}, seq: 0 });
 
 export const now = () => new Date().toISOString();
 

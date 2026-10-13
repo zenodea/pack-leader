@@ -1,10 +1,11 @@
 // Starting a worker: a sibling pane next to the orchestrator, an agent in it,
 // and the task handed over as the first prompt with a preamble that tells the
 // worker how to report back. Also stopping and releasing one.
-import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, paneClose, paneSplit, tabClose, tabCreate, HerdrError } from "./herdr.ts";
+import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, paneClose, paneSplit, tabClose, tabCreate, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "./herdr.ts";
 import { EXITED_SUMMARY, touch } from "./inbox.ts";
 import { load, log, nextId, now, ready, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
 import { archiveScreen, createDispatch, settleDispatch } from "./dispatch.ts";
+import { gitWorktreeAdd, gitWorktreeRemove, isUnknownMethod, planWorktree, type WorktreeInfo } from "./worktree.ts";
 
 export const DEFAULT_KIND = "claude";
 
@@ -14,13 +15,14 @@ export function defaultAgentArgs(kind: string): string[] {
   return [];
 }
 
-export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: string; cwd: string }): string {
+export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: string; cwd: string; worktree?: WorktreeInfo | null }): string {
   return [
     `[pack-leader dispatch] You are worker "${p.worker}" in run ${p.run.id}, on task ${p.task.id} ("${p.task.title}"), dispatch ${p.dispatchId}.`,
     `An orchestrator agent coordinates several workers in parallel. It cannot see your screen; the only channel is the \`pack-leader\` CLI, which already knows your IDs from the environment.`,
     ``,
     `Rules:`,
     `- Do only this task, in ${p.cwd}. Do not start or steer other agents.`,
+    ...(p.worktree ? [worktreeRule(p.worktree)] : []),
     `- Blocking question for the orchestrator: \`pack-leader ask "<question>"\`. It waits for the answer (up to 10 minutes); on timeout, run \`pack-leader ask --id <id>\` to keep waiting. Never stop on a question the orchestrator cannot see.`,
     `- Read follow-ups at natural checkpoints (before starting a new file, after a test run) and once more right before reporting: \`pack-leader inbox\`.`,
     `- During long work, about every 10 minutes: \`pack-leader heartbeat "<one line on progress>"\`.`,
@@ -31,6 +33,15 @@ export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: 
     `Task spec:`,
     p.task.spec.trim(),
   ].join("\n");
+}
+
+/** The preamble line for a worker in its own worktree: where it is, and the branch its commits go on. */
+function worktreeRule(wt: WorktreeInfo): string {
+  const where = wt.branch
+    ? `You are in a git worktree of your own at ${wt.path}, on branch ${wt.branch}. Commit your work on that branch; do not switch branches.`
+    : `You are in a git worktree of your own at ${wt.path}, on a detached HEAD (${wt.base.slice(0, 12)}). Create a branch before you commit, and commit your work on it.`;
+  const fresh = wt.created_by_pack ? ` It is a fresh checkout of ${wt.base.slice(0, 12)}: nothing was installed or copied into it, so install dependencies yourself if the task needs them.` : "";
+  return `- ${where}${fresh}`;
 }
 
 export type StartOptions = {
@@ -50,6 +61,11 @@ export type StartOptions = {
   extraArgs: string[];
   noDefaultArgs: boolean;
   timeoutMs: number;
+  /** `new`: create a git worktree for this worker; a path: use that existing checkout. */
+  worktree?: string;
+  /** For `--worktree new`: the commit to branch from (default HEAD at cwd) and the branch name (default pack/<run>/<worker>). */
+  base?: string;
+  branch?: string;
 };
 
 export type StartResult = {
@@ -62,13 +78,21 @@ export type StartResult = {
 
 export async function startWorker(o: StartOptions): Promise<StartResult> {
   if (!WORKER_NAME.test(o.name)) throw new Error(`worker name must match ${WORKER_NAME}`);
+  if (!o.worktree && (o.base || o.branch)) throw new Error("--base and --branch need --worktree new");
+  const baseCwd = o.cwd ?? o.run.orchestrator.cwd;
+  // Planned before anything exists: a cwd outside git, a taken branch or an occupied path fails here.
+  const wt = o.worktree ? planWorktree({ spec: o.worktree, cwd: baseCwd, runId: o.run.id, worker: o.name, base: o.base, branch: o.branch }) : null;
   const live = await listAgents();
   if (live.some((a) => a.name === o.name)) throw new Error(`a live herdr agent is already named "${o.name}"`);
 
-  const cwd = o.cwd ?? o.run.orchestrator.cwd;
+  const cwd = wt ? wt.path : baseCwd;
   // The task: new from --spec, or an existing pending/ready one (or a failed one with --retry).
   const { task, dispatchId, text } = await update((state) => {
     if (state.workers[o.name] && state.runs[state.workers[o.name]!.run_id]?.status === "active") throw new Error(`worker "${o.name}" exists; release it first`);
+    if (wt) {
+      const other = Object.values(state.workers).find((w) => w.name !== o.name && state.runs[w.run_id]?.status === "active" && (w.worktree?.path === wt.path || w.cwd === wt.path));
+      if (other) throw new Error(`worker "${other.name}" already works in ${wt.path}; two workers never share a working tree`);
+    }
     let task: Task;
     if (o.taskId) {
       const t = state.tasks[o.taskId];
@@ -97,7 +121,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       state.tasks[task.id] = task;
     }
     const dispatchId = nextId(state, "d");
-    const text = preamble({ worker: o.name, run: o.run, task, dispatchId, cwd });
+    const text = preamble({ worker: o.name, run: o.run, task, dispatchId, cwd, worktree: wt });
     createDispatch(state, { id: dispatchId, task, worker: o.name, preamble: text, cwd });
     return { task, dispatchId, text };
   });
@@ -106,8 +130,16 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   let pane: { pane_id: string };
   let tabId: string | null = null;
   try {
+    if (wt) {
+      // A hidden-tab worker's worktree opens as a herdr workspace and its tab goes there; a split stays next to the orchestrator.
+      await materializeWorktree(wt, o.name, o.placement === "tab");
+      await update((state) => {
+        (state.worktrees ??= {})[wt.path] = { ...wt, worker: o.name, run_id: o.run.id, created_at: now() };
+      });
+      log({ event: "worktree.ready", run: o.run.id, worker: o.name, path: wt.path, branch: wt.branch, created: wt.created_by_pack, workspace: wt.workspace_id ?? null });
+    }
     if (o.placement === "tab") {
-      const workspace = o.run.orchestrator.workspace_id ?? (o.targetPane ?? o.run.orchestrator.pane_id)?.split(":")[0];
+      const workspace = wt?.workspace_id ?? o.run.orchestrator.workspace_id ?? (o.targetPane ?? o.run.orchestrator.pane_id)?.split(":")[0];
       if (!workspace) throw new Error("the run has no workspace; pass --target-pane");
       const t = await tabCreate({ workspace_id: workspace, label: `${o.name}`, cwd, env });
       pane = t.root_pane;
@@ -120,7 +152,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       log({ event: "pane.split", run: o.run.id, worker: o.name, pane: pane.pane_id });
     }
   } catch (err) {
-    // No pane, no dispatch: settle the record so it does not look in flight forever.
+    // No worktree or no pane, no dispatch: settle the record so it does not look in flight forever.
     await update((state) => settleDispatch(state, dispatchId, "failed")).catch(() => {});
     throw err;
   }
@@ -141,6 +173,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     tab_id: tabId,
     owns_tab: tabId !== null,
     retained: false,
+    worktree: wt,
   };
   // Recorded before the agent starts, so a crash mid-start still leaves a trail.
   await update((state) => {
@@ -225,7 +258,7 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
     const dispatchId = nextId(state, "d");
     // The pane's environment still names the first dispatch; the preamble carries the new IDs
     // and the worker commands accept them as flags.
-    const text = preamble({ worker: name, run, task, dispatchId, cwd: w.cwd }) +
+    const text = preamble({ worker: name, run, task, dispatchId, cwd: w.cwd, worktree: w.worktree }) +
       `\n\nThis is a new dispatch in your existing session: pass --task ${task.id} --dispatch ${dispatchId} to every pack-leader command for it.`;
     createDispatch(state, { id: dispatchId, task, worker: name, preamble: text, cwd: w.cwd });
     task.status = "dispatched";
@@ -250,16 +283,20 @@ export async function stopWorker(name: string): Promise<void> {
   log({ event: "worker.stopped", worker: name });
 }
 
+export type ReleasedWorktree = { path: string; branch: string | null; kept: boolean; removed: boolean; note?: string };
+
 /**
  * Post-settlement cleanup: forget the worker and close the pane Pack Leader created.
- * With `force`, a still-dispatched task is marked failed first.
+ * With `force`, a still-dispatched task is marked failed first. A worker's worktree is
+ * kept (the work lives there) unless `removeWorktree` and Pack Leader created it.
  */
-export type ReleaseResult = { closed_pane: string | null; closed_tab: string | null; archive_path: string | null; archive_error?: string };
+export type ReleaseResult = { closed_pane: string | null; closed_tab: string | null; archive_path: string | null; archive_error?: string; worktree?: ReleasedWorktree };
 
-export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean }): Promise<ReleaseResult> {
+export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean; removeWorktree?: boolean }): Promise<ReleaseResult> {
   const w = await update((state) => {
     const w = state.workers[name];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
+    if (opts.removeWorktree && w.worktree && (opts.keepPane || w.retained)) throw new Error(`${name}'s pane stays open in ${w.worktree.path}; --remove-worktree cannot go with --keep-pane or a retained worker`);
     const t = w.task_id ? state.tasks[w.task_id] : null;
     if (t?.status === "dispatched") {
       if (!opts.force) throw new Error(`${name} still owns task ${t.id} (dispatched); wait for \`pack-leader done\`, or pass --force`);
@@ -269,6 +306,8 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
       settleDispatch(state, w.dispatch_id, "failed");
     }
     delete state.workers[name];
+    const rec = w.worktree ? state.worktrees?.[w.worktree.path] : undefined;
+    if (rec) rec.released_at = now();
     return w;
   });
   // Save the screen before the tab goes, so the transcript survives. Never fails the release.
@@ -308,7 +347,61 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
     await labelPane(w.pane_id, null);
   }
   log({ event: "worker.released", run: run.id, worker: name, closed_pane, closed_tab });
-  return { closed_pane, closed_tab, archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
+  const released: ReleaseResult = { closed_pane, closed_tab, archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
+  if (!w.worktree) return released;
+  const wt = w.worktree;
+  let removed = false;
+  let note: string | undefined;
+  if (opts.removeWorktree) {
+    if (!wt.created_by_pack) note = "not created by pack-leader, so it was left in place";
+    else {
+      try {
+        await removeWorktree(wt);
+        removed = true;
+        await update((state) => {
+          const rec = state.worktrees?.[wt.path];
+          if (rec) rec.removed = true;
+        });
+        log({ event: "worktree.removed", run: run.id, worker: name, path: wt.path });
+      } catch (err) {
+        note = `not removed: ${(err as Error).message}. Commit or clean it, or remove it yourself with \`git worktree remove --force ${wt.path}\``;
+      }
+    }
+  }
+  return { ...released, worktree: { path: wt.path, branch: wt.branch, kept: !removed, removed, ...(note ? { note } : {}) } };
+}
+
+/**
+ * Create (or, for an existing checkout, open) the worktree. With `viaHerdr`, herdr's
+ * worktree API does it and the checkout shows up as a workspace, recorded on `wt`;
+ * a herdr without that API falls back to `git worktree add`.
+ */
+async function materializeWorktree(wt: WorktreeInfo, label: string, viaHerdr: boolean): Promise<void> {
+  if (viaHerdr) {
+    try {
+      const r = wt.created_by_pack
+        ? await worktreeCreate({ cwd: wt.repo, path: wt.path, branch: wt.branch!, base: wt.base, label })
+        : await worktreeOpen({ cwd: wt.repo, path: wt.path, label });
+      wt.workspace_id = r.workspace.workspace_id;
+      return;
+    } catch (err) {
+      if (!isUnknownMethod(err)) throw err;
+    }
+  }
+  if (wt.created_by_pack) gitWorktreeAdd(wt);
+}
+
+/** herdr removes the checkout and its workspace together; without the workspace (or the API), git does it. Never forced. */
+async function removeWorktree(wt: WorktreeInfo): Promise<void> {
+  if (wt.workspace_id) {
+    try {
+      await worktreeRemove(wt.workspace_id);
+      return;
+    } catch (err) {
+      if ((err as HerdrError).code !== "workspace_not_found" && !isUnknownMethod(err)) throw err;
+    }
+  }
+  gitWorktreeRemove(wt);
 }
 
 /**
@@ -344,8 +437,8 @@ export async function resendPreamble(run: Run, name: string): Promise<{ task: Ta
   if (!task || task.status !== "dispatched" || !w.dispatch_id) throw new Error(`${name} has no dispatched task to resend`);
   const a = await getAgent(w.pane_id);
   if (a.agent_status === "blocked") throw new Error(`${name} is still blocked on a dialog in pane ${w.pane_id}`);
-  // The same text as the first time: the dispatch record keeps it.
-  const text = state.dispatches?.[w.dispatch_id]?.preamble ?? preamble({ worker: name, run, task, dispatchId: w.dispatch_id, cwd: w.cwd });
+  // The same text as the first time: the dispatch record keeps it (worktree line included).
+  const text = state.dispatches?.[w.dispatch_id]?.preamble ?? preamble({ worker: name, run, task, dispatchId: w.dispatch_id, cwd: w.cwd, worktree: w.worktree });
   await promptWithRetry(w.pane_id, text);
   await markDispatched(name, w.pane_id);
   log({ event: "worker.resent", run: run.id, worker: name, task: task.id });
@@ -426,6 +519,7 @@ export const workerSummary = (w: Worker, state: State) => ({
   ...(w.stalled_since ? { stalled_since: w.stalled_since } : {}),
   attention: workerAttention(state, w),
   next_action: nextAction(state, w),
+  worktree: w.worktree ?? null,
 });
 
 /** The worker's unacked questions and alerts for the orchestrator, oldest first. */

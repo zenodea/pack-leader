@@ -142,6 +142,8 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
     const forgotten: CloseResult["forgotten"] = [];
     for (const w of runWorkers(state, runId)) {
       forgotten.push({ worker: w.name, pane_id: w.pane_id, tab_id: w.tab_id ?? null });
+      const wt = w.worktree ? state.worktrees?.[w.worktree.path] : undefined;
+      if (wt) wt.released_at ??= now();
       delete state.workers[w.name];
     }
     const r = state.runs[runId];

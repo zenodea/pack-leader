@@ -123,6 +123,13 @@ export async function tabCreate(p: { workspace_id: string; label: string; cwd?: 
   return { tab: res.tab, root_pane: res.root_pane };
 }
 export const tabClose = (tab_id: string) => herdr("tab.close", { tab_id });
+
+/** herdr's worktree API: the checkout opens as a workspace of its own (unfocused), with a shell tab. */
+export type WorktreeOpened = { workspace: { workspace_id: string }; tab: TabInfo; root_pane: PaneInfo; already_open?: boolean };
+export const worktreeCreate = (p: { cwd: string; path: string; branch: string; base: string; label: string }): Promise<WorktreeOpened> => herdr("worktree.create", { ...p, focus: false }, { timeoutMs: 60_000 });
+export const worktreeOpen = (p: { cwd: string; path: string; label: string }): Promise<WorktreeOpened> => herdr("worktree.open", { ...p, focus: false });
+/** Removes the checkout and closes its workspace; refuses a dirty checkout (dirty_worktree_requires_force). Keeps the branch. */
+export const worktreeRemove = (workspace_id: string) => herdr("worktree.remove", { workspace_id, force: false }, { timeoutMs: 60_000 });
 export const tabFocus = (tab_id: string) => herdr("tab.focus", { tab_id });
 
 export const agentSendKeys = (target: string, keys: string[]) => herdr("agent.send_keys", { target, keys });

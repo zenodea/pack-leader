@@ -69,6 +69,14 @@ Workers live in hidden tabs of the same workspace (one per worker, labelled
 opens on your right with `pack-leader run create` (`--left` for the other side);
 `--placement split` on `worker start` puts a worker next to you instead.
 
+Workers that could step on each other get a git worktree each:
+`pack-leader worker start api --worktree new --spec "..."` checks out branch
+`pack/<run>/api` from the current HEAD into `<repo parent>/<repo>-wt/api` (or
+`$PACK_WORKTREE_DIR/api`), opens it as a herdr workspace, and starts the worker
+there; `--base`, `--branch` and `--worktree <existing path>` adjust it.
+`pack-leader worker release api` keeps the worktree and prints its path and branch;
+`--remove-worktree` removes one Pack Leader created (never forced, branch kept).
+
 Workers get a `[pack-leader dispatch]` preamble as their first prompt and report with
 `pack-leader done`, ask with `pack-leader ask` (which blocks until you answer), and read
 follow-ups with `pack-leader inbox`. Their IDs come from the pane environment.

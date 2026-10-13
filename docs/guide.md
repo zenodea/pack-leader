@@ -173,8 +173,21 @@ Every spec must be self-contained. Name:
 - **Ownership:** what this worker may edit; what belongs to another worker.
 - **Observable acceptance:** the test, output, or evidence that proves completion.
 
-Two workers must never own the same files. Give each worker its own cwd (or
-git worktree, via `herdr worktree create`) when their edits could collide.
+Two workers must never own the same files. When their edits could collide,
+give each its own git worktree: `pack-leader worker start <name> --worktree new`
+creates one next to the repo (`<repo parent>/<repo>-wt/<name>`, or
+`$PACK_WORKTREE_DIR/<name>`) on branch `pack/<run>/<name>` from the current
+HEAD (`--base <ref>` and `--branch <name>` override), opens it as a herdr
+workspace, and starts the worker there. `--worktree <path>` reuses an existing
+checkout instead. The run's cwd (or `--cwd`) must be inside a git repo. Nothing
+is installed or copied into a new worktree; the preamble tells the worker its
+path and branch, to commit on that branch, and to install dependencies itself.
+Pack Leader refuses to start two workers in the same worktree.
+
+`pack-leader worker release` keeps the worktree (the work lives there) and
+prints its path and branch; `--remove-worktree` also removes it, only when
+Pack Leader created it and it has no uncommitted changes. The branch is never
+deleted. `worker list`, `worker show` and `status` show each worker's worktree.
 
 ## Completion accounting
 
@@ -259,8 +272,10 @@ pack-leader run create --objective "..." | show | list | close [--release] [--fo
 pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
 pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--cwd D] [--direction right|down] [-- agent args]
+pack-leader worker start NAME ... --worktree new|PATH [--base REF] [--branch B]
 pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME
 pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
+pack-leader worker release NAME --remove-worktree
 pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
 pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
 pack-leader reply ASK_ID --body "..." [--free]
