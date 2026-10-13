@@ -54,9 +54,8 @@ export async function runSidebar(): Promise<void> {
     const cols = out.columns || 30;
     const lines: string[] = [];
     const runs = activeRuns(state);
-    if (!runs.length) {
-      lines.push(dim("no active run"), "", dim("the orchestrator runs"), dim("pack-leader run create"), dim("--objective ..."));
-    }
+    // Closed runs are never drawn: activeRuns only.
+    if (!runs.length) lines.push(dim("no active run — pack-leader run create"));
     const all = rows();
     let i = 0;
     for (const run of runs) {

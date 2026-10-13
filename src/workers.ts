@@ -253,7 +253,9 @@ export async function stopWorker(name: string): Promise<void> {
  * Post-settlement cleanup: forget the worker and close the pane Pack Leader created.
  * With `force`, a still-dispatched task is marked failed first.
  */
-export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean }): Promise<{ closed_pane: string | null; archive_path: string | null; archive_error?: string }> {
+export type ReleaseResult = { closed_pane: string | null; closed_tab: string | null; archive_path: string | null; archive_error?: string };
+
+export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean }): Promise<ReleaseResult> {
   const w = await update((state) => {
     const w = state.workers[name];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
@@ -286,23 +288,26 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
       else d.archive_error = archive.error;
     }).catch(() => {});
   }
-  let closed: string | null = null;
+  // A hidden worker's whole tab goes, and its pane with it; a split worker's pane alone.
+  let closed_pane: string | null = null;
+  let closed_tab: string | null = null;
   if (w.owns_pane && !w.retained && !opts.keepPane) {
     try {
       await getPane(w.pane_id);
       if (w.owns_tab && w.tab_id) {
         await tabClose(w.tab_id);
-        closed = w.tab_id;
+        closed_tab = w.tab_id;
+        closed_pane = w.pane_id;
       } else {
         await paneClose(w.pane_id);
-        closed = w.pane_id;
+        closed_pane = w.pane_id;
       }
     } catch {}
   } else {
     await labelPane(w.pane_id, null);
   }
-  log({ event: "worker.released", run: run.id, worker: name, closed });
-  return { closed_pane: closed, archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
+  log({ event: "worker.released", run: run.id, worker: name, closed_pane, closed_tab });
+  return { closed_pane, closed_tab, archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
 }
 
 /**

@@ -157,6 +157,31 @@ worker was told. Release saves the worker's screen before closing its tab, so
 `pack-leader worker read <name>` still works afterwards: it answers with
 `source: "archive"` (`--dispatch ID` picks a specific one).
 
+## Closing and pruning runs
+
+`pack-leader run close` ends the run for good:
+
+- It refuses while a worker still has a dispatched task. Wait for the reports,
+  or pass `--release` to release every worker (their tasks are marked failed
+  with "run closed"), or `--force` to close anyway.
+- It closes the run's sidebar pane, unless another active run still shows it,
+  and forgets the run's workers. Without `--release` their panes stay open and
+  are listed under `forgotten`.
+- A closed run cannot be closed again without `--force`, and cannot be written
+  to: `--run <id>` or `PACK_RUN_ID` naming it is an error, except for
+  `run show`, `run list`, `task show`, `task list` and `status`.
+
+Closed runs stay in the state until pruned. `pack-leader run prune` keeps the 5
+most recently closed runs and deletes the rest with their tasks, workers and
+messages; `--keep N` changes the 5, `--older-than 2d` (units `s m h d w`)
+deletes only runs closed longer ago than that (all of them unless `--keep` is
+also given), `--all` deletes every closed run, and `--dry-run` prints what
+would go. Active runs are never pruned. `pack-leader status` counts closed runs;
+`status --all` lists them.
+
+Commands that name a task or worker (`task show`, `task update`, `worker show`,
+`read`, `focus`, `stop`, `retain`) only find it in the current run.
+
 ## Worker obligations
 
 Your `[pack-leader dispatch]` preamble is authoritative. You must:
@@ -180,7 +205,8 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
 ## Commands
 
 ```text
-pack-leader run create --objective "..." | show | list | close [--release]
+pack-leader run create --objective "..." | show | list | close [--release] [--force]
+pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
 pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--cwd D] [--direction right|down] [-- agent args]
 pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME
@@ -189,7 +215,7 @@ pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
 pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention]
 pack-leader reply ASK_ID --body "..."
 pack-leader send NAME "text" [--now]
-pack-leader status [--json]
+pack-leader status [--json] [--all]
 pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 pack-leader done | ask | heartbeat | inbox          (worker side)
 ```

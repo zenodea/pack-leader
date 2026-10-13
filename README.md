@@ -78,7 +78,13 @@ Each dispatch is recorded with the exact preamble sent (`pack-leader dispatch li
 to `archive/<run>/<worker>-<dispatch>.txt` in the state dir first, so
 `pack-leader worker read <name>` keeps working after the tab is gone.
 
-`pack-leader status` prints the run in the terminal; `pack-leader skill` prints the full guide
+When the run is done, `pack-leader run close --release` releases the workers,
+fails any task still dispatched, and closes the sidebar. Closed runs stay in the
+state file until `pack-leader run prune` deletes them (it keeps the 5 most recent;
+`--keep N`, `--older-than 2d`, `--all`, `--dry-run`).
+
+`pack-leader status` prints the run in the terminal (closed runs are counted;
+`--all` lists them); `pack-leader skill` prints the full guide
 the agents follow. The sidebar (`pack-leader: show the pack`) lists one box per worker
 with its herdr state, task and last message; `j`/`k` move, Enter focuses the
 worker's pane, `r` previews its last lines.

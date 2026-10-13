@@ -255,27 +255,29 @@ export const runDispatches = (state: State, runId: string): Dispatch[] =>
 export const idSeq = (id: string): number => parseInt(id.slice(1), 36) || 0;
 
 /**
- * Which run a command means. In order: PACK_RUN_ID, --run, the run this pane
+ * Which run a command means. In order: --run, PACK_RUN_ID, the run this pane
  * orchestrates, the run this pane works for, the only active run in this
- * workspace, the only active run at all.
+ * workspace, the only active run at all. Only an explicit id can name a closed
+ * run, and only for read-only commands, which pass `allowClosed`.
  */
 export function resolveRun(
   state: State,
-  opts: { runId?: string; paneId?: string | null; workspaceId?: string | null },
+  opts: { runId?: string; paneId?: string | null; workspaceId?: string | null; allowClosed?: boolean },
   env: NodeJS.ProcessEnv = process.env,
 ): Run {
   const id = opts.runId || env.PACK_RUN_ID;
   if (id) {
     const r = state.runs[id];
     if (!r) throw new Error(`no run ${id}`);
+    if (r.status === "closed" && !opts.allowClosed) throw new Error(`run ${id} is closed`);
     return r;
   }
   const active = activeRuns(state);
   if (opts.paneId) {
     const mine = active.find((r) => r.orchestrator.pane_id === opts.paneId);
     if (mine) return mine;
-    const w = Object.values(state.workers).find((w) => w.pane_id === opts.paneId);
-    if (w && state.runs[w.run_id]) return state.runs[w.run_id]!;
+    const w = Object.values(state.workers).find((w) => w.pane_id === opts.paneId && state.runs[w.run_id]?.status === "active");
+    if (w) return state.runs[w.run_id]!;
   }
   const inWs = opts.workspaceId ? active.filter((r) => r.orchestrator.workspace_id === opts.workspaceId) : [];
   if (inWs.length === 1) return inWs[0]!;

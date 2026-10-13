@@ -76,8 +76,26 @@ test("resolveRun: explicit id, orchestrator pane, worker pane, workspace, single
   assert.equal(resolveRun(s, { paneId: "w3:p1", workspaceId: "w3" }).id, "r1");
   s.runs.r1!.status = "closed";
   assert.throws(() => resolveRun(s, {}), /no active run/);
-  assert.equal(resolve(s, {}, { PACK_RUN_ID: "r2" }).id, "r2");
+  assert.equal(resolve(s, { allowClosed: true }, { PACK_RUN_ID: "r2" }).id, "r2");
   assert.throws(() => resolve(s, {}, { PACK_RUN_ID: "nope" }), /no run nope/);
+});
+
+test("resolveRun: a closed run only by explicit id, only for read-only callers; pane matching skips it", () => {
+  const env = {};
+  const s = emptyState();
+  s.runs.r1 = run("r1", "w1:p1", "w1");
+  s.runs.r2 = run("r2", "w1:p2", "w1");
+  s.runs.r2.status = "closed";
+  s.workers.old = { name: "old", run_id: "r2", kind: "claude", pane_id: "w1:p7", cwd: "/", task_id: null, dispatch_id: null, started_at: "t", last_status: "idle", last_seq: 0, last_seen: "t", owns_pane: true, retained: false };
+
+  assert.throws(() => resolve(s, { runId: "r2" }, env), /run r2 is closed/);
+  assert.throws(() => resolve(s, {}, { PACK_RUN_ID: "r2" }), /run r2 is closed/);
+  assert.equal(resolve(s, { runId: "r2", allowClosed: true }, env).id, "r2");
+  // The closed run's worker pane and orchestrator pane no longer select it.
+  assert.equal(resolve(s, { paneId: "w1:p7" }, env).id, "r1");
+  assert.equal(resolve(s, { paneId: "w1:p2", allowClosed: true }, env).id, "r1");
+  s.runs.r3 = run("r3", "w3:p1", "w3");
+  assert.throws(() => resolve(s, { paneId: "w1:p7" }, env), /several active runs \(r1, r3\)/);
 });
 
 test("ready: every dependency must have succeeded", () => {

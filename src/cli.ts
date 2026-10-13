@@ -2,7 +2,8 @@
 //
 // Orchestrator side (the agent you talk to):
 //   pack-leader run create --objective "..."       bind a run to this pane
-//   pack-leader run show | close [--release]
+//   pack-leader run show | close [--release] [--force]
+//   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 //   pack-leader task create --spec "..." [--title T] [--depends-on a,b]
 //   pack-leader task list | show ID | update ID --status S
 //   pack-leader worker start NAME --spec "..." | --task ID [--kind K] [--cwd D] [--direction right|down] [-- agent args]
@@ -12,7 +13,7 @@
 //   pack-leader check [--wait] [--timeout MS] [--ack ID] [--types done,ask,attention]
 //   pack-leader reply ASK_ID --body "..."
 //   pack-leader send NAME "text" [--now]
-//   pack-leader status [--json]
+//   pack-leader status [--json] [--all]
 //   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 // Worker side (inside a pane pack-leader started; IDs come from the environment):
 //   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
@@ -27,6 +28,7 @@ import { ack, ask, check, done, heartbeat, herdrWarning, inbox, reply, send, syn
 import { herdrBin, pluginRoot } from "./paths.ts";
 import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Run, type State, unacked, update } from "./state.ts";
 import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
+import { closeRun, parseDuration, pruneRuns, removeArchives } from "./runs.ts";
 import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
 import { guide, installSkill } from "./skill.ts";
 
@@ -44,9 +46,18 @@ function here(): { paneId: string | null; workspaceId: string | null; tabId: str
   return { paneId, workspaceId, tabId: s(process.env.HERDR_TAB_ID), cwd: s(ctx.focused_pane_cwd) ?? s(ctx.workspace_cwd) ?? process.cwd() };
 }
 
-function currentRun(args: Args, state = load()): Run {
+/** The run a command means; read-only commands pass `allowClosed` so a closed run can still be looked at by id. */
+function currentRun(args: Args, state = load(), allowClosed = false): Run {
   const h = here();
-  return resolveRun(state, { runId: str(args, "run"), paneId: h.paneId, workspaceId: h.workspaceId });
+  return resolveRun(state, { runId: str(args, "run"), paneId: h.paneId, workspaceId: h.workspaceId, allowClosed });
+}
+
+/** A worker of the current run, or an error naming the run. */
+function runWorker(args: Args, name: string, state = load(), allowClosed = false) {
+  const run = currentRun(args, state, allowClosed);
+  const w = state.workers[name];
+  if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
+  return w;
 }
 
 function requireHerdr(): void {
@@ -100,7 +111,7 @@ async function main(): Promise<void> {
       }
       if (sub === "show") {
         const state = load();
-        const run = currentRun(args, state);
+        const run = currentRun(args, state, true);
         out(view(state, run));
         return;
       }
@@ -110,22 +121,26 @@ async function main(): Promise<void> {
         return;
       }
       if (sub === "close") {
-        const state = load();
-        const run = currentRun(args, state);
-        const released: string[] = [];
-        if (has(args, "release")) {
-          for (const w of runWorkers(state, run.id)) {
-            await releaseWorker(run, w.name, { force: true }).catch(() => {});
-            released.push(w.name);
-          }
+        // closeRun refuses an already closed run itself, with a clearer message than resolveRun's.
+        const run = currentRun(args, load(), true);
+        const r = await closeRun(run.id, { release: has(args, "release"), force: has(args, "force") });
+        if (fromAction) await notify("Pack Leader", `run ${run.id} closed${r.released.length ? `, released ${r.released.map((x) => x.worker).join(", ")}` : ""}`);
+        out(r);
+        return;
+      }
+      if (sub === "prune") {
+        const keep = str(args, "keep") !== undefined ? num(args, "keep", 5) : undefined;
+        if (keep !== undefined && !(Number.isInteger(keep) && keep >= 0)) throw new Error("--keep takes a whole number >= 0");
+        const olderThan = str(args, "older-than");
+        const opts = { keep, all: has(args, "all"), olderThanMs: olderThan ? parseDuration(olderThan) : undefined };
+        const r = has(args, "dry-run") ? pruneRuns(load(), opts) : await update((state) => pruneRuns(state, opts));
+        if (has(args, "dry-run")) {
+          out({ dry_run: true, pruned: r.runs, removed: r.removed });
+          return;
         }
-        await update((s) => {
-          const r = s.runs[run.id];
-          if (r) (r.status = "closed"), (r.closed_at = now());
-        });
-        log({ event: "run.closed", run: run.id });
-        if (fromAction) await notify("Pack Leader", `run ${run.id} closed${released.length ? `, released ${released.join(", ")}` : ""}`);
-        out({ closed: run.id, released });
+        const archives = removeArchives(r.runs.map((x) => x.id));
+        if (r.runs.length) log({ event: "run.pruned", runs: r.runs.map((x) => x.id), removed: r.removed, archives: archives.length });
+        out({ pruned: r.runs, removed: r.removed, archives_removed: archives });
         return;
       }
       throw new Error(`unknown: pack-leader run ${sub}`);
@@ -150,14 +165,15 @@ async function main(): Promise<void> {
       }
       if (sub === "list") {
         const state = load();
-        const run = currentRun(args, state);
+        const run = currentRun(args, state, true);
         out({ tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t), ready: ready(state, t) })) });
         return;
       }
       if (sub === "show") {
         const state = load();
+        const run = currentRun(args, state, true);
         const t = id ? state.tasks[id] : undefined;
-        if (!t) throw new Error(`no task ${id}`);
+        if (!t || t.run_id !== run.id) throw new Error(`no task ${id} in run ${run.id}`);
         out({ task: t, dispatch_ids: taskDispatchIds(state, t.id) });
         return;
       }
@@ -166,8 +182,9 @@ async function main(): Promise<void> {
         if (!id || !status) throw new Error("usage: pack-leader task update ID --status pending|blocked|failed|succeeded [--summary S]");
         if (!["pending", "blocked", "failed", "succeeded"].includes(status)) throw new Error(`bad status ${status}`);
         const t = await update((state) => {
+          const run = currentRun(args, state);
           const t = state.tasks[id];
-          if (!t) throw new Error(`no task ${id}`);
+          if (!t || t.run_id !== run.id) throw new Error(`no task ${id} in run ${run.id}`);
           if (t.status === "dispatched") throw new Error(`task ${id} is dispatched to ${t.worker}; it settles through \`pack-leader done\` or \`pack-leader worker release --force\``);
           t.status = status as any;
           t.updated_at = now();
@@ -224,8 +241,7 @@ async function main(): Promise<void> {
       if (sub === "show") {
         await sync().catch(() => {});
         const state = load();
-        const w = state.workers[name];
-        if (!w) throw new Error(`no worker "${name}"`);
+        const w = runWorker(args, name, state, true);
         const warning = herdrWarning(state.runs[w.run_id]);
         out({ worker: workerSummary(w, state), task: w.task_id ? state.tasks[w.task_id] : null, messages: state.messages.filter((m) => m.from === name || m.to === name).slice(-10), ...(warning ? { warning } : {}) });
         return;
@@ -235,34 +251,38 @@ async function main(): Promise<void> {
         const state = load();
         let run: Run | null = null;
         try {
-          run = currentRun(args, state);
-        } catch {}
+          run = currentRun(args, state, true);
+        } catch (err) {
+          if (str(args, "run")) throw err;
+        }
         // A specific dispatch's archive; or, once the worker is gone from the run, its newest archive.
         const dispatchId = str(args, "dispatch");
+        if (dispatchId && run && state.dispatches?.[dispatchId] && state.dispatches[dispatchId]!.run_id !== run.id) throw new Error(`no dispatch ${dispatchId} in run ${run.id}`);
         const live = run ? state.workers[name]?.run_id === run.id : Boolean(state.workers[name]);
         const archived = dispatchId ? findArchive(state, { runId: null, dispatchId }) : live ? null : findArchive(state, { runId: run?.id ?? null, worker: name });
         if (archived) {
           out({ ...readArchive(archived, lines), ...(dispatchId ? {} : { note: `${name} is no longer live; this is its screen saved at release` }) });
           return;
         }
+        if (run && !live) throw new Error(`no worker "${name}" in run ${run.id}`);
         const text = await agentRead(name, lines);
         process.stdout.write(text.endsWith("\n") ? text : text + "\n");
         return;
       }
       if (sub === "focus") {
+        runWorker(args, name);
         await agentFocus(name);
         return;
       }
       if (sub === "stop") {
+        runWorker(args, name);
         await stopWorker(name);
         out({ stopped: name });
         return;
       }
       if (sub === "retain") {
         await update((state) => {
-          const w = state.workers[name];
-          if (!w) throw new Error(`no worker "${name}"`);
-          w.retained = true;
+          runWorker(args, name, state).retained = true;
         });
         out({ retained: name });
         return;
@@ -291,8 +311,9 @@ async function main(): Promise<void> {
     case "dispatch": {
       const [sub = "list", id] = args.positional;
       const state = load();
+      // Read-only: a closed run's records stay readable until it is pruned.
+      const run = currentRun(args, state, true);
       if (sub === "list") {
-        const run = currentRun(args, state);
         const task = str(args, "task");
         const worker = str(args, "worker");
         out({ dispatches: runDispatches(state, run.id).filter((d) => (!task || d.task_id === task) && (!worker || d.worker === worker)).map(dispatchView) });
@@ -300,7 +321,7 @@ async function main(): Promise<void> {
       }
       if (sub === "show") {
         const d = id ? state.dispatches?.[id] : undefined;
-        if (!d) throw new Error(`no dispatch ${id}`);
+        if (!d || d.run_id !== run.id) throw new Error(`no dispatch ${id} in run ${run.id}`);
         if (has(args, "preamble")) process.stdout.write(d.preamble.endsWith("\n") ? d.preamble : d.preamble + "\n");
         else out({ dispatch: dispatchView(d) });
         return;
@@ -341,10 +362,21 @@ async function main(): Promise<void> {
       const state = load();
       let run: Run | null = null;
       try {
-        run = currentRun(args, state);
+        run = currentRun(args, state, true);
       } catch {}
-      if (has(args, "json") || !process.stdout.isTTY) out(run ? view(state, run) : { runs: Object.values(state.runs) });
-      else process.stdout.write(run ? statusText(state, run) : dim("no active run\n"));
+      // Closed runs are counted, and listed only with --all.
+      const all = has(args, "all");
+      const closed = Object.values(state.runs).filter((r) => r.status === "closed");
+      if (has(args, "json") || !process.stdout.isTTY) {
+        const runs = all ? Object.values(state.runs) : activeRuns(state);
+        out(run ? { ...view(state, run), closed_runs: closed.length, ...(all ? { runs } : {}) } : { runs, closed_runs: closed.length });
+      } else {
+        let text = run ? statusText(state, run) : dim("no active run\n");
+        if (!run) for (const r of activeRuns(state)) text += `${bold(r.id)} ${r.objective}\n`;
+        if (all) for (const r of closed) text += dim(`${r.id} closed ${r.closed_at ?? "?"} · ${r.objective}\n`);
+        else if (closed.length) text += dim(`${closed.length} closed run${closed.length === 1 ? "" : "s"} (status --all lists them; run prune deletes them)\n`);
+        process.stdout.write(text);
+      }
       return;
     }
 
@@ -485,7 +517,8 @@ function usage(): string {
 
 Orchestrator (the agent you talk to):
   pack-leader run create --objective "..." [--no-sidebar]   bind a run to this pane and open the sidebar
-  pack-leader run show | list | close [--release]
+  pack-leader run show | list | close [--release] [--force]
+  pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]   delete closed runs and their records
   pack-leader task create --spec "..." [--title T] [--depends-on a,b]
   pack-leader task list | show ID | update ID --status S
   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--cwd D] [--placement tab|split] [--direction right|down] [-- agent args]
@@ -500,7 +533,7 @@ Orchestrator (the agent you talk to):
                                                 --wait: a JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
   pack-leader reply ASK_ID --body "..."
   pack-leader send NAME "text" [--now]
-  pack-leader status [--json]
+  pack-leader status [--json] [--all]                active runs and a count of closed ones; --all lists those too
   pack-leader dispatch list [--task ID] [--worker NAME]   every hand-over in the run
   pack-leader dispatch show ID [--preamble]      one record; --preamble prints the exact text sent
 Worker (inside a pane pack-leader started; IDs come from the environment):
