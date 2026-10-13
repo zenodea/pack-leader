@@ -143,6 +143,26 @@ export async function heartbeat(ctx: WorkerContext, body: string): Promise<Messa
   });
 }
 
+/**
+ * A non-blocking line for the orchestrator (a blocker, a finding, "taking
+ * longer because ..."): stored unacked so it surfaces in `check`, and the
+ * orchestrator is nudged once, like an ask, but the worker keeps going.
+ */
+export async function note(ctx: WorkerContext, body: string): Promise<Message> {
+  const { msg, run } = await update((state) => {
+    const run = state.runs[ctx.run_id];
+    if (!run) throw new Error(`no run ${ctx.run_id}`);
+    const w = state.workers[ctx.worker];
+    if (!w) throw new Error(`worker "${ctx.worker}" is not registered`);
+    touch(w);
+    const msg = message(state, { run_id: run.id, type: "note", from: ctx.worker, to: "orchestrator", task_id: ctx.task_id ?? w.task_id, dispatch_id: ctx.dispatch_id ?? w.dispatch_id, body });
+    return { msg, run };
+  });
+  log({ event: "worker.note", run: run.id, worker: ctx.worker, id: msg.id });
+  await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} left a note (${msg.id}); it is not waiting on you. Run \`pack-leader check\` and ack it with \`--ack ${msg.id}\`.`);
+  return msg;
+}
+
 /** A blocking question: recorded, the orchestrator nudged, then wait for the reply. */
 export async function ask(ctx: WorkerContext, o: { body?: string; options?: string[]; resumeId?: string; timeoutMs: number }): Promise<{ result: "reply" | "timeout"; ask_id: string; options?: string[]; reply?: Message }> {
   let askId = o.resumeId;
@@ -225,12 +245,13 @@ export async function reply(run: Run, askId: string, body: string, o: { free?: b
 /**
  * A follow-up for a worker: delivered straight into its prompt when it is ready
  * for input, otherwise queued for its next `pack-leader inbox` (or the next sync).
+ * `from` is "orchestrator" or the sending worker's name.
  */
-export async function send(run: Run, worker: string, body: string, force: boolean): Promise<{ message: Message; delivered: boolean }> {
+export async function send(run: Run, worker: string, body: string, force: boolean, from = "orchestrator"): Promise<{ message: Message; delivered: boolean }> {
   const msg = await update((state) => {
     const w = state.workers[worker];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${worker}" in run ${run.id}`);
-    return message(state, { run_id: run.id, type: "followup", from: "orchestrator", to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false });
+    return message(state, { run_id: run.id, type: "followup", from, to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false });
   });
   let ready = false;
   try {
@@ -238,12 +259,97 @@ export async function send(run: Run, worker: string, body: string, force: boolea
     ready = force || a.agent_status === "idle" || a.agent_status === "done";
   } catch {}
   // A concurrent sync() may deliver the queued message first; claim() decides who prompts.
-  const delivered = ready ? await deliver(msg.id, worker, body) : false;
-  log({ event: "orchestrator.send", run: run.id, to: worker, delivered });
+  const delivered = ready ? await deliver(msg.id, worker, body, from) : false;
+  log({ event: from === "orchestrator" ? "orchestrator.send" : "worker.send", run: run.id, from, to: worker, delivered });
   return { message: { ...msg, delivered, acked: delivered }, delivered };
 }
 
-const followupPrompt = (body: string) => `[Pack Leader follow-up from the orchestrator] ${body}`;
+export type Recipient = { worker: string; message_id: string; delivered: boolean };
+export type SendResult = { address: string; recipients: Recipient[]; message?: Message; delivered?: boolean };
+
+const GROUP_HELP = "@all (dispatched workers), @idle (idle or done), @<kind> (e.g. @claude)";
+
+/**
+ * Who a `send` address means, decided now: `@all` is every worker of the run
+ * that still owes a report (its task is dispatched), `@idle` every worker whose
+ * live herdr status is idle or done, `@<kind>` every worker of that kind, and a
+ * plain name that one worker. An address that matches nobody is an error that
+ * says why.
+ */
+export async function expandAddress(state: State, run: Run, address: string): Promise<string[]> {
+  const ws = Object.values(state.workers).filter((w) => w.run_id === run.id);
+  if (!address.startsWith("@")) {
+    const w = state.workers[address];
+    if (!w || w.run_id !== run.id) throw new Error(`no worker "${address}" in run ${run.id}`);
+    return [w.name];
+  }
+  const group = address.slice(1);
+  if (!group) throw new Error(`empty group address "@"; use ${GROUP_HELP}`);
+  if (!ws.length) throw new Error(`${address} matched nobody: run ${run.id} has no workers`);
+  let names: string[];
+  let why: string;
+  if (group === "all") {
+    names = ws.filter((w) => w.task_id && state.tasks[w.task_id]?.status === "dispatched").map((w) => w.name);
+    why = `no worker in run ${run.id} has a dispatched task (${ws.map((w) => `${w.name}: ${w.task_id ? state.tasks[w.task_id]?.status ?? "no task" : "no task"}`).join(", ")})`;
+  } else if (group === "idle") {
+    let agents;
+    try {
+      agents = await listAgents();
+    } catch (err: any) {
+      throw new Error(`@idle needs live agent status and herdr did not answer: ${err?.message ?? err}`);
+    }
+    const byPane = new Map(agents.map((a) => [a.pane_id, a.agent_status]));
+    names = ws.filter((w) => byPane.get(w.pane_id) === "idle" || byPane.get(w.pane_id) === "done").map((w) => w.name);
+    why = `no worker in run ${run.id} is idle or done right now (${ws.map((w) => `${w.name}: ${byPane.get(w.pane_id) ?? "no agent"}`).join(", ")})`;
+  } else {
+    names = ws.filter((w) => w.kind === group).map((w) => w.name);
+    why = `no worker of kind "${group}" in run ${run.id} (kinds: ${[...new Set(ws.map((w) => w.kind))].join(", ")})`;
+  }
+  if (!names.length) throw new Error(`${address} matched nobody: ${why}`);
+  return names;
+}
+
+/** The orchestrator's `send`: a name or a group address, one followup per recipient. */
+export async function sendTo(run: Run, address: string, body: string, force: boolean): Promise<SendResult> {
+  const names = await expandAddress(load(), run, address);
+  const recipients: Recipient[] = [];
+  let last: { message: Message; delivered: boolean } | undefined;
+  for (const name of names) {
+    last = await send(run, name, body, force);
+    recipients.push({ worker: name, message_id: last.message.id, delivered: last.delivered });
+  }
+  // A plain name keeps the old single-message shape alongside the recipient list.
+  return address.startsWith("@") ? { address, recipients } : { address, recipients, message: last!.message, delivered: last!.delivered };
+}
+
+/**
+ * A worker's `send` to another worker of the same run. No group addresses
+ * (those are the orchestrator's) and no sending to yourself, so workers cannot
+ * fan out or loop on their own.
+ */
+export async function workerSend(ctx: WorkerContext, to: string, body: string, force: boolean): Promise<SendResult> {
+  if (to.startsWith("@")) throw new Error(`group addresses like ${to} are for the orchestrator only; a worker sends to one worker by name`);
+  if (to === ctx.worker) throw new Error(`worker "${ctx.worker}" cannot send to itself`);
+  const state = load();
+  const run = state.runs[ctx.run_id];
+  if (!run) throw new Error(`no run ${ctx.run_id}`);
+  if (run.status === "closed") throw new Error(`run ${run.id} is closed`);
+  const me = state.workers[ctx.worker];
+  if (!me || me.run_id !== run.id) throw new Error(`worker "${ctx.worker}" is not registered in run ${run.id}`);
+  const target = state.workers[to];
+  if (!target) throw new Error(`no worker "${to}" in run ${run.id}`);
+  if (target.run_id !== run.id) throw new Error(`worker "${to}" belongs to run ${target.run_id}, not your run ${run.id}; workers can only message workers of their own run`);
+  const r = await send(run, to, body, force, ctx.worker);
+  // Sending is a sign of life from the sender.
+  await update((state) => {
+    const w = state.workers[ctx.worker];
+    if (w) touch(w);
+  }).catch(() => {});
+  return { address: to, recipients: [{ worker: to, message_id: r.message.id, delivered: r.delivered }], message: r.message, delivered: r.delivered };
+}
+
+const followupPrompt = (body: string, from = "orchestrator") =>
+  from === "orchestrator" ? `[Pack Leader follow-up from the orchestrator] ${body}` : `[pack-leader follow-up from worker ${from}] ${body}`;
 
 /**
  * Prompt a worker with a queued followup. The message is claimed (delivered +
@@ -251,7 +357,7 @@ const followupPrompt = (body: string) => `[Pack Leader follow-up from the orches
  * send() cannot prompt it a second time; if the prompt fails, the claim is
  * reverted so a later pass retries it. True when this call delivered it.
  */
-async function deliver(id: string, worker: string, body: string): Promise<boolean> {
+async function deliver(id: string, worker: string, body: string, from = "orchestrator"): Promise<boolean> {
   const claimed = await update((state) => {
     const m = state.messages.find((m) => m.id === id);
     if (!m || m.delivered || m.acked) return false;
@@ -261,7 +367,7 @@ async function deliver(id: string, worker: string, body: string): Promise<boolea
   });
   if (!claimed) return false;
   try {
-    await agentPrompt(worker, followupPrompt(body));
+    await agentPrompt(worker, followupPrompt(body, from));
     return true;
   } catch {
     await update((state) => {
@@ -326,7 +432,7 @@ export async function sync(): Promise<Message[]> {
   }
   const byPane = new Map(agents.map((a) => [a.pane_id, a]));
   const paneIds = new Set(panes.map((p) => p.pane_id));
-  const toDeliver: { worker: string; body: string; id: string }[] = [];
+  const toDeliver: { worker: string; body: string; id: string; from: string }[] = [];
   const created = await update((state) => {
     const out: Message[] = [];
     for (const r of activeRuns(state)) if (r.herdr_unreachable_since) r.herdr_unreachable_since = null;
@@ -411,18 +517,29 @@ export async function sync(): Promise<Message[]> {
       }
 
       if (a && (status === "idle" || status === "done")) {
-        for (const m of state.messages) if (m.to === w.name && m.type === "followup" && !m.delivered && !m.acked) toDeliver.push({ worker: w.name, body: m.body, id: m.id });
+        for (const m of state.messages) if (m.to === w.name && m.type === "followup" && !m.delivered && !m.acked) toDeliver.push({ worker: w.name, body: m.body, id: m.id, from: m.from });
       }
     }
     return out;
   });
-  for (const d of toDeliver) await deliver(d.id, d.worker, d.body);
+  for (const d of toDeliver) await deliver(d.id, d.worker, d.body, d.from);
   for (const m of created) log({ event: "attention", run: m.run_id, worker: m.from, status: m.status });
   return created;
 }
 
 /** The outcome summary sync() records when a worker's pane disappears with its task open. */
 export const EXITED_SUMMARY = "worker exited before reporting";
+
+/** What `check` can return; also the default filter. */
+export const CHECK_TYPES = ["done", "ask", "attention", "note"] as const;
+
+/** `--types` as given, checked against CHECK_TYPES. */
+export function checkTypes(given: string[]): string[] {
+  if (!given.length) throw new Error(`--types needs at least one of: ${CHECK_TYPES.join(", ")}`);
+  const bad = given.filter((t) => !(CHECK_TYPES as readonly string[]).includes(t));
+  if (bad.length) throw new Error(`unknown --types value${bad.length > 1 ? "s" : ""} ${bad.map((t) => JSON.stringify(t)).join(", ")}; valid: ${CHECK_TYPES.join(", ")}`);
+  return given;
+}
 
 export type CheckResult = (
   | { result: "message"; message: Message; pending: number; options?: string[]; reply_hint?: string }
@@ -448,9 +565,10 @@ export function waitHeartbeat(state: State, runId: string, elapsedMs: number): R
  * (PACK_WAIT_HEARTBEAT_MS, default 15 s; 0 disables); stdout stays the single result.
  */
 export async function check(run: Run, o: { wait: boolean; timeoutMs: number; types?: string[]; heartbeatMs?: number }): Promise<CheckResult> {
+  const types: readonly string[] = o.types ? checkTypes(o.types) : CHECK_TYPES;
   const started = Date.now();
   const pick = (state: State): CheckResult | null => {
-    const all = unacked(state, run.id).filter((m) => !o.types || o.types.includes(m.type));
+    const all = unacked(state, run.id).filter((m) => types.includes(m.type));
     const m = all[0];
     if (!m) return null;
     // An ask comes with its options and a reply command to paste.

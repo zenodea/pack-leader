@@ -10,21 +10,22 @@
 //   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | stop NAME | release NAME [--force] | retain NAME
 //   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
 //   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
-//   pack-leader check [--wait] [--timeout MS] [--ack ID] [--types done,ask,attention]
+//   pack-leader check [--wait] [--timeout MS] [--ack ID] [--types done,ask,attention,note]
 //   pack-leader reply ASK_ID --body "..." [--free]
-//   pack-leader send NAME "text" [--now]
+//   pack-leader send NAME|@all|@idle|@KIND "text" [--now]
 //   pack-leader status [--json] [--all]
 //   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 // Worker side (inside a pane pack-leader started; IDs come from the environment):
 //   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
 //   pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
-//   pack-leader heartbeat "note" | pack-leader inbox
+//   pack-leader heartbeat "note" | pack-leader note "text" | pack-leader inbox
+//   pack-leader send WORKER "text" [--now]         another worker of the same run
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
 import { agentFocus, agentRead, getPane, notify, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
-import { ack, ask, check, done, heartbeat, herdrWarning, inbox, reply, send, sync, workerContext } from "./inbox.ts";
+import { ack, ask, check, checkTypes, done, heartbeat, herdrWarning, inbox, note, reply, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
 import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Message, type Run, type State, unacked, update } from "./state.ts";
 import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
@@ -332,13 +333,14 @@ async function main(): Promise<void> {
     // ---- orchestrator inbox ----------------------------------------------------
     case "check": {
       const run = currentRun(args);
+      // Validate before acking anything, so a typo does not half-run the command.
+      const types = has(args, "types") ? checkTypes(list(args, "types")) : undefined;
       if (str(args, "ack")) {
         const n = await ack(run, list(args, "ack"));
         if (!n && !has(args, "wait")) {
           out({ acked: 0, warning: "nothing to ack with those ids" });
         }
       }
-      const types = str(args, "types") ? list(args, "types") : undefined;
       const r = await check(run, { wait: has(args, "wait"), timeoutMs: num(args, "timeout", 540_000), types });
       out(r);
       return;
@@ -356,8 +358,12 @@ async function main(): Promise<void> {
     case "send": {
       const [name, ...words] = args.positional;
       const body = str(args, "body") ?? words.join(" ");
-      if (!name || !body) throw new Error("usage: pack-leader send NAME \"text\" [--now]");
-      out(await send(currentRun(args), name, body, has(args, "now")));
+      if (!name || !body) throw new Error("usage: pack-leader send NAME|@all|@idle|@KIND \"text\" [--now]");
+      // From a worker pane: one worker of the same run, by name. From the orchestrator: a name or a group address.
+      if (process.env.PACK_WORKER) {
+        const ctx = workerContext({});
+        out(await workerSend(ctx, name, body, has(args, "now")));
+      } else out(await sendTo(currentRun(args), name, body, has(args, "now")));
       return;
     }
     case "status": {
@@ -406,10 +412,26 @@ async function main(): Promise<void> {
       out({ heartbeat: m.id });
       return;
     }
+    case "note": {
+      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const body = args.positional.join(" ") || str(args, "body");
+      if (!body) throw new Error("usage: pack-leader note \"<blocker, finding, or why this takes longer>\"");
+      const m = await note(ctx, body);
+      out({ note: m.id, next: "Keep working; the orchestrator sees it in `pack-leader check`." });
+      return;
+    }
     case "inbox": {
       const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
       const msgs = await inbox(ctx);
-      out({ messages: msgs.map((m) => (m.type === "reply" ? { id: m.id, ts: m.ts, body: m.body, reply_to: m.reply_to, ...(m.answer !== undefined ? { answer: m.answer, option_index: m.option_index ?? null } : {}) } : { id: m.id, ts: m.ts, body: m.body })) });
+      out({
+        messages: msgs.map((m) => ({
+          id: m.id,
+          ts: m.ts,
+          from: m.from,
+          body: m.body,
+          ...(m.type === "reply" ? { reply_to: m.reply_to, ...(m.answer !== undefined ? { answer: m.answer, option_index: m.option_index ?? null } : {}) } : {}),
+        })),
+      });
       return;
     }
 
@@ -541,10 +563,10 @@ Orchestrator (the agent you talk to):
   pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
-  pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention]
+  pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
                                                 --wait: a JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
   pack-leader reply ASK_ID --body "..." [--free]     an ask with options takes one (or a unique prefix); --free for free text
-  pack-leader send NAME "text" [--now]
+  pack-leader send NAME|@all|@idle|@KIND "text" [--now]   @all: dispatched workers; @idle: idle or done; @KIND: by kind
   pack-leader status [--json] [--all]                active runs and a count of closed ones; --all lists those too
   pack-leader dispatch list [--task ID] [--worker NAME]   every hand-over in the run
   pack-leader dispatch show ID [--preamble]      one record; --preamble prints the exact text sent
@@ -552,6 +574,8 @@ Worker (inside a pane pack-leader started; IDs come from the environment):
   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
   pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
   pack-leader heartbeat "note" | pack-leader inbox
+  pack-leader note "text"                              non-blocking line for the orchestrator (blocker, finding, delay)
+  pack-leader send WORKER "text" [--now]               a follow-up to another worker of the same run
 Either:
   pack-leader skill [--install]                        the guide; or install it into Claude Code
   pack-leader sidebar                                  the pack, live (run by herdr in a pane)

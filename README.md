@@ -91,6 +91,14 @@ text instead. The waiting `ask` prints `reply`, `answer` (the chosen option) and
 `option_index` (null for a free answer), so the worker can branch on it. The
 sidebar shows an open question in yellow with its options as `[postgres | sqlite]`.
 
+Messaging: `pack-leader send` takes a worker name or a group address decided at
+send time (`@all` for every worker that still owes a report, `@idle` for those
+herdr shows idle or done, `@claude` and other kinds), one follow-up per
+recipient. A worker can leave a non-blocking `pack-leader note "..."` (a blocker,
+a finding, "taking longer because ...") that shows up in `pack-leader check` and on
+its sidebar box, and can `pack-leader send <worker> "..."` to another worker of the
+same run (no group addresses, not to itself).
+
 `pack-leader status` prints the run in the terminal (closed runs are counted;
 `--all` lists them); `pack-leader skill` prints the full guide
 the agents follow. The sidebar (`pack-leader: show the pack`) lists one box per worker

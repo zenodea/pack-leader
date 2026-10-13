@@ -24,6 +24,7 @@ export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: 
     `- Blocking question for the orchestrator: \`pack-leader ask "<question>"\`. It waits for the answer (up to 10 minutes); on timeout, run \`pack-leader ask --id <id>\` to keep waiting. Never stop on a question the orchestrator cannot see.`,
     `- Read follow-ups at natural checkpoints (before starting a new file, after a test run) and once more right before reporting: \`pack-leader inbox\`.`,
     `- During long work, about every 10 minutes: \`pack-leader heartbeat "<one line on progress>"\`.`,
+    `- Non-blocking blocker, finding, or "taking longer because ...": \`pack-leader note "<text>"\`; keep working.`,
     `- When finished, exactly once: \`pack-leader done --outcome succeeded|failed --summary "<three sentences: what changed, how it was verified, what is left>" [--files-modified a,b] [--report-path <file>]\`. Say failed explicitly when the acceptance check did not pass.`,
     `- After \`pack-leader done\`, end your turn and wait. Do not start new work until prompted.`,
     ``,
@@ -431,10 +432,16 @@ export const workerSummary = (w: Worker, state: State) => ({
 const openFor = (state: State, w: Worker) =>
   state.messages.filter((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && !m.acked && (m.type === "ask" || m.type === "attention"));
 
-/** What is waiting on the orchestrator for this worker: "ask", or an attention status (idle, blocked, exited, unverifiable, stalled, ...). */
+/**
+ * What is waiting on the orchestrator for this worker: "ask", an attention
+ * status (idle, blocked, exited, unverifiable, stalled, ...), or "note". A note
+ * only needs an ack (the worker is not waiting), so it alone requires no action.
+ */
 export function workerAttention(state: State, w: Worker): { categories: string[]; requires_action: boolean } {
-  const categories = [...new Set(openFor(state, w).map((m) => (m.type === "ask" ? "ask" : m.status ?? "attention")))];
-  return { categories, requires_action: categories.length > 0 };
+  const open = openFor(state, w);
+  const categories = [...new Set(open.map((m) => (m.type === "ask" ? "ask" : m.status ?? "attention")))];
+  const noted = state.messages.some((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && !m.acked && m.type === "note");
+  return { categories: noted ? [...categories, "note"] : categories, requires_action: open.length > 0 };
 }
 
 /**

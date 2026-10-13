@@ -21,12 +21,12 @@ function elapsed(iso: string): string {
   return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
 }
 
-/** The message a worker's box shows: the last thing it said (heartbeat, done, ask), or the last reply to it. */
+/** The message a worker's box shows: the last thing it said (heartbeat, note, done, ask), or the last reply to it. */
 export function lastMessageFor(state: State, runId: string, worker: string): Message | null {
   for (let i = state.messages.length - 1; i >= 0; i--) {
     const m = state.messages[i]!;
     if (m.run_id !== runId) continue;
-    if (m.from === worker && (m.type === "heartbeat" || m.type === "done" || m.type === "ask")) return m;
+    if (m.from === worker && (m.type === "heartbeat" || m.type === "note" || m.type === "done" || m.type === "ask")) return m;
     if (m.to === worker && m.type === "reply") return m;
   }
   return null;
@@ -51,7 +51,9 @@ function wrap(s: string, w: number, max: number): string[] {
 /**
  * One worker's box, borders included: agent, runtime and status, objective,
  * then the last message. An unanswered ask shows its question (up to two
- * lines) and its options as `[a | b | c]`, in yellow; a reply shows its answer.
+ * lines) and its options as `[a | b | c]`, in yellow; a reply shows its answer;
+ * a note shows `note: ...`. The status glyph and word cover liveness
+ * (unverifiable, stalled) as well as herdr's agent states.
  * At most 8 lines, each exactly `cols` cells wide.
  */
 export function boxLines(w: Worker, t: Task | null, last: Message | null, st: string, cols: number, selected = false): string[] {
@@ -64,6 +66,7 @@ export function boxLines(w: Worker, t: Task | null, last: Message | null, st: st
     note.push(...wrap(`asks: ${oneLine(last.body)}`, inner, 2).map((l) => fg.yellow(l)));
     if (last.options?.length) note.push(fg.yellow(truncate(`[${formatOptions(last.options)}]`, inner, "")));
   } else if (last?.type === "reply") note.push(`${fg.cyan("answer: ")}${oneLine(last.answer ?? last.body)}`);
+  else if (last?.type === "note") note.push(`${fg.yellow("note: ")}${oneLine(last.body)}`);
   else if (last) note.push(`${last.type === "done" ? (last.outcome === "failed" ? fg.red("failed: ") : fg.green("done: ")) : dim("↳ ")}${oneLine(last.body)}`);
   const border = selected ? fg.cyan : dim;
   return [

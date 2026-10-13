@@ -84,6 +84,7 @@ Process every message, then acknowledge it and wait for the next:
 | `done`      | The worker settled its task (`outcome` succeeded/failed)  | Verify if needed, then reuse (`pack-leader worker prompt`), `retain`, or `release` the worker  |
 | `ask`       | The worker is blocked on a question                       | `pack-leader reply <id> --body "<answer>"`; with `options`, paste `reply_hint` or name one option (a unique prefix works), or add `--free` to answer outside them |
 | `attention` | The worker settled, vanished, or went quiet without reporting; `status` says which: `idle`/`done`, `blocked`, `exited` (pane gone), `unverifiable` (agent gone, pane alive), `stalled` (no sign of life for `PACK_STALL_MS`, default 20 min) | `pack-leader worker read <name>`; re-prompt it to run `pack-leader done`, or release with `--force`    |
+| `note`      | A non-blocking line from a worker that keeps working      | Read it, act if needed (a `send`, a new task), then ack it                               |
 
 ```bash
 pack-leader reply m7 --body "Use the existing helper in src/net.ts; do not add a dependency."
@@ -125,6 +126,37 @@ task ready. Prefer parallel waves over chains deeper than three steps.
 Follow-ups to a busy worker go through `pack-leader send <name> "text"`: delivered
 straight into its prompt when it is ready for input, otherwise queued for its
 next `pack-leader inbox` checkpoint.
+
+### Messaging
+
+`pack-leader send ADDRESS "text" [--now]` takes a worker name or a group address.
+The address is expanded when you send, and each recipient gets its own
+follow-up with the usual delivery (prompted at once when idle or with `--now`,
+otherwise queued for its next `pack-leader inbox`). The result lists every
+recipient with its `delivered` flag.
+
+| Address    | Recipients (in this run)                                  |
+| ---------- | --------------------------------------------------------- |
+| `api`      | that worker                                               |
+| `@all`     | every worker that still owes a report (task dispatched)   |
+| `@idle`    | every worker herdr shows idle or done right now           |
+| `@<kind>`  | every worker of that kind, e.g. `@claude`                 |
+
+An address that matches nobody is an error that says why; nothing is sent.
+Group addresses apply to `send` only, never to done, ask, or heartbeat.
+
+Workers have two non-blocking channels besides `ask`:
+
+- `pack-leader note "text"` stores a `note` for the orchestrator: it arrives in
+  `pack-leader check` like a report (ack it with `--ack`), nudges an idle
+  orchestrator once, and shows on the worker's sidebar box. The worker keeps
+  working.
+- `pack-leader send <worker> "text"` from a worker pane reaches another worker
+  of the same run, prefixed `[pack-leader follow-up from worker <sender>]`. A
+  worker cannot send to itself, to another run, or to a group address.
+
+`pack-leader check --types` filters by `done`, `ask`, `attention`, `note` (the
+default is all four); any other value is an error.
 
 Keep waiting until every dispatched task has settled. Do not stop, release, or
 start a duplicate worker without a `done` report or positive proof the agent
@@ -208,6 +240,10 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
 3. Read follow-ups at natural checkpoints (before starting a new file, after a
    test run) and once more right before reporting: `pack-leader inbox`.
 4. During long work, about every ten minutes: `pack-leader heartbeat "<one line>"`.
+   For a blocker you can work around, a finding the orchestrator should know,
+   or "I am taking longer because ...", use `pack-leader note "<text>"`: it reaches
+   the orchestrator's inbox without stopping you. Use `ask` only when you
+   cannot continue without the answer.
 5. Report exactly once, with an explicit outcome:
    `pack-leader done --outcome succeeded|failed --summary "<three sentences: what changed, how it was verified, what is left>" [--files-modified a,b] [--report-path <file>]`.
    Say `failed` when the acceptance check did not pass; never encode failure
@@ -226,12 +262,13 @@ pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude]
 pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME
 pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
 pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
-pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention]
+pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
 pack-leader reply ASK_ID --body "..." [--free]
-pack-leader send NAME "text" [--now]
+pack-leader send NAME|@all|@idle|@KIND "text" [--now]
 pack-leader status [--json] [--all]
 pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
-pack-leader done | ask [--options a,b,c] | heartbeat | inbox          (worker side)
+pack-leader done | ask [--options a,b,c] | heartbeat | note | inbox   (worker side)
+pack-leader send WORKER "text" [--now]              (worker side: same run, by name)
 ```
 
 `pack-leader help` prints the same list. Unknown flags are errors; do not guess.
