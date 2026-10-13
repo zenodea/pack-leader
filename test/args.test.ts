@@ -14,13 +14,27 @@ test("parseArgs: flags, values, = form, and -- passthrough", () => {
   assert.throws(() => num(parseArgs(["--timeout", "x"]), "timeout", 0), /must be a number/);
 });
 
-test("preamble names the IDs and the report command", () => {
+test("preamble names the IDs, every worker command, and the worktree when there is one", () => {
   const run = { id: "r1", objective: "o", status: "active" as const, created_at: "t", orchestrator: { pane_id: "w1:p1", workspace_id: "w1", tab_id: null, cwd: "/repo" } };
   const task = { id: "t1", run_id: "r1", title: "Fix tests", spec: "Target: x\nChange: y", status: "dispatched" as const, depends_on: [], worker: "api", dispatch_id: "d1", attempts: 1, created_at: "t", updated_at: "t", outcome: null };
   const p = preamble({ worker: "api", run, task, dispatchId: "d1", cwd: "/repo" });
-  assert.match(p, /^\[pack-leader dispatch\] You are worker "api" in run r1, on task t1/);
+  assert.match(p, /^\[pack-leader dispatch\] You are worker "api" in run r1, on task t1 \("Fix tests"\), dispatch d1\./);
+  assert.match(p, /- Do only this task, in \/repo\./);
+  assert.match(p, /pack-leader ask "<question>"` \(with fixed choices, add `--options "a,b,c"`/);
+  assert.match(p, /pack-leader note "<text>"`; keep working/);
+  assert.match(p, /pack-leader send <worker> "<text>"`/);
+  assert.match(p, /pack-leader inbox/);
+  assert.match(p, /pack-leader heartbeat/);
   assert.match(p, /pack-leader done --outcome succeeded\|failed/);
   assert.match(p, /Target: x\nChange: y$/);
+  assert.doesNotMatch(p, /worktree/);
+
+  const rules = (text: string) => text.split("\n").filter((l) => l.startsWith("- "));
+  const wt = preamble({ worker: "api", run, task, dispatchId: "d1", cwd: "/repo-wt/api", worktree: { path: "/repo-wt/api", branch: "pack/r1/api", base: "0123456789abcdef", created_by_pack: true, repo: "/repo" } });
+  const lines = rules(wt);
+  assert.equal(lines.length, rules(p).length + 1, "one rule more: the worktree line");
+  assert.match(lines[1]!, /^- You are in a git worktree of your own at \/repo-wt\/api, on branch pack\/r1\/api\. Commit your work on that branch/);
+  assert.match(lines[1]!, /fresh checkout of 0123456789ab/);
 });
 
 test("firstLine and default args", () => {

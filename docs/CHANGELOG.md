@@ -1,0 +1,120 @@
+# Changelog
+
+## Unreleased: dispatch records, liveness, run hygiene, structured asks, group messaging, worktrees
+
+Six feature branches merged together. Each branch's own decisions are in
+`docs/changes/feat-*.md`; this entry folds them into one list and records how
+they were made to work together. State stays `version: 1`: every new field and
+map is optional, `emptyState()` includes `dispatches` and `worktrees`, and
+`load()` accepts files written before any of this.
+
+### Dispatch records and release archives (feat/dispatch)
+
+- `state.dispatches`: one record per dispatch with `run_id`, `task_id`,
+  `worker`, `attempt`, the exact `preamble` sent, `cwd`, `started_at`, and once
+  settled `settled_at` + `outcome`; `retry_of` when it retries a failed task;
+  `archive_path` / `archive_error`. Helpers live in `src/dispatch.ts`.
+- Created by `worker start` and `worker prompt`; `worker resend` re-sends the
+  stored text. Settled (first wins) by `done`, a forced release, a worker that
+  exited owing a report, an agent that never came up, a start whose worktree,
+  tab or pane could not be created, and `run close`.
+- Release archives the worker's screen to
+  `<stateDir>/archive/<run>/<worker>-<dispatch>.txt` (0700/0600) before closing
+  its tab, falling back from a long unwrapped read to herdr's default read to
+  the visible screen. `worker read NAME` falls back to the newest archive once
+  the worker is gone; `--dispatch ID` reads a given one.
+- `pack-leader dispatch list [--task] [--worker]` and `dispatch show ID [--preamble]`;
+  `task show` adds `dispatch_ids`, `status` counts dispatches per task.
+
+### Liveness, stall alerts and next actions (feat/liveness)
+
+- `sync()` stores `liveness` (`live` | `unverifiable` | `exited`) with a reason:
+  agent in its pane is live, pane alive without an agent past 30 s is
+  unverifiable, pane absent from two consecutive syncs is exited.
+- New attention statuses `unverifiable` (once per dispatch) and `stalled`
+  (owes a report, no sign of life for `PACK_STALL_MS`, default 20 min, `0` off;
+  never while its own question is open).
+- herdr unreachable: verdicts stay, the run records `herdr_unreachable_since`,
+  and `check`, `status`, `worker list/show` print a `warning`.
+- Worker rows carry `last_seen`, `liveness`, `attention: {categories,
+  requires_action}` and `next_action` (the argv to run next).
+- `check --wait` writes a JSON heartbeat to stderr every
+  `PACK_WAIT_HEARTBEAT_MS` (15 s, `0` off). Sidebar glyphs for `NO AGENT` and
+  `STALLED`.
+
+### Run hygiene (feat/hygiene)
+
+- `pack-leader run prune [--keep N] [--older-than D] [--all] [--dry-run]` deletes
+  closed runs and every record carrying their `run_id` (generic over the state's
+  maps and arrays). Plain `prune` keeps the 5 most recent.
+- `run close` refuses an already closed run without `--force`, refuses while a
+  worker is dispatched unless `--release` or `--force`, fails dispatched tasks
+  ("run closed"), releases with `--release`, forgets the rest, and closes the
+  sidebar pane unless another active run shows it.
+- A closed run named by `--run`/`PACK_RUN_ID` is an error except for read-only
+  commands. Task and worker commands check the record belongs to the run.
+- `worker release` reports `closed_pane` and `closed_tab`; `status --all` lists
+  closed runs.
+
+### Structured questions (feat/ask)
+
+- `ask --options a,b,c`; `reply` must name an option (exact, case-insensitive,
+  or a unique prefix) unless `--free`. The reply carries `answer` and
+  `option_index`; `check` adds `options` and a `reply_hint` to paste.
+- The sidebar box builder is `boxLines()`; an open ask shows its question and
+  `[a | b | c]` in yellow, a reply shows its answer.
+
+### Group messaging and notes (feat/groups)
+
+- `send` to `@all`, `@idle`, `@<kind>`, expanded at send time, one follow-up
+  per recipient; an address that matches nobody is an error.
+- Worker side: `pack-leader note "text"` (non-blocking, surfaces in `check`) and
+  `pack-leader send <worker> "text"` to another worker of the same run, delivered
+  with a `[pack-leader follow-up from worker <sender>]` prefix.
+- `check --types` is validated against `done, ask, attention, note`.
+
+### A worktree per worker (feat/worktree)
+
+- `worker start NAME --worktree new|PATH [--base REF] [--branch B]`, planned
+  before anything is created; herdr's `worktree.create`/`open` with a
+  `git worktree add` fallback; `state.worktrees` keeps the record after release.
+- `worker release --remove-worktree` removes only a worktree Pack Leader created,
+  never forced; the branch is never deleted. Two active workers never share one.
+
+### How the features fit together
+
+- `run close` settles the dispatch records of the tasks it fails (and any other
+  open dispatch of the run), and `--release` goes through `releaseWorker`, so
+  every released worker's screen is archived; its `released` entries carry
+  `archive_path` and `worktree` too. Workers it only forgets get their
+  worktree record marked released.
+- `run prune` also deletes the pruned runs' `archive/<run>` directories (their
+  dispatch records, which point at them, are gone); `--dry-run` deletes nothing.
+  Worktree records go with their run; worktrees on disk are never touched.
+- `dispatch list|show` resolve the run with closed runs allowed (read-only), and
+  `show` refuses a dispatch of another run. `worker read` resolves its run the
+  same way; its archive fallback still works for a released worker of a closed
+  run, and a name that is neither live in the run nor archived is an error.
+- One `sync()` does liveness verdicts, `unverifiable`/`stalled` attention,
+  exited-owing-report failure with dispatch settlement, and follow-up delivery,
+  including queued worker-to-worker follow-ups with their sender's prefix. The
+  `exited` verdict now needs two consecutive syncs, so the dispatch settlement
+  test syncs twice.
+- Signs of life (`last_seen`, re-arming a stall) include `note` and a worker's
+  `send` as well as heartbeat, ask, done and herdr state changes. A worker
+  cannot send inside a closed run.
+- `attention.categories` lists `note` for an unacked note, but a note alone
+  does not set `requires_action` or a `next_action`. For an ask with options,
+  `next_action` reads `--body "<one of: a | b>"`.
+- `boxLines()` renders the liveness glyphs and words, notes, asks with options
+  and answers; the sidebar's empty state stays one line.
+- `worker release` prints `closed_pane`, `closed_tab`, `archive_path` (or
+  `archive_error`) and, with a worktree, `worktree`.
+- The preamble is one list of rules: the task's directory, the worktree line
+  when there is one, `ask` (with `--options`), `note`, `send` to another worker,
+  `inbox`, `heartbeat`, `done`; the first line names the dispatch id. The
+  stored dispatch preamble is exactly what was sent, so `resend` repeats the
+  worktree line.
+- `pack-leader help`, the header of `src/cli.ts`, the Commands block of
+  `docs/guide.md` and the README list every command and flag once, grouped as
+  runs, tasks, workers, messaging and worker side.

@@ -265,7 +265,9 @@ function closable(): State {
 }
 
 test("run close refuses while workers are dispatched, then with --release fails tasks, releases and forgets workers, closes the sidebar", async () => {
-  save(closable());
+  const start = closable();
+  start.runs.r1!.herdr_unreachable_since = "2026-10-14T11:00:00.000Z";
+  save(start);
   const alive = new Set(["w1:side", "w1:bob", "w1:amy"]);
   handler = herdrWith(alive);
 
@@ -278,6 +280,7 @@ test("run close refuses while workers are dispatched, then with --release fails 
   assert.equal(s.runs.r1!.status, "closed");
   assert.ok(s.runs.r1!.closed_at);
   assert.equal(s.runs.r1!.sidebar_pane_id, null);
+  assert.equal(s.runs.r1!.herdr_unreachable_since, undefined, "no stale herdr warning on a closed run");
   assert.equal(s.tasks.t1!.status, "failed");
   assert.equal(s.tasks.t1!.outcome?.summary, "run closed");
   assert.equal(s.tasks.t2!.status, "succeeded");

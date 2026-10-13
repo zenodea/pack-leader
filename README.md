@@ -77,41 +77,49 @@ there; `--base`, `--branch` and `--worktree <existing path>` adjust it.
 `pack-leader worker release api` keeps the worktree and prints its path and branch;
 `--remove-worktree` removes one Pack Leader created (never forced, branch kept).
 
-Workers get a `[pack-leader dispatch]` preamble as their first prompt and report with
-`pack-leader done`, ask with `pack-leader ask` (which blocks until you answer), and read
-follow-ups with `pack-leader inbox`. Their IDs come from the pane environment.
+### Messaging
 
-Each dispatch is recorded with the exact preamble sent (`pack-leader dispatch list`,
-`pack-leader dispatch show ID --preamble`), and releasing a worker saves its screen
-to `archive/<run>/<worker>-<dispatch>.txt` in the state dir first, so
-`pack-leader worker read <name>` keeps working after the tab is gone.
-
-When the run is done, `pack-leader run close --release` releases the workers,
-fails any task still dispatched, and closes the sidebar. Closed runs stay in the
-state file until `pack-leader run prune` deletes them (it keeps the 5 most recent;
-`--keep N`, `--older-than 2d`, `--all`, `--dry-run`).
+Workers get a `[pack-leader dispatch]` preamble as their first prompt (it names
+their run, task and dispatch IDs, and their worktree when they have one) and
+report with `pack-leader done`. Their IDs come from the pane environment. They
+ask with `pack-leader ask` (which blocks until you answer), leave a non-blocking
+`pack-leader note "..."` (a blocker, a finding, "taking longer because ..."), tell
+another worker of the same run something with `pack-leader send <worker> "..."`,
+and read follow-ups with `pack-leader inbox`.
 
 A question can offer choices: `pack-leader ask "Which db?" --options "postgres,sqlite"`.
 `pack-leader check` then shows the `options` and a `reply_hint` to paste; `pack-leader
 reply m7 --body "sq"` takes an option exactly or by unique case-insensitive prefix
 (anything else is an error listing the options), and `--free` answers in free
 text instead. The waiting `ask` prints `reply`, `answer` (the chosen option) and
-`option_index` (null for a free answer), so the worker can branch on it. The
-sidebar shows an open question in yellow with its options as `[postgres | sqlite]`.
+`option_index` (null for a free answer), so the worker can branch on it.
 
-Messaging: `pack-leader send` takes a worker name or a group address decided at
-send time (`@all` for every worker that still owes a report, `@idle` for those
-herdr shows idle or done, `@claude` and other kinds), one follow-up per
-recipient. A worker can leave a non-blocking `pack-leader note "..."` (a blocker,
-a finding, "taking longer because ...") that shows up in `pack-leader check` and on
-its sidebar box, and can `pack-leader send <worker> "..."` to another worker of the
-same run (no group addresses, not to itself).
+`pack-leader send` takes a worker name or a group address decided at send time
+(`@all` for every worker that still owes a report, `@idle` for those herdr shows
+idle or done, `@claude` and other kinds), one follow-up per recipient.
+`pack-leader check --types` filters by `done`, `ask`, `attention` and `note`.
+
+### Records and cleanup
+
+Each dispatch is recorded with the exact preamble sent (`pack-leader dispatch list`,
+`pack-leader dispatch show ID --preamble`). Releasing a worker saves its screen
+to `archive/<run>/<worker>-<dispatch>.txt` in the state dir first, so
+`pack-leader worker read <name>` keeps working after the tab is gone; the release
+prints `closed_pane`, `closed_tab`, `archive_path` and the worker's `worktree`.
+
+When the run is done, `pack-leader run close --release` releases (and archives)
+the workers, fails any task still dispatched and settles its dispatch, and
+closes the sidebar. Closed runs stay readable until `pack-leader run prune`
+deletes them with their records and archives (it keeps the 5 most recent;
+`--keep N`, `--older-than 2d`, `--all`, `--dry-run`).
 
 `pack-leader status` prints the run in the terminal (closed runs are counted;
-`--all` lists them); `pack-leader skill` prints the full guide
-the agents follow. The sidebar (`pack-leader: show the pack`) lists one box per worker
-with its herdr state, task and last message; `j`/`k` move, Enter focuses the
-worker's pane, `r` previews its last lines.
+`--all` lists them); `pack-leader skill` prints the full guide the agents follow;
+`pack-leader help` lists every command. The sidebar (`pack-leader: show the pack`)
+lists one box per worker with its state (including `NO AGENT` and `STALLED`),
+task and last message (a heartbeat, a note, a report, an open question with its
+options, or the answer); `j`/`k` move, Enter focuses the worker's pane, `r`
+previews its last lines.
 
 ## How it works
 

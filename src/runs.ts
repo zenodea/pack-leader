@@ -125,6 +125,8 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
     for (const d of Object.values(state.dispatches ?? {})) if (d.run_id === runId) settleDispatch(state, d.id, "failed");
     run.status = "closed";
     run.closed_at = now();
+    // sync() only clears this on active runs; a closed run keeps no stale herdr warning.
+    delete run.herdr_unreachable_since;
     return { run: { ...run }, workers, failed };
   });
 

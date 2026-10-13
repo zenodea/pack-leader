@@ -1,25 +1,23 @@
 // Pack Leader: an orchestrator agent and its pack of workers, on herdr.
 //
 // Orchestrator side (the agent you talk to):
-//   pack-leader run create --objective "..."       bind a run to this pane
-//   pack-leader run show | close [--release] [--force]
+//   pack-leader run create --objective "..." | show | list | close [--release] [--force]
 //   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
-//   pack-leader task create --spec "..." [--title T] [--depends-on a,b]
-//   pack-leader task list | show ID | update ID --status S
-//   pack-leader worker start NAME --spec "..." | --task ID [--kind K] [--cwd D] [--direction right|down] [-- agent args]
-//   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | stop NAME | release NAME [--force] | retain NAME
-//   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
-//   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
+//   pack-leader status [--json] [--all]
+//   pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
+//   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind K] [--cwd D] [--placement tab|split]
+//                            [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
+//   pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
+//   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
+//   pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree]
+//   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 //   pack-leader check [--wait] [--timeout MS] [--ack ID] [--types done,ask,attention,note]
 //   pack-leader reply ASK_ID --body "..." [--free]
 //   pack-leader send NAME|@all|@idle|@KIND "text" [--now]
-//   pack-leader status [--json] [--all]
-//   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 // Worker side (inside a pane pack-leader started; IDs come from the environment):
 //   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
 //   pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
-//   pack-leader heartbeat "note" | pack-leader note "text" | pack-leader inbox
-//   pack-leader send WORKER "text" [--now]         another worker of the same run
+//   pack-leader note "text" | pack-leader send WORKER "text" [--now] | pack-leader heartbeat "note" | pack-leader inbox
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
@@ -554,39 +552,49 @@ function statusText(state: State, run: Run): string {
 function usage(): string {
   return `Pack Leader: an orchestrator agent and its pack of workers, on herdr.
 
-Orchestrator (the agent you talk to):
+Orchestrator (the agent you talk to)
+ Runs
   pack-leader run create --objective "..." [--no-sidebar]   bind a run to this pane and open the sidebar
-  pack-leader run show | list | close [--release] [--force]
-  pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]   delete closed runs and their records
+  pack-leader run show | list
+  pack-leader run close [--release] [--force]          fail dispatched tasks, settle their dispatches, close the sidebar;
+                                                --release releases (and archives) workers first, --force closes anyway
+  pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
+                                                delete closed runs, their records and screen archives (keeps 5)
+  pack-leader status [--json] [--all]                active runs and a count of closed ones; --all lists those too
+ Tasks
   pack-leader task create --spec "..." [--title T] [--depends-on a,b]
   pack-leader task list | show ID | update ID --status S
-  pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--cwd D] [--placement tab|split] [--direction right|down] [-- agent args]
-                                                hidden tab by default; split puts it next to you
-  pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME
-                                                rows carry liveness, attention and next_action (argv to run);
-                                                read falls back to the screen archived at release
-  pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
+ Workers
+  pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--cwd D]
+                    [--placement tab|split] [--direction right|down]
+                    [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
+                                                hidden tab by default; split puts it next to you. --worktree new: its own
+                                                checkout at <repo>-wt/NAME (or $PACK_WORKTREE_DIR/NAME) on pack/RUN/NAME
   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
-  pack-leader worker resend NAME                 send the current task again (after a startup dialog)
-  pack-leader worker start NAME ... --worktree new|PATH [--base REF] [--branch B]
-                                                its own git worktree: new is <repo>-wt/NAME on branch pack/RUN/NAME
-                                                (or $PACK_WORKTREE_DIR/NAME); release keeps it unless --remove-worktree
+  pack-leader worker resend NAME                 send the current dispatch's text again (after a startup dialog)
+  pack-leader worker list | show NAME            rows carry liveness, attention and next_action (argv to run)
+  pack-leader worker read NAME [--lines N] [--dispatch ID]   its screen; after release, the archived one
+  pack-leader worker focus NAME | stop NAME | retain NAME
+  pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree]
+                                                archive the screen, close its tab or pane; the worktree is kept
+                                                unless --remove-worktree (only one pack-leader created, never forced)
+  pack-leader dispatch list [--task ID] [--worker NAME]   every hand-over in the run
+  pack-leader dispatch show ID [--preamble]      one record; --preamble prints the exact text sent
+ Messaging
   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
                                                 --wait: a JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
   pack-leader reply ASK_ID --body "..." [--free]     an ask with options takes one (or a unique prefix); --free for free text
   pack-leader send NAME|@all|@idle|@KIND "text" [--now]   @all: dispatched workers; @idle: idle or done; @KIND: by kind
-  pack-leader status [--json] [--all]                active runs and a count of closed ones; --all lists those too
-  pack-leader dispatch list [--task ID] [--worker NAME]   every hand-over in the run
-  pack-leader dispatch show ID [--preamble]      one record; --preamble prints the exact text sent
-Worker (inside a pane pack-leader started; IDs come from the environment):
+Worker (inside a pane pack-leader started; IDs come from the environment)
   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
   pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
-  pack-leader heartbeat "note" | pack-leader inbox
   pack-leader note "text"                              non-blocking line for the orchestrator (blocker, finding, delay)
   pack-leader send WORKER "text" [--now]               a follow-up to another worker of the same run
-Either:
+  pack-leader heartbeat "note" | pack-leader inbox
+Either
   pack-leader skill [--install]                        the guide; or install it into Claude Code
   pack-leader sidebar                                  the pack, live (run by herdr in a pane)
+  pack-leader help                                     this list
 Plugin root: ${pluginRoot}
 `;
 }
