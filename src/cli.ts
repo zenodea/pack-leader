@@ -21,7 +21,7 @@
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
-import { agentFocus, agentRead, getPane, notify, paneFocus } from "./herdr.ts";
+import { agentFocus, agentRead, getPane, notify, paneClose, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { ack, ask, check, checkTypes, done, heartbeat, herdrWarning, inbox, note, reply, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
@@ -476,11 +476,12 @@ function askReply(askId: string, r: Message, options?: string[]) {
 
 /**
  * The sidebar as a narrow column right of `target` (left with `onLeft`), once:
- * a run that already has a live sidebar pane keeps it. Returns the sidebar pane id.
+ * a live sidebar pane in this workspace, from any run, is reused. Returns the sidebar pane id.
  */
 async function openSidebar(target: string, onLeft = false, focus = false): Promise<string> {
   const state = load();
-  for (const r of activeRuns(state)) {
+  const runs = Object.values(state.runs).filter((r) => r.sidebar_pane_id).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  for (const r of runs) {
     if (!r.sidebar_pane_id) continue;
     try {
       const p = await getPane(r.sidebar_pane_id);

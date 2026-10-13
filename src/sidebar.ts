@@ -3,7 +3,7 @@
 import { watch, type FSWatcher } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 import { bold, dim, fg, inverse, pad, screen, truncate, width } from "./ansi.ts";
-import { agentFocus, agentRead, listAgents, paneFocus, type AgentStatus, subscribe } from "./herdr.ts";
+import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "./herdr.ts";
 import { ensureDir, stateDir, stateFile } from "./paths.ts";
 import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, unacked, type Worker } from "./state.ts";
 import { formatOptions, sync } from "./inbox.ts";
@@ -116,7 +116,7 @@ export async function runSidebar(): Promise<void> {
     for (const run of runs) {
       const box = unacked(state, run.id).length;
       if (lines.length) lines.push("");
-      lines.push(`${dim(run.id)} ${truncate(run.objective, cols - run.id.length - 2)}`);
+      lines.push(`${dim("goal")} ${truncate(run.objective, cols - 5)}`);
       if (box) lines.push(fg.yellow(`  ${box} unread for the orchestrator`));
       const ws = runWorkers(state, run.id);
       if (!ws.length) lines.push(dim("  no workers yet"));
@@ -156,6 +156,7 @@ export async function runSidebar(): Promise<void> {
 
   const reload = () => {
     state = load();
+    if (finished()) return void leave();
     sel = Math.min(sel, Math.max(0, rows().length - 1));
     schedule();
   };
@@ -192,10 +193,6 @@ export async function runSidebar(): Promise<void> {
     schedule();
   }, 5000);
 
-  out.write(screen.alt + screen.hideCursor + screen.clear);
-  await refreshLive();
-  draw();
-
   const quit = () => {
     clearInterval(ticker);
     stop();
@@ -203,6 +200,15 @@ export async function runSidebar(): Promise<void> {
     out.write(screen.showCursor + screen.main);
     process.exit(0);
   };
+  const finished = () => Object.keys(state.runs).length > 0 && activeRuns(state).length === 0;
+  const leave = async () => {
+    const pane = process.env.HERDR_PANE_ID;
+    if (pane) await paneClose(pane).catch(() => {});
+    quit();
+  };
+  out.write(screen.alt + screen.hideCursor + screen.clear);
+  await refreshLive();
+  draw();
   process.on("SIGTERM", quit);
   process.on("SIGHUP", quit);
   out.on("resize", schedule);
