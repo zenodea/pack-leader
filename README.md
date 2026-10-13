@@ -83,6 +83,14 @@ fails any task still dispatched, and closes the sidebar. Closed runs stay in the
 state file until `pack-leader run prune` deletes them (it keeps the 5 most recent;
 `--keep N`, `--older-than 2d`, `--all`, `--dry-run`).
 
+A question can offer choices: `pack-leader ask "Which db?" --options "postgres,sqlite"`.
+`pack-leader check` then shows the `options` and a `reply_hint` to paste; `pack-leader
+reply m7 --body "sq"` takes an option exactly or by unique case-insensitive prefix
+(anything else is an error listing the options), and `--free` answers in free
+text instead. The waiting `ask` prints `reply`, `answer` (the chosen option) and
+`option_index` (null for a free answer), so the worker can branch on it. The
+sidebar shows an open question in yellow with its options as `[postgres | sqlite]`.
+
 `pack-leader status` prints the run in the terminal (closed runs are counted;
 `--all` lists them); `pack-leader skill` prints the full guide
 the agents follow. The sidebar (`pack-leader: show the pack`) lists one box per worker

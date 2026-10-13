@@ -97,6 +97,12 @@ export type Message = {
   status?: AttentionStatus;
   /** For a reply: the ask it answers. */
   reply_to?: string;
+  /** For an ask: the answers the worker offers (`pack-leader ask --options a,b,c`). */
+  options?: string[];
+  /** For a reply to an ask with options: the chosen option (or the free text with `--free`). */
+  answer?: string;
+  /** For a reply to an ask with options: the chosen option's index, null for a `--free` answer. */
+  option_index?: number | null;
   /** Acknowledged by the orchestrator (or read by the worker, for followups). */
   acked: boolean;
   /** A followup queued because the worker was busy; delivered by prompt later. */

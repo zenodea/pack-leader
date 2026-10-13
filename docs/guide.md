@@ -82,7 +82,7 @@ Process every message, then acknowledge it and wait for the next:
 | `type`      | Meaning                                                   | Your move                                                                                |
 | ----------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `done`      | The worker settled its task (`outcome` succeeded/failed)  | Verify if needed, then reuse (`pack-leader worker prompt`), `retain`, or `release` the worker  |
-| `ask`       | The worker is blocked on a question                       | `pack-leader reply <id> --body "<answer>"`                                                      |
+| `ask`       | The worker is blocked on a question                       | `pack-leader reply <id> --body "<answer>"`; with `options`, paste `reply_hint` or name one option (a unique prefix works), or add `--free` to answer outside them |
 | `attention` | The worker settled, vanished, or went quiet without reporting; `status` says which: `idle`/`done`, `blocked`, `exited` (pane gone), `unverifiable` (agent gone, pane alive), `stalled` (no sign of life for `PACK_STALL_MS`, default 20 min) | `pack-leader worker read <name>`; re-prompt it to run `pack-leader done`, or release with `--force`    |
 
 ```bash
@@ -107,6 +107,16 @@ A `warning` on `check`, `status` or `worker list` means herdr could not be
 reached: liveness is as last seen, so do not release anything on it alone.
 Heartbeats, asks, reports and any herdr state change refresh a worker's
 `last_seen`; a heartbeat after a `stalled` alert re-arms it.
+
+An `ask` whose worker offered choices carries `options`, and `check` adds a
+`reply_hint` to paste. The body must match one option exactly or by a unique
+case-insensitive prefix; anything else is an error that lists the options.
+Pass `--free` only when none of them fits:
+
+```bash
+pack-leader reply m9 --body "sqlite"
+pack-leader reply m9 --free --body "Neither: keep the JSON file."
+```
 
 Use `pack-leader task create` with `--depends-on` for planned fan-out with ordering,
 then `pack-leader worker start <name> --task <id>` when `pack-leader task list` shows the
@@ -190,7 +200,11 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
    other agents.
 2. Ask the orchestrator blocking questions with `pack-leader ask "<question>"`. It
    waits for the answer; after a timeout, `pack-leader ask --id <id>` keeps waiting.
-   Never stop on a question the orchestrator cannot see.
+   Never stop on a question the orchestrator cannot see. When the answer is
+   one of a few choices, offer them: `pack-leader ask "<question>" --options "a,b,c"`.
+   The result's `answer` is the chosen option and `option_index` its position
+   (null when the orchestrator answered outside them with `--free`; then read
+   `reply`), so branch on those.
 3. Read follow-ups at natural checkpoints (before starting a new file, after a
    test run) and once more right before reporting: `pack-leader inbox`.
 4. During long work, about every ten minutes: `pack-leader heartbeat "<one line>"`.
@@ -213,11 +227,11 @@ pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | fo
 pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
 pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
 pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention]
-pack-leader reply ASK_ID --body "..."
+pack-leader reply ASK_ID --body "..." [--free]
 pack-leader send NAME "text" [--now]
 pack-leader status [--json] [--all]
 pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
-pack-leader done | ask | heartbeat | inbox          (worker side)
+pack-leader done | ask [--options a,b,c] | heartbeat | inbox          (worker side)
 ```
 
 `pack-leader help` prints the same list. Unknown flags are errors; do not guess.

@@ -66,6 +66,47 @@ export function touch(w: Worker): void {
   w.stalled_since = null;
 }
 
+// ---- structured questions ------------------------------------------------------
+
+/** `--options a,b,c` as stored on an ask: trimmed, empty and duplicate entries dropped. */
+export function normalizeOptions(options: string[] | undefined): string[] {
+  const out: string[] = [];
+  for (const o of options ?? []) {
+    const t = o.trim();
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+/** The options as the sidebar and the nudge show them: `a | b | c`. */
+export const formatOptions = (options: string[]): string => options.join(" | ");
+
+/**
+ * Which option a reply means: an exact match, else a case-insensitive match,
+ * else the one option the body is a case-insensitive prefix of. An ambiguous
+ * or unknown body is an error that lists the options.
+ */
+export function matchOption(options: string[], body: string): { answer: string; option_index: number } {
+  const b = body.trim();
+  const lower = b.toLowerCase();
+  let i = options.indexOf(b);
+  if (i === -1) i = options.findIndex((o) => o.toLowerCase() === lower);
+  if (i === -1 && lower) {
+    const hits = options.flatMap((o, j) => (o.toLowerCase().startsWith(lower) ? [j] : []));
+    if (hits.length > 1) throw new Error(`answer "${b}" is ambiguous: it starts ${hits.map((j) => `"${options[j]}"`).join(" and ")}. Options: ${formatOptions(options)}. Answer with one of them, or pass --free for a free-text answer.`);
+    if (hits.length === 1) i = hits[0]!;
+  }
+  if (i === -1) throw new Error(`answer "${b}" matches none of the options: ${formatOptions(options)}. Answer with one of them (a unique prefix works), or pass --free for a free-text answer.`);
+  return { answer: options[i]!, option_index: i };
+}
+
+/** A shell word in double quotes, safe to paste. */
+const quote = (s: string) => `"${s.replace(/(["\\$`])/g, "\\$1")}"`;
+
+/** A ready-to-paste reply command for an ask: the first option when it has options. */
+export const replyHint = (ask: Pick<Message, "id" | "options">): string =>
+  `pack-leader reply ${ask.id} --body ${ask.options?.length ? quote(ask.options[0]!) : '"..."'}`;
+
 // ---- worker side -----------------------------------------------------------
 
 export async function done(ctx: WorkerContext, o: { outcome: "succeeded" | "failed"; summary: string; files: string[]; reportPath: string | null }): Promise<Message> {
@@ -103,8 +144,9 @@ export async function heartbeat(ctx: WorkerContext, body: string): Promise<Messa
 }
 
 /** A blocking question: recorded, the orchestrator nudged, then wait for the reply. */
-export async function ask(ctx: WorkerContext, o: { body?: string; resumeId?: string; timeoutMs: number }): Promise<{ result: "reply" | "timeout"; ask_id: string; reply?: Message }> {
+export async function ask(ctx: WorkerContext, o: { body?: string; options?: string[]; resumeId?: string; timeoutMs: number }): Promise<{ result: "reply" | "timeout"; ask_id: string; options?: string[]; reply?: Message }> {
   let askId = o.resumeId;
+  let options = normalizeOptions(o.options);
   let run: Run | undefined;
   if (!askId) {
     if (!o.body) throw new Error("pass the question, or --id to keep waiting on one");
@@ -112,20 +154,23 @@ export async function ask(ctx: WorkerContext, o: { body?: string; resumeId?: str
       const w = state.workers[ctx.worker];
       if (!w) throw new Error(`worker "${ctx.worker}" is not registered`);
       touch(w);
-      const msg = message(state, { run_id: ctx.run_id, type: "ask", from: ctx.worker, to: "orchestrator", task_id: ctx.task_id ?? w.task_id, dispatch_id: ctx.dispatch_id ?? w.dispatch_id, body: o.body! });
+      const msg = message(state, { run_id: ctx.run_id, type: "ask", from: ctx.worker, to: "orchestrator", task_id: ctx.task_id ?? w.task_id, dispatch_id: ctx.dispatch_id ?? w.dispatch_id, body: o.body!, ...(options.length ? { options } : {}) });
       return { msg, run: state.runs[ctx.run_id]! };
     });
     askId = r.msg.id;
     run = r.run;
     log({ event: "worker.ask", run: ctx.run_id, worker: ctx.worker, id: askId });
-    await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} asks a question (${askId}). Run \`pack-leader check\` and answer it with \`pack-leader reply ${askId} --body "..."\`.`);
+    const choices = options.length ? ` Options: ${formatOptions(options)} (answer with one, a unique prefix, or --free for free text).` : "";
+    await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} asks a question (${askId}).${choices} Run \`pack-leader check\` and answer it with \`${replyHint(r.msg)}\`.`);
   } else {
-    // Still waiting on an earlier question is a sign of life too.
+    // Resuming: the options are the stored ask's, whatever was passed now. Still waiting on it is a sign of life too.
+    options = load().messages.find((m) => m.id === askId && m.type === "ask")?.options ?? [];
     await update((state) => {
       const w = state.workers[ctx.worker];
       if (w) touch(w);
     }).catch(() => {});
   }
+  const withOptions = options.length ? { options } : {};
   const deadline = Date.now() + o.timeoutMs;
   for (;;) {
     const state = load();
@@ -135,9 +180,9 @@ export async function ask(ctx: WorkerContext, o: { body?: string; resumeId?: str
         const r = s.messages.find((m) => m.id === reply.id);
         if (r) r.acked = true;
       });
-      return { result: "reply", ask_id: askId!, reply };
+      return { result: "reply", ask_id: askId!, ...withOptions, reply };
     }
-    if (Date.now() > deadline) return { result: "timeout", ask_id: askId! };
+    if (Date.now() > deadline) return { result: "timeout", ask_id: askId!, ...withOptions };
     await new Promise((r) => setTimeout(r, 1000));
   }
 }
@@ -160,12 +205,18 @@ export async function inbox(ctx: WorkerContext): Promise<Message[]> {
 
 // ---- orchestrator side -------------------------------------------------------
 
-export async function reply(run: Run, askId: string, body: string): Promise<Message> {
+/**
+ * Answer an ask. When the ask has options the body must name one (exactly or by
+ * a unique case-insensitive prefix) unless `free` is set; the reply then carries
+ * the normalised `answer` and its `option_index` (null for a free answer).
+ */
+export async function reply(run: Run, askId: string, body: string, o: { free?: boolean } = {}): Promise<Message> {
   const msg = await update((state) => {
     const a = state.messages.find((m) => m.id === askId && m.run_id === run.id && m.type === "ask");
     if (!a) throw new Error(`no ask ${askId} in run ${run.id}`);
+    const choice = a.options?.length ? (o.free ? { answer: body, option_index: null } : matchOption(a.options, body)) : {};
     a.acked = true;
-    return message(state, { run_id: run.id, type: "reply", from: "orchestrator", to: a.from, task_id: a.task_id, dispatch_id: a.dispatch_id, body, reply_to: askId });
+    return message(state, { run_id: run.id, type: "reply", from: "orchestrator", to: a.from, task_id: a.task_id, dispatch_id: a.dispatch_id, body, reply_to: askId, ...choice });
   });
   log({ event: "orchestrator.reply", run: run.id, to: msg.to, ask: askId });
   return msg;
@@ -373,7 +424,11 @@ export async function sync(): Promise<Message[]> {
 /** The outcome summary sync() records when a worker's pane disappears with its task open. */
 export const EXITED_SUMMARY = "worker exited before reporting";
 
-export type CheckResult = ({ result: "message"; message: Message; pending: number } | { result: "empty"; pending: 0 } | { result: "timeout"; pending: 0 }) & { warning?: string };
+export type CheckResult = (
+  | { result: "message"; message: Message; pending: number; options?: string[]; reply_hint?: string }
+  | { result: "empty"; pending: 0 }
+  | { result: "timeout"; pending: 0 }
+) & { warning?: string };
 
 /** One line for stderr while `check --wait` blocks, so a supervisor can tell waiting from hung. */
 export function waitHeartbeat(state: State, runId: string, elapsedMs: number): Record<string, unknown> {
@@ -397,7 +452,10 @@ export async function check(run: Run, o: { wait: boolean; timeoutMs: number; typ
   const pick = (state: State): CheckResult | null => {
     const all = unacked(state, run.id).filter((m) => !o.types || o.types.includes(m.type));
     const m = all[0];
-    return m ? { result: "message", message: m, pending: all.length - 1 } : null;
+    if (!m) return null;
+    // An ask comes with its options and a reply command to paste.
+    const extra = m.type === "ask" ? { ...(m.options?.length ? { options: m.options } : {}), reply_hint: replyHint(m) } : {};
+    return { result: "message", message: m, pending: all.length - 1, ...extra };
   };
   const warned = (r: CheckResult): CheckResult => {
     const warning = herdrWarning(load().runs[run.id]);

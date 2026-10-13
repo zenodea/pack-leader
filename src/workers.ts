@@ -446,7 +446,7 @@ export function workerAttention(state: State, w: Worker): { categories: string[]
 export function nextAction(state: State, w: Worker): string[] | null {
   const open = openFor(state, w);
   const q = open.find((m) => m.type === "ask");
-  if (q) return ["pack-leader", "reply", q.id, "--body", "<answer>"];
+  if (q) return ["pack-leader", "reply", q.id, "--body", q.options?.length ? `<one of: ${q.options.join(" | ")}>` : "<answer>"];
   const t = w.task_id ? state.tasks[w.task_id] : null;
   const owing = t?.status === "dispatched" || (t?.status === "failed" && t.outcome?.summary === EXITED_SUMMARY);
   if (w.liveness === "exited" && owing) return ["pack-leader", "worker", "release", w.name, "--force"];

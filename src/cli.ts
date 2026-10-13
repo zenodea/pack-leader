@@ -11,13 +11,13 @@
 //   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
 //   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
 //   pack-leader check [--wait] [--timeout MS] [--ack ID] [--types done,ask,attention]
-//   pack-leader reply ASK_ID --body "..."
+//   pack-leader reply ASK_ID --body "..." [--free]
 //   pack-leader send NAME "text" [--now]
 //   pack-leader status [--json] [--all]
 //   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 // Worker side (inside a pane pack-leader started; IDs come from the environment):
 //   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
-//   pack-leader ask "question" [--timeout MS] | pack-leader ask --id ID
+//   pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
 //   pack-leader heartbeat "note" | pack-leader inbox
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
@@ -26,7 +26,7 @@ import { agentFocus, agentRead, getPane, notify, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { ack, ask, check, done, heartbeat, herdrWarning, inbox, reply, send, sync, workerContext } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
-import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Run, type State, unacked, update } from "./state.ts";
+import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Message, type Run, type State, unacked, update } from "./state.ts";
 import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
 import { closeRun, parseDuration, pruneRuns, removeArchives } from "./runs.ts";
 import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
@@ -344,10 +344,13 @@ async function main(): Promise<void> {
       return;
     }
     case "reply": {
-      const [askId] = args.positional;
-      const body = str(args, "body") ?? args.positional[1];
-      if (!askId || !body) throw new Error("usage: pack-leader reply ASK_ID --body \"answer\"");
-      out({ reply: await reply(currentRun(args), askId, body) });
+      // `--free` is a bare flag; the parser hands it the next word when one follows (`--free "text"`), so give that back.
+      const freeWord = str(args, "free");
+      const positional = freeWord === undefined ? args.positional : [...args.positional, freeWord];
+      const [askId] = positional;
+      const body = str(args, "body") ?? positional[1];
+      if (!askId || !body) throw new Error("usage: pack-leader reply ASK_ID --body \"answer\" [--free]");
+      out({ reply: await reply(currentRun(args), askId, body, { free: has(args, "free") }) });
       return;
     }
     case "send": {
@@ -392,9 +395,9 @@ async function main(): Promise<void> {
     }
     case "ask": {
       const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
-      const r = await ask(ctx, { body: args.positional.join(" ") || str(args, "body"), resumeId: str(args, "id"), timeoutMs: num(args, "timeout", 600_000) });
+      const r = await ask(ctx, { body: args.positional.join(" ") || str(args, "body"), options: list(args, "options"), resumeId: str(args, "id"), timeoutMs: num(args, "timeout", 600_000) });
       if (r.result === "timeout") out({ ...r, next: `No answer yet. Run \`pack-leader ask --id ${r.ask_id}\` to keep waiting.` });
-      else out({ result: "reply", ask_id: r.ask_id, answer: r.reply!.body });
+      else out(askReply(r.ask_id, r.reply!, r.options));
       return;
     }
     case "heartbeat": {
@@ -406,7 +409,7 @@ async function main(): Promise<void> {
     case "inbox": {
       const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
       const msgs = await inbox(ctx);
-      out({ messages: msgs.map((m) => ({ id: m.id, ts: m.ts, body: m.body })) });
+      out({ messages: msgs.map((m) => (m.type === "reply" ? { id: m.id, ts: m.ts, body: m.body, reply_to: m.reply_to, ...(m.answer !== undefined ? { answer: m.answer, option_index: m.option_index ?? null } : {}) } : { id: m.id, ts: m.ts, body: m.body })) });
       return;
     }
 
@@ -436,6 +439,15 @@ async function main(): Promise<void> {
     default:
       throw new Error(`unknown command: ${command}\n${usage()}`);
   }
+}
+
+/**
+ * What a worker's waiting `ask` prints: the reply text, and the `answer` to branch
+ * on (the chosen option; the reply text itself for a plain or `--free` answer),
+ * with `option_index` (null unless an option was chosen).
+ */
+function askReply(askId: string, r: Message, options?: string[]) {
+  return { result: "reply", ask_id: askId, ...(options ? { options } : {}), reply: r.body, answer: r.answer ?? r.body, option_index: r.option_index ?? null };
 }
 
 /**
@@ -531,14 +543,14 @@ Orchestrator (the agent you talk to):
   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention]
                                                 --wait: a JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
-  pack-leader reply ASK_ID --body "..."
+  pack-leader reply ASK_ID --body "..." [--free]     an ask with options takes one (or a unique prefix); --free for free text
   pack-leader send NAME "text" [--now]
   pack-leader status [--json] [--all]                active runs and a count of closed ones; --all lists those too
   pack-leader dispatch list [--task ID] [--worker NAME]   every hand-over in the run
   pack-leader dispatch show ID [--preamble]      one record; --preamble prints the exact text sent
 Worker (inside a pane pack-leader started; IDs come from the environment):
   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
-  pack-leader ask "question" [--timeout MS] | pack-leader ask --id ID
+  pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
   pack-leader heartbeat "note" | pack-leader inbox
 Either:
   pack-leader skill [--install]                        the guide; or install it into Claude Code

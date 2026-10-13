@@ -5,8 +5,8 @@ import { emitKeypressEvents } from "node:readline";
 import { bold, dim, fg, inverse, pad, screen, truncate, width } from "./ansi.ts";
 import { agentFocus, agentRead, listAgents, paneFocus, type AgentStatus, subscribe } from "./herdr.ts";
 import { ensureDir, stateDir, stateFile } from "./paths.ts";
-import { activeRuns, load, runTasks, runWorkers, type Run, type State, unacked, type Worker } from "./state.ts";
-import { sync } from "./inbox.ts";
+import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, unacked, type Worker } from "./state.ts";
+import { formatOptions, sync } from "./inbox.ts";
 
 type Live = Map<string, { status: AgentStatus; title: string | null; agent: string | null }>;
 
@@ -19,6 +19,58 @@ function elapsed(iso: string): string {
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+}
+
+/** The message a worker's box shows: the last thing it said (heartbeat, done, ask), or the last reply to it. */
+export function lastMessageFor(state: State, runId: string, worker: string): Message | null {
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const m = state.messages[i]!;
+    if (m.run_id !== runId) continue;
+    if (m.from === worker && (m.type === "heartbeat" || m.type === "done" || m.type === "ask")) return m;
+    if (m.to === worker && m.type === "reply") return m;
+  }
+  return null;
+}
+
+const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/** Word-wrap `s` into at most `max` lines of `w` cells; the last line is truncated if more is left. */
+function wrap(s: string, w: number, max: number): string[] {
+  const lines: string[] = [];
+  let rest = s;
+  while (rest && lines.length < max - 1 && width(rest) > w) {
+    const cut = rest.lastIndexOf(" ", w);
+    const at = cut > 0 ? cut : w;
+    lines.push(rest.slice(0, at));
+    rest = rest.slice(at).trimStart();
+  }
+  if (rest) lines.push(truncate(rest, w));
+  return lines;
+}
+
+/**
+ * One worker's box, borders included: agent, runtime and status, objective,
+ * then the last message. An unanswered ask shows its question (up to two
+ * lines) and its options as `[a | b | c]`, in yellow; a reply shows its answer.
+ * At most 8 lines, each exactly `cols` cells wide.
+ */
+export function boxLines(w: Worker, t: Task | null, last: Message | null, st: string, cols: number, selected = false): string[] {
+  const inner = Math.max(1, cols - 4);
+  const agent = `${glyph[st] ?? "?"} ${bold(w.name)} ${dim(w.kind)}`;
+  const runtime = `${dim("runtime")} ${elapsed(w.started_at)} ${dim("·")} ${alarming.has(st) ? fg.red(word[st]!) : word[st] ?? st}`;
+  const objective = t ? `${t.status === "dispatched" ? "" : dim(t.status + ": ")}${t.title}` : dim("no task");
+  const note: string[] = [];
+  if (last?.type === "ask") {
+    note.push(...wrap(`asks: ${oneLine(last.body)}`, inner, 2).map((l) => fg.yellow(l)));
+    if (last.options?.length) note.push(fg.yellow(truncate(`[${formatOptions(last.options)}]`, inner, "")));
+  } else if (last?.type === "reply") note.push(`${fg.cyan("answer: ")}${oneLine(last.answer ?? last.body)}`);
+  else if (last) note.push(`${last.type === "done" ? (last.outcome === "failed" ? fg.red("failed: ") : fg.green("done: ")) : dim("↳ ")}${oneLine(last.body)}`);
+  const border = selected ? fg.cyan : dim;
+  return [
+    border("┌" + "─".repeat(inner + 2) + "┐"),
+    ...[agent, runtime, objective, ...note].map((l) => border("│ ") + pad(truncate(l, inner), inner) + border(" │")),
+    border("└" + "─".repeat(inner + 2) + "┘"),
+  ];
 }
 
 export async function runSidebar(): Promise<void> {
@@ -66,20 +118,8 @@ export async function runSidebar(): Promise<void> {
       const ws = runWorkers(state, run.id);
       if (!ws.length) lines.push(dim("  no workers yet"));
       for (const w of ws) {
-        const st = statusOf(w);
-        const t = w.task_id ? state.tasks[w.task_id] : null;
-        const selected = i === sel;
-        const inner = cols - 4;
-        // agent · runtime · objective, then the last thing it said
-        const agent = `${glyph[st] ?? "?"} ${bold(w.name)} ${dim(w.kind)}`;
-        const runtime = `${dim("runtime")} ${elapsed(w.started_at)} ${dim("·")} ${alarming.has(st) ? fg.red(word[st]!) : word[st] ?? st}`;
-        const objective = t ? `${t.status === "dispatched" ? "" : dim(t.status + ": ")}${t.title}` : dim("no task");
-        const hb = [...state.messages].reverse().find((m) => m.from === w.name && (m.type === "heartbeat" || m.type === "done" || m.type === "ask") && m.run_id === run.id);
-        const note = hb ? `${hb.type === "ask" ? fg.magenta("asks: ") : hb.type === "done" ? (hb.outcome === "failed" ? fg.red("failed: ") : fg.green("done: ")) : dim("↳ ")}${hb.body}` : "";
-        const border = selected ? fg.cyan : dim;
-        lines.push(border("┌" + "─".repeat(inner + 2) + "┐"));
-        for (const l of [agent, runtime, objective, note].filter(Boolean)) lines.push(border("│ ") + pad(truncate(l, inner), inner) + border(" │"));
-        lines.push(border("└" + "─".repeat(inner + 2) + "┘"));
+        const t = w.task_id ? state.tasks[w.task_id] ?? null : null;
+        lines.push(...boxLines(w, t, lastMessageFor(state, run.id, w.name), statusOf(w), cols, i === sel));
         i++;
       }
       const pending = runTasks(state, run.id).filter((t) => t.status === "pending");
