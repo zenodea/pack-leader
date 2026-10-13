@@ -73,6 +73,11 @@ Workers get a `[pack-leader dispatch]` preamble as their first prompt and report
 `pack-leader done`, ask with `pack-leader ask` (which blocks until you answer), and read
 follow-ups with `pack-leader inbox`. Their IDs come from the pane environment.
 
+Each dispatch is recorded with the exact preamble sent (`pack-leader dispatch list`,
+`pack-leader dispatch show ID --preamble`), and releasing a worker saves its screen
+to `archive/<run>/<worker>-<dispatch>.txt` in the state dir first, so
+`pack-leader worker read <name>` keeps working after the tab is gone.
+
 `pack-leader status` prints the run in the terminal; `pack-leader skill` prints the full guide
 the agents follow. The sidebar (`pack-leader: show the pack`) lists one box per worker
 with its herdr state, task and last message; `j`/`k` move, Enter focuses the

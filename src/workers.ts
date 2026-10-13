@@ -3,6 +3,7 @@
 // worker how to report back. Also stopping and releasing one.
 import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, paneClose, paneSplit, tabClose, tabCreate, HerdrError } from "./herdr.ts";
 import { load, log, nextId, now, ready, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
+import { archiveScreen, createDispatch, settleDispatch } from "./dispatch.ts";
 
 export const DEFAULT_KIND = "claude";
 
@@ -62,8 +63,9 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   const live = await listAgents();
   if (live.some((a) => a.name === o.name)) throw new Error(`a live herdr agent is already named "${o.name}"`);
 
+  const cwd = o.cwd ?? o.run.orchestrator.cwd;
   // The task: new from --spec, or an existing pending/ready one (or a failed one with --retry).
-  const { task, dispatchId } = await update((state) => {
+  const { task, dispatchId, text } = await update((state) => {
     if (state.workers[o.name] && state.runs[state.workers[o.name]!.run_id]?.status === "active") throw new Error(`worker "${o.name}" exists; release it first`);
     let task: Task;
     if (o.taskId) {
@@ -93,25 +95,32 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       state.tasks[task.id] = task;
     }
     const dispatchId = nextId(state, "d");
-    return { task, dispatchId };
+    const text = preamble({ worker: o.name, run: o.run, task, dispatchId, cwd });
+    createDispatch(state, { id: dispatchId, task, worker: o.name, preamble: text, cwd });
+    return { task, dispatchId, text };
   });
 
-  const cwd = o.cwd ?? o.run.orchestrator.cwd;
   const env = { PACK_ROLE: "worker", PACK_RUN_ID: o.run.id, PACK_WORKER: o.name, PACK_TASK_ID: task.id, PACK_DISPATCH_ID: dispatchId };
   let pane: { pane_id: string };
   let tabId: string | null = null;
-  if (o.placement === "tab") {
-    const workspace = o.run.orchestrator.workspace_id ?? (o.targetPane ?? o.run.orchestrator.pane_id)?.split(":")[0];
-    if (!workspace) throw new Error("the run has no workspace; pass --target-pane");
-    const t = await tabCreate({ workspace_id: workspace, label: `${o.name}`, cwd, env });
-    pane = t.root_pane;
-    tabId = t.tab.tab_id;
-    log({ event: "tab.created", run: o.run.id, worker: o.name, tab: tabId, pane: pane.pane_id });
-  } else {
-    const target = o.targetPane ?? o.run.orchestrator.pane_id;
-    if (!target) throw new Error("the run has no orchestrator pane; pass --target-pane");
-    pane = await paneSplit({ target_pane_id: target, direction: o.direction, cwd, env, ratio: o.ratio });
-    log({ event: "pane.split", run: o.run.id, worker: o.name, pane: pane.pane_id });
+  try {
+    if (o.placement === "tab") {
+      const workspace = o.run.orchestrator.workspace_id ?? (o.targetPane ?? o.run.orchestrator.pane_id)?.split(":")[0];
+      if (!workspace) throw new Error("the run has no workspace; pass --target-pane");
+      const t = await tabCreate({ workspace_id: workspace, label: `${o.name}`, cwd, env });
+      pane = t.root_pane;
+      tabId = t.tab.tab_id;
+      log({ event: "tab.created", run: o.run.id, worker: o.name, tab: tabId, pane: pane.pane_id });
+    } else {
+      const target = o.targetPane ?? o.run.orchestrator.pane_id;
+      if (!target) throw new Error("the run has no orchestrator pane; pass --target-pane");
+      pane = await paneSplit({ target_pane_id: target, direction: o.direction, cwd, env, ratio: o.ratio });
+      log({ event: "pane.split", run: o.run.id, worker: o.name, pane: pane.pane_id });
+    }
+  } catch (err) {
+    // No pane, no dispatch: settle the record so it does not look in flight forever.
+    await update((state) => settleDispatch(state, dispatchId, "failed")).catch(() => {});
+    throw err;
   }
 
   const worker: Worker = {
@@ -154,6 +163,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       t.status = "failed";
       t.updated_at = now();
       t.outcome = { summary: `start failed: ${e.message}`, files_modified: [], report_path: null };
+      settleDispatch(state, dispatchId, "failed");
       const w = state.workers[worker.name];
       if (w) w.last_status = "exited";
     });
@@ -169,7 +179,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   }
   // Right after start the name can lag the pane by a moment: address the pane, and retry briefly.
   try {
-    await promptWithRetry(pane.pane_id, preamble({ worker: o.name, run: o.run, task, dispatchId, cwd }));
+    await promptWithRetry(pane.pane_id, text);
   } catch (err) {
     const e = err as HerdrError;
     log({ event: "worker.prompt_failed", run: o.run.id, worker: o.name, error: e.message });
@@ -211,6 +221,11 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
       state.tasks[task.id] = task;
     }
     const dispatchId = nextId(state, "d");
+    // The pane's environment still names the first dispatch; the preamble carries the new IDs
+    // and the worker commands accept them as flags.
+    const text = preamble({ worker: name, run, task, dispatchId, cwd: w.cwd }) +
+      `\n\nThis is a new dispatch in your existing session: pass --task ${task.id} --dispatch ${dispatchId} to every pack-leader command for it.`;
+    createDispatch(state, { id: dispatchId, task, worker: name, preamble: text, cwd: w.cwd });
     task.status = "dispatched";
     task.worker = name;
     task.dispatch_id = dispatchId;
@@ -218,13 +233,9 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
     task.updated_at = now();
     w.task_id = task.id;
     w.dispatch_id = dispatchId;
-    return { task, dispatchId, w };
+    return { task, dispatchId, w, text };
   });
-  // The pane's environment still names the first dispatch; the preamble carries the new IDs
-  // and the worker commands accept them as flags.
-  const text = preamble({ worker: name, run, task: r.task, dispatchId: r.dispatchId, cwd: r.w.cwd }) +
-    `\n\nThis is a new dispatch in your existing session: pass --task ${r.task.id} --dispatch ${r.dispatchId} to every pack-leader command for it.`;
-  await agentPrompt(name, text);
+  await agentPrompt(name, r.text);
   await markDispatched(name, r.w.pane_id);
   await labelPane(r.w.pane_id, r.task.title);
   log({ event: "worker.redispatched", run: run.id, worker: name, task: r.task.id, dispatch: r.dispatchId });
@@ -241,7 +252,7 @@ export async function stopWorker(name: string): Promise<void> {
  * Post-settlement cleanup: forget the worker and close the pane Pack Leader created.
  * With `force`, a still-dispatched task is marked failed first.
  */
-export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean }): Promise<{ closed_pane: string | null }> {
+export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean }): Promise<{ closed_pane: string | null; archive_path: string | null; archive_error?: string }> {
   const w = await update((state) => {
     const w = state.workers[name];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
@@ -251,10 +262,29 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
       t.status = "failed";
       t.updated_at = now();
       t.outcome = { summary: "released by the orchestrator before reporting", files_modified: [], report_path: null };
+      settleDispatch(state, w.dispatch_id, "failed");
     }
     delete state.workers[name];
     return w;
   });
+  // Save the screen before the tab goes, so the transcript survives. Never fails the release.
+  let archive: { path: string | null; error?: string };
+  try {
+    const a = await archiveScreen({ run_id: run.id, worker: name, dispatch_id: w.dispatch_id, target: w.pane_id });
+    archive = { path: a.path };
+    log({ event: "worker.archived", run: run.id, worker: name, dispatch: w.dispatch_id, path: a.path, source: a.source });
+  } catch (err) {
+    archive = { path: null, error: (err as Error).message };
+    log({ event: "worker.archive_failed", run: run.id, worker: name, dispatch: w.dispatch_id, error: archive.error });
+  }
+  if (w.dispatch_id) {
+    await update((state) => {
+      const d = state.dispatches?.[w.dispatch_id!];
+      if (!d) return;
+      if (archive.path) (d.archive_path = archive.path), delete d.archive_error;
+      else d.archive_error = archive.error;
+    }).catch(() => {});
+  }
   let closed: string | null = null;
   if (w.owns_pane && !w.retained && !opts.keepPane) {
     try {
@@ -271,7 +301,7 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
     await labelPane(w.pane_id, null);
   }
   log({ event: "worker.released", run: run.id, worker: name, closed });
-  return { closed_pane: closed };
+  return { closed_pane: closed, archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
 }
 
 /**
@@ -307,7 +337,9 @@ export async function resendPreamble(run: Run, name: string): Promise<{ task: Ta
   if (!task || task.status !== "dispatched" || !w.dispatch_id) throw new Error(`${name} has no dispatched task to resend`);
   const a = await getAgent(w.pane_id);
   if (a.agent_status === "blocked") throw new Error(`${name} is still blocked on a dialog in pane ${w.pane_id}`);
-  await promptWithRetry(w.pane_id, preamble({ worker: name, run, task, dispatchId: w.dispatch_id, cwd: w.cwd }));
+  // The same text as the first time: the dispatch record keeps it.
+  const text = state.dispatches?.[w.dispatch_id]?.preamble ?? preamble({ worker: name, run, task, dispatchId: w.dispatch_id, cwd: w.cwd });
+  await promptWithRetry(w.pane_id, text);
   await markDispatched(name, w.pane_id);
   log({ event: "worker.resent", run: run.id, worker: name, task: task.id });
   return { task, dispatch_id: w.dispatch_id };

@@ -2,6 +2,7 @@
 // herdr's live agent states into attention messages the orchestrator must ack.
 import { agentPrompt, getAgent, listAgents, listPanes, type AgentStatus, subscribe } from "./herdr.ts";
 import { log, nextId, now, type Message, type Run, type State, unacked, update, load } from "./state.ts";
+import { settleDispatch } from "./dispatch.ts";
 
 export type WorkerContext = { run_id: string; worker: string; task_id: string | null; dispatch_id: string | null };
 
@@ -76,6 +77,7 @@ export async function done(ctx: WorkerContext, o: { outcome: "succeeded" | "fail
     t.status = o.outcome;
     t.updated_at = now();
     t.outcome = { summary: o.summary, files_modified: o.files, report_path: o.reportPath };
+    settleDispatch(state, dispatch, o.outcome);
     const msg = message(state, { run_id: run.id, type: "done", from: ctx.worker, to: "orchestrator", task_id: t.id, dispatch_id: dispatch, body: o.summary, outcome: o.outcome, files_modified: o.files, report_path: o.reportPath });
     return { msg, run };
   });
@@ -268,6 +270,7 @@ export async function sync(): Promise<Message[]> {
           task.status = "failed";
           task.updated_at = now();
           task.outcome = { summary: "worker exited before reporting", files_modified: [], report_path: null };
+          settleDispatch(state, task.dispatch_id, "failed");
         }
       }
       if (a && (status === "idle" || status === "done")) {

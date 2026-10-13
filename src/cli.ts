@@ -6,13 +6,14 @@
 //   pack-leader task create --spec "..." [--title T] [--depends-on a,b]
 //   pack-leader task list | show ID | update ID --status S
 //   pack-leader worker start NAME --spec "..." | --task ID [--kind K] [--cwd D] [--direction right|down] [-- agent args]
-//   pack-leader worker list | show NAME | read NAME [--lines N] | stop NAME | release NAME [--force] | retain NAME
+//   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | stop NAME | release NAME [--force] | retain NAME
 //   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
 //   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
 //   pack-leader check [--wait] [--timeout MS] [--ack ID] [--types done,ask,attention]
 //   pack-leader reply ASK_ID --body "..."
 //   pack-leader send NAME "text" [--now]
 //   pack-leader status [--json]
+//   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 // Worker side (inside a pane pack-leader started; IDs come from the environment):
 //   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
 //   pack-leader ask "question" [--timeout MS] | pack-leader ask --id ID
@@ -24,7 +25,8 @@ import { agentFocus, agentRead, getPane, notify, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { ack, ask, check, done, heartbeat, inbox, reply, send, sync, workerContext } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
-import { activeRuns, load, log, nextId, now, resolveRun, ready, runMessages, runTasks, runWorkers, type Run, type State, unacked, update } from "./state.ts";
+import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Run, type State, unacked, update } from "./state.ts";
+import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
 import { DEFAULT_KIND, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
 import { guide, installSkill } from "./skill.ts";
 
@@ -156,7 +158,7 @@ async function main(): Promise<void> {
         const state = load();
         const t = id ? state.tasks[id] : undefined;
         if (!t) throw new Error(`no task ${id}`);
-        out({ task: t });
+        out({ task: t, dispatch_ids: taskDispatchIds(state, t.id) });
         return;
       }
       if (sub === "update") {
@@ -227,7 +229,21 @@ async function main(): Promise<void> {
         return;
       }
       if (sub === "read") {
-        const text = await agentRead(name, num(args, "lines", 80));
+        const lines = num(args, "lines", 80);
+        const state = load();
+        let run: Run | null = null;
+        try {
+          run = currentRun(args, state);
+        } catch {}
+        // A specific dispatch's archive; or, once the worker is gone from the run, its newest archive.
+        const dispatchId = str(args, "dispatch");
+        const live = run ? state.workers[name]?.run_id === run.id : Boolean(state.workers[name]);
+        const archived = dispatchId ? findArchive(state, { runId: null, dispatchId }) : live ? null : findArchive(state, { runId: run?.id ?? null, worker: name });
+        if (archived) {
+          out({ ...readArchive(archived, lines), ...(dispatchId ? {} : { note: `${name} is no longer live; this is its screen saved at release` }) });
+          return;
+        }
+        const text = await agentRead(name, lines);
         process.stdout.write(text.endsWith("\n") ? text : text + "\n");
         return;
       }
@@ -267,6 +283,27 @@ async function main(): Promise<void> {
         return;
       }
       throw new Error(`unknown: pack-leader worker ${sub}`);
+    }
+
+    // ---- dispatch records ------------------------------------------------------
+    case "dispatch": {
+      const [sub = "list", id] = args.positional;
+      const state = load();
+      if (sub === "list") {
+        const run = currentRun(args, state);
+        const task = str(args, "task");
+        const worker = str(args, "worker");
+        out({ dispatches: runDispatches(state, run.id).filter((d) => (!task || d.task_id === task) && (!worker || d.worker === worker)).map(dispatchView) });
+        return;
+      }
+      if (sub === "show") {
+        const d = id ? state.dispatches?.[id] : undefined;
+        if (!d) throw new Error(`no dispatch ${id}`);
+        if (has(args, "preamble")) process.stdout.write(d.preamble.endsWith("\n") ? d.preamble : d.preamble + "\n");
+        else out({ dispatch: dispatchView(d) });
+        return;
+      }
+      throw new Error(`unknown: pack-leader dispatch ${sub}`);
     }
 
     // ---- orchestrator inbox ----------------------------------------------------
@@ -397,21 +434,30 @@ async function openSidebar(target: string, onLeft = false, focus = false): Promi
 }
 
 function view(state: State, run: Run) {
+  const perTask = dispatchCounts(state, run);
   return {
     run,
-    tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t), ready: ready(state, t) })),
+    tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t), ready: ready(state, t), dispatches: perTask.get(t.id) ?? 0 })),
     workers: runWorkers(state, run.id).map((w) => workerSummary(w, state)),
     inbox: unacked(state, run.id).map((m) => ({ id: m.id, type: m.type, from: m.from, body: m.body })),
   };
+}
+
+function dispatchCounts(state: State, run: Run): Map<string, number> {
+  const n = new Map<string, number>();
+  for (const d of runDispatches(state, run.id)) n.set(d.task_id, (n.get(d.task_id) ?? 0) + 1);
+  return n;
 }
 
 const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕") };
 
 function statusText(state: State, run: Run): string {
   const lines = [`${bold("" + run.id)} ${run.objective}`, dim(`orchestrator ${run.orchestrator.pane_id ?? "?"} · ${run.orchestrator.cwd}`), ""];
+  const perTask = dispatchCounts(state, run);
   for (const w of runWorkers(state, run.id)) {
     const t = w.task_id ? state.tasks[w.task_id] : null;
-    lines.push(`${glyph[w.last_status] ?? "?"} ${bold(w.name)} ${dim(w.pane_id)} ${t ? `${t.id} ${t.status} · ${t.title}` : dim("no task")}`);
+    const n = t ? perTask.get(t.id) ?? 0 : 0;
+    lines.push(`${glyph[w.last_status] ?? "?"} ${bold(w.name)} ${dim(w.pane_id)} ${t ? `${t.id} ${t.status}${n > 1 ? dim(` (${n} dispatches)`) : ""} · ${t.title}` : dim("no task")}`);
   }
   const pending = runTasks(state, run.id).filter((t) => t.status === "pending");
   if (pending.length) lines.push("", dim("pending: ") + pending.map((t) => `${t.id}${ready(state, t) ? "" : "(waits)"} ${t.title}`).join(", "));
@@ -431,7 +477,8 @@ Orchestrator (the agent you talk to):
   pack-leader task list | show ID | update ID --status S
   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--cwd D] [--placement tab|split] [--direction right|down] [-- agent args]
                                                 hidden tab by default; split puts it next to you
-  pack-leader worker list | show NAME | read NAME [--lines N] | focus NAME
+  pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME
+                                                read falls back to the screen archived at release
   pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
@@ -439,6 +486,8 @@ Orchestrator (the agent you talk to):
   pack-leader reply ASK_ID --body "..."
   pack-leader send NAME "text" [--now]
   pack-leader status [--json]
+  pack-leader dispatch list [--task ID] [--worker NAME]   every hand-over in the run
+  pack-leader dispatch show ID [--preamble]      one record; --preamble prints the exact text sent
 Worker (inside a pane pack-leader started; IDs come from the environment):
   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
   pack-leader ask "question" [--timeout MS] | pack-leader ask --id ID

@@ -1,0 +1,106 @@
+// Dispatch records: what each hand-over of a task said and how it ended, and
+// the worker's screen saved on release so its transcript outlives the tab.
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { herdr } from "./herdr.ts";
+import { ensureDir, stateDir } from "./paths.ts";
+import { idSeq, now, type Dispatch, type State, type Task } from "./state.ts";
+
+export const archiveDir = (runId: string) => join(stateDir, "archive", runId);
+
+/**
+ * Record a dispatch where its id was minted. A dispatch of a task that failed
+ * before is a retry of that task's last dispatch.
+ */
+export function createDispatch(state: State, d: { id: string; task: Task; worker: string; preamble: string; cwd: string }): Dispatch {
+  const prev = d.task.status === "failed" && d.task.dispatch_id && d.task.dispatch_id !== d.id ? d.task.dispatch_id : undefined;
+  const rec: Dispatch = {
+    id: d.id,
+    run_id: d.task.run_id,
+    task_id: d.task.id,
+    worker: d.worker,
+    attempt: d.task.attempts + 1,
+    preamble: d.preamble,
+    cwd: d.cwd,
+    started_at: now(),
+    ...(prev ? { retry_of: prev } : {}),
+  };
+  (state.dispatches ??= {})[d.id] = rec;
+  return rec;
+}
+
+/** Settle a dispatch once; a later settle (a done after a forced release) does not overwrite it. */
+export function settleDispatch(state: State, id: string | null | undefined, outcome: "succeeded" | "failed"): void {
+  const d = id ? state.dispatches?.[id] : undefined;
+  if (!d || d.settled_at) return;
+  d.settled_at = now();
+  d.outcome = outcome;
+}
+
+/** A dispatch as `list`/`show` print it: the preamble replaced by its length. */
+export function dispatchView(d: Dispatch) {
+  const { preamble, ...rest } = d;
+  return { ...rest, preamble_length: preamble.length };
+}
+
+export const taskDispatchIds = (state: State, taskId: string): string[] =>
+  Object.values(state.dispatches ?? {}).filter((d) => d.task_id === taskId).sort((a, b) => idSeq(a.id) - idSeq(b.id)).map((d) => d.id);
+
+/** How much history to ask herdr for: the whole session as far as herdr keeps it. */
+const ARCHIVE_LINES = 10_000;
+
+/**
+ * The fullest screen text herdr will give: unwrapped scrollback at a high line
+ * count, then (herdr refuses long reads of a busy alternate-screen agent) its
+ * default recent window, then the visible screen.
+ */
+export async function readFullScreen(target: string): Promise<{ text: string; source: string }> {
+  const tries: { source: string; lines?: number; label: string }[] = [
+    { source: "recent_unwrapped", lines: ARCHIVE_LINES, label: `recent_unwrapped:${ARCHIVE_LINES}` },
+    { source: "recent_unwrapped", label: "recent_unwrapped" },
+    { source: "visible", label: "visible" },
+  ];
+  const errors: string[] = [];
+  for (const t of tries) {
+    try {
+      const res = await herdr("agent.read", { target, source: t.source, ...(t.lines ? { lines: t.lines } : {}), strip_ansi: true }, { timeoutMs: 60_000 });
+      const text = typeof res?.read?.text === "string" ? res.read.text : typeof res?.text === "string" ? res.text : null;
+      if (text !== null) return { text, source: t.label };
+      errors.push(`${t.label}: no text`);
+    } catch (err) {
+      errors.push(`${t.label}: ${(err as Error).message}`);
+    }
+  }
+  throw new Error(errors.join("; "));
+}
+
+/** Write a worker's screen to `<stateDir>/archive/<run>/<worker>-<dispatch>.txt` (dir 0700, file 0600). */
+export async function archiveScreen(p: { run_id: string; worker: string; dispatch_id: string | null; target: string }): Promise<{ path: string; source: string }> {
+  const { text, source } = await readFullScreen(p.target);
+  const dir = ensureDir(archiveDir(p.run_id));
+  chmodSync(dir, 0o700);
+  const path = join(dir, `${p.worker}-${p.dispatch_id ?? "none"}.txt`);
+  writeFileSync(path, text.endsWith("\n") ? text : text + "\n", { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return { path, source };
+}
+
+/** The archive to read: a given dispatch's, or the newest one for a worker name in the run. */
+export function findArchive(state: State, o: { runId: string | null; worker?: string; dispatchId?: string }): Dispatch | null {
+  if (o.dispatchId) {
+    const d = state.dispatches?.[o.dispatchId];
+    if (!d) throw new Error(`no dispatch ${o.dispatchId}`);
+    if (!d.archive_path) throw new Error(`dispatch ${d.id} has no archive${d.archive_error ? ` (${d.archive_error})` : d.settled_at ? "" : "; its worker has not been released"}`);
+    return d;
+  }
+  const mine = Object.values(state.dispatches ?? {}).filter((d) => d.worker === o.worker && d.archive_path && (!o.runId || d.run_id === o.runId));
+  mine.sort((a, b) => idSeq(b.id) - idSeq(a.id));
+  return mine[0] ?? null;
+}
+
+/** An archive's text, the last `lines` of it (all with 0), as `worker read` prints it. */
+export function readArchive(d: Dispatch, lines: number) {
+  const all = readFileSync(d.archive_path!, "utf8").replace(/\n$/, "").split("\n");
+  const text = lines > 0 ? all.slice(-lines).join("\n") : all.join("\n");
+  return { source: "archive" as const, worker: d.worker, dispatch_id: d.id, task_id: d.task_id, archive_path: d.archive_path!, total_lines: all.length, text };
+}

@@ -124,6 +124,17 @@ Release is post-settlement cleanup, not cancellation. To interrupt a worker
 mid-turn use `pack-leader worker stop <name>`, inspect it, and decide. When the run
 is finished, `pack-leader run close --release` releases what is left.
 
+## Dispatch records
+
+Every dispatch (`worker start`, `worker prompt`) is recorded with the exact
+preamble the worker received, its attempt number, `retry_of` when it retries a
+failed task, and its outcome once `done`, a forced release, or a worker exiting
+settles it. `pack-leader dispatch list [--task ID] [--worker NAME]` lists the
+run's dispatches; `pack-leader dispatch show ID --preamble` prints exactly what a
+worker was told. Release saves the worker's screen before closing its tab, so
+`pack-leader worker read <name>` still works afterwards: it answers with
+`source: "archive"` (`--dispatch ID` picks a specific one).
+
 ## Worker obligations
 
 Your `[pack-leader dispatch]` preamble is authoritative. You must:
@@ -150,13 +161,14 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
 pack-leader run create --objective "..." | show | list | close [--release]
 pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
 pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--cwd D] [--direction right|down] [-- agent args]
-pack-leader worker list | show NAME | read NAME [--lines N] | focus NAME
+pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME
 pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
 pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
 pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention]
 pack-leader reply ASK_ID --body "..."
 pack-leader send NAME "text" [--now]
 pack-leader status [--json]
+pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 pack-leader done | ask | heartbeat | inbox          (worker side)
 ```
 

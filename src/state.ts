@@ -85,16 +85,43 @@ export type Message = {
   delivered?: boolean;
 };
 
+/**
+ * One hand-over of a task to a worker: the exact text it was prompted with, and
+ * how it ended. Created where the dispatch id is minted, settled by `done` (or as
+ * failed by a forced release or a worker that exited owing a report).
+ */
+export type Dispatch = {
+  id: string;
+  run_id: string;
+  task_id: string;
+  worker: string;
+  /** The task's attempt number this dispatch is. */
+  attempt: number;
+  /** The prompt text the worker received. */
+  preamble: string;
+  cwd: string;
+  started_at: string;
+  settled_at?: string;
+  outcome?: "succeeded" | "failed";
+  /** The failed dispatch this one retries. */
+  retry_of?: string;
+  /** The worker's screen, saved when it was released. */
+  archive_path?: string;
+  archive_error?: string;
+};
+
 export type State = {
   version: 1;
   runs: Record<string, Run>;
   tasks: Record<string, Task>;
   workers: Record<string, Worker>;
   messages: Message[];
+  /** Optional: files written before dispatch records existed have none. */
+  dispatches?: Record<string, Dispatch>;
   seq: number;
 };
 
-export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, workers: {}, messages: [], seq: 0 });
+export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, workers: {}, messages: [], dispatches: {}, seq: 0 });
 
 export const now = () => new Date().toISOString();
 
@@ -203,6 +230,11 @@ export const activeRuns = (state: State): Run[] => Object.values(state.runs).fil
 export const runTasks = (state: State, runId: string): Task[] => Object.values(state.tasks).filter((t) => t.run_id === runId);
 export const runWorkers = (state: State, runId: string): Worker[] => Object.values(state.workers).filter((w) => w.run_id === runId);
 export const runMessages = (state: State, runId: string): Message[] => state.messages.filter((m) => m.run_id === runId);
+/** Dispatches of a run, oldest first (ids are minted from one counter). */
+export const runDispatches = (state: State, runId: string): Dispatch[] =>
+  Object.values(state.dispatches ?? {}).filter((d) => d.run_id === runId).sort((a, b) => idSeq(a.id) - idSeq(b.id));
+/** The counter value an id was minted from. */
+export const idSeq = (id: string): number => parseInt(id.slice(1), 36) || 0;
 
 /**
  * Which run a command means. In order: PACK_RUN_ID, --run, the run this pane
