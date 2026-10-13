@@ -1,0 +1,10 @@
+#!/bin/sh
+# pack-leader: the orchestration CLI. Resolves its real location so a symlink in PATH works.
+self="$0"
+while [ -L "$self" ]; do
+  dir=$(cd "$(dirname "$self")" && pwd)
+  self=$(readlink "$self")
+  case "$self" in /*) ;; *) self="$dir/$self" ;; esac
+done
+root=$(cd "$(dirname "$self")/.." && pwd)
+exec node --no-warnings "$root/src/cli.ts" "$@"

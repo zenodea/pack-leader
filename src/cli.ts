@@ -1,0 +1,456 @@
+// Pack Leader: an orchestrator agent and its pack of workers, on herdr.
+//
+// Orchestrator side (the agent you talk to):
+//   pack-leader run create --objective "..."       bind a run to this pane
+//   pack-leader run show | close [--release]
+//   pack-leader task create --spec "..." [--title T] [--depends-on a,b]
+//   pack-leader task list | show ID | update ID --status S
+//   pack-leader worker start NAME --spec "..." | --task ID [--kind K] [--cwd D] [--direction right|down] [-- agent args]
+//   pack-leader worker list | show NAME | read NAME [--lines N] | stop NAME | release NAME [--force] | retain NAME
+//   pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
+//   pack-leader worker resend NAME                 send the current task again (after a startup dialog)
+//   pack-leader check [--wait] [--timeout MS] [--ack ID] [--types done,ask,attention]
+//   pack-leader reply ASK_ID --body "..."
+//   pack-leader send NAME "text" [--now]
+//   pack-leader status [--json]
+// Worker side (inside a pane pack-leader started; IDs come from the environment):
+//   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
+//   pack-leader ask "question" [--timeout MS] | pack-leader ask --id ID
+//   pack-leader heartbeat "note" | pack-leader inbox
+// Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
+import { parseArgs, str, has, num, list, type Args } from "./args.ts";
+import { fg, bold, dim } from "./ansi.ts";
+import { agentFocus, agentRead, getPane, notify, paneFocus } from "./herdr.ts";
+import { spawnSync } from "node:child_process";
+import { ack, ask, check, done, heartbeat, inbox, reply, send, sync, workerContext } from "./inbox.ts";
+import { herdrBin, pluginRoot } from "./paths.ts";
+import { activeRuns, load, log, nextId, now, resolveRun, ready, runMessages, runTasks, runWorkers, type Run, type State, unacked, update } from "./state.ts";
+import { DEFAULT_KIND, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
+import { guide, installSkill } from "./skill.ts";
+
+const out = (v: unknown) => process.stdout.write(JSON.stringify(v, null, 2) + "\n");
+
+/** Where this command runs: the pane's own context, or the one herdr hands a plugin action. */
+function here(): { paneId: string | null; workspaceId: string | null; tabId: string | null; cwd: string } {
+  let ctx: Record<string, unknown> = {};
+  try {
+    ctx = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
+  } catch {}
+  const s = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const paneId = s(ctx.focused_pane_id) ?? s(process.env.HERDR_PANE_ID);
+  const workspaceId = s(ctx.workspace_id) ?? s(ctx.focused_workspace_id) ?? s(process.env.HERDR_WORKSPACE_ID) ?? (paneId?.includes(":") ? paneId.split(":")[0]! : null);
+  return { paneId, workspaceId, tabId: s(process.env.HERDR_TAB_ID), cwd: s(ctx.focused_pane_cwd) ?? s(ctx.workspace_cwd) ?? process.cwd() };
+}
+
+function currentRun(args: Args, state = load()): Run {
+  const h = here();
+  return resolveRun(state, { runId: str(args, "run"), paneId: h.paneId, workspaceId: h.workspaceId });
+}
+
+function requireHerdr(): void {
+  if (process.env.HERDR_ENV !== "1" && !process.env.HERDR_PLUGIN_ID && !process.env.HERDR_SOCKET_PATH) throw new Error("not inside herdr (HERDR_ENV is not 1)");
+}
+
+async function main(): Promise<void> {
+  const [command = "help", ...argv] = process.argv.slice(2);
+  const args = parseArgs(argv);
+  const fromAction = Boolean(process.env.HERDR_PLUGIN_ID) && !process.env.PACK_ROLE;
+
+  switch (command) {
+    case "help":
+    case "--help":
+    case "-h":
+      process.stdout.write(usage());
+      return;
+
+    case "skill": {
+      if (has(args, "install")) {
+        const r = installSkill();
+        if (fromAction) await notify("Pack Leader", r.bin ? `skill installed, pack-leader on PATH` : `skill installed; ${r.note.join("; ")}`);
+        out(r);
+      } else process.stdout.write(guide());
+      return;
+    }
+
+    // ---- run -----------------------------------------------------------------
+    case "run": {
+      const [sub = "show"] = args.positional;
+      if (sub === "create") {
+        requireHerdr();
+        const objective = str(args, "objective");
+        if (!objective) throw new Error("pass --objective \"<what this run is for>\"");
+        const h = here();
+        const run = await update((state) => {
+          const existing = activeRuns(state).find((r) => r.orchestrator.pane_id === h.paneId && h.paneId);
+          if (existing && !has(args, "another")) throw new Error(`this pane already orchestrates run ${existing.id}; close it or pass --another`);
+          const run: Run = { id: nextId(state, "r"), objective, status: "active", created_at: now(), orchestrator: { pane_id: h.paneId, workspace_id: h.workspaceId, tab_id: h.tabId, cwd: str(args, "cwd") ?? h.cwd } };
+          state.runs[run.id] = run;
+          return run;
+        });
+        log({ event: "run.created", run: run.id, pane: h.paneId });
+        let sidebar: string | null = null;
+        if (!has(args, "no-sidebar") && h.paneId) {
+          sidebar = await openSidebar(h.paneId, has(args, "left")).catch(() => null);
+          if (sidebar) await update((s) => void (s.runs[run.id]!.sidebar_pane_id = sidebar));
+        }
+        out({ run: { ...run, sidebar_pane_id: sidebar }, hint: `Workers start in hidden tabs of workspace ${h.workspaceId ?? "?"}; the sidebar ${sidebar ? `(pane ${sidebar})` : "was not opened"} shows them. PACK_RUN_ID=${run.id} selects this run explicitly.` });
+        return;
+      }
+      if (sub === "show") {
+        const state = load();
+        const run = currentRun(args, state);
+        out(view(state, run));
+        return;
+      }
+      if (sub === "list") {
+        const state = load();
+        out({ runs: Object.values(state.runs).map((r) => ({ ...r, workers: runWorkers(state, r.id).length, tasks: runTasks(state, r.id).length })) });
+        return;
+      }
+      if (sub === "close") {
+        const state = load();
+        const run = currentRun(args, state);
+        const released: string[] = [];
+        if (has(args, "release")) {
+          for (const w of runWorkers(state, run.id)) {
+            await releaseWorker(run, w.name, { force: true }).catch(() => {});
+            released.push(w.name);
+          }
+        }
+        await update((s) => {
+          const r = s.runs[run.id];
+          if (r) (r.status = "closed"), (r.closed_at = now());
+        });
+        log({ event: "run.closed", run: run.id });
+        if (fromAction) await notify("Pack Leader", `run ${run.id} closed${released.length ? `, released ${released.join(", ")}` : ""}`);
+        out({ closed: run.id, released });
+        return;
+      }
+      throw new Error(`unknown: pack-leader run ${sub}`);
+    }
+
+    // ---- task ----------------------------------------------------------------
+    case "task": {
+      const [sub = "list", id] = args.positional;
+      if (sub === "create") {
+        const spec = str(args, "spec");
+        if (!spec) throw new Error("pass --spec \"<self-contained task spec>\"");
+        const run = currentRun(args);
+        const task = await update((state) => {
+          const deps = list(args, "depends-on");
+          for (const d of deps) if (!state.tasks[d] || state.tasks[d]!.run_id !== run.id) throw new Error(`no task ${d} in run ${run.id}`);
+          const t = { id: nextId(state, "t"), run_id: run.id, title: str(args, "title") ?? spec.split("\n")[0]!.slice(0, 60), spec, status: "pending" as const, depends_on: deps, worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
+          state.tasks[t.id] = t;
+          return t;
+        });
+        out({ task: taskSummary(task) });
+        return;
+      }
+      if (sub === "list") {
+        const state = load();
+        const run = currentRun(args, state);
+        out({ tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t), ready: ready(state, t) })) });
+        return;
+      }
+      if (sub === "show") {
+        const state = load();
+        const t = id ? state.tasks[id] : undefined;
+        if (!t) throw new Error(`no task ${id}`);
+        out({ task: t });
+        return;
+      }
+      if (sub === "update") {
+        const status = str(args, "status");
+        if (!id || !status) throw new Error("usage: pack-leader task update ID --status pending|blocked|failed|succeeded [--summary S]");
+        if (!["pending", "blocked", "failed", "succeeded"].includes(status)) throw new Error(`bad status ${status}`);
+        const t = await update((state) => {
+          const t = state.tasks[id];
+          if (!t) throw new Error(`no task ${id}`);
+          if (t.status === "dispatched") throw new Error(`task ${id} is dispatched to ${t.worker}; it settles through \`pack-leader done\` or \`pack-leader worker release --force\``);
+          t.status = status as any;
+          t.updated_at = now();
+          if (str(args, "summary")) t.outcome = { summary: str(args, "summary")!, files_modified: [], report_path: null };
+          return t;
+        });
+        out({ task: taskSummary(t) });
+        return;
+      }
+      throw new Error(`unknown: pack-leader task ${sub}`);
+    }
+
+    // ---- worker --------------------------------------------------------------
+    case "worker": {
+      const [sub = "list", name] = args.positional;
+      if (sub === "start") {
+        requireHerdr();
+        if (!name) throw new Error("usage: pack-leader worker start NAME --spec \"...\" | --task ID");
+        const run = currentRun(args);
+        const direction = str(args, "direction") ?? "right";
+        if (direction !== "right" && direction !== "down") throw new Error("--direction must be right or down");
+        const placement = str(args, "placement") ?? (has(args, "direction") ? "split" : "tab");
+        if (placement !== "tab" && placement !== "split") throw new Error("--placement must be tab or split");
+        const r = await startWorker({
+          run,
+          name,
+          kind: str(args, "kind") ?? DEFAULT_KIND,
+          spec: str(args, "spec"),
+          title: str(args, "title"),
+          taskId: str(args, "task"),
+          retry: has(args, "retry"),
+          cwd: str(args, "cwd"),
+          placement,
+          direction,
+          targetPane: str(args, "target-pane"),
+          ratio: str(args, "ratio") ? num(args, "ratio", 0.5) : undefined,
+          extraArgs: args.rest,
+          noDefaultArgs: has(args, "no-default-args"),
+          timeoutMs: num(args, "timeout", 45_000),
+        });
+        out({ worker: { name: r.worker.name, kind: r.worker.kind, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd }, task: taskSummary(r.task), ...(r.warning ? { warning: r.warning } : {}) });
+        if (r.warning) process.exitCode = 1;
+        return;
+      }
+      if (sub === "list") {
+        await sync().catch(() => {});
+        const state = load();
+        const run = currentRun(args, state);
+        out({ workers: runWorkers(state, run.id).map((w) => workerSummary(w, state)) });
+        return;
+      }
+      if (!name) throw new Error(`usage: pack-leader worker ${sub} NAME`);
+      if (sub === "show") {
+        await sync().catch(() => {});
+        const state = load();
+        const w = state.workers[name];
+        if (!w) throw new Error(`no worker "${name}"`);
+        out({ worker: workerSummary(w, state), task: w.task_id ? state.tasks[w.task_id] : null, messages: state.messages.filter((m) => m.from === name || m.to === name).slice(-10) });
+        return;
+      }
+      if (sub === "read") {
+        const text = await agentRead(name, num(args, "lines", 80));
+        process.stdout.write(text.endsWith("\n") ? text : text + "\n");
+        return;
+      }
+      if (sub === "focus") {
+        await agentFocus(name);
+        return;
+      }
+      if (sub === "stop") {
+        await stopWorker(name);
+        out({ stopped: name });
+        return;
+      }
+      if (sub === "retain") {
+        await update((state) => {
+          const w = state.workers[name];
+          if (!w) throw new Error(`no worker "${name}"`);
+          w.retained = true;
+        });
+        out({ retained: name });
+        return;
+      }
+      if (sub === "release") {
+        const run = currentRun(args);
+        out({ released: name, ...(await releaseWorker(run, name, { force: has(args, "force"), keepPane: has(args, "keep-pane") })) });
+        return;
+      }
+      if (sub === "resend") {
+        const run = currentRun(args);
+        const r = await resendPreamble(run, name);
+        out({ worker: name, task: taskSummary(r.task), dispatch_id: r.dispatch_id, resent: true });
+        return;
+      }
+      if (sub === "prompt") {
+        const run = currentRun(args);
+        const r = await redispatch(run, name, str(args, "task"), str(args, "spec"), str(args, "title"));
+        out({ worker: name, task: taskSummary(r.task), dispatch_id: r.dispatch_id });
+        return;
+      }
+      throw new Error(`unknown: pack-leader worker ${sub}`);
+    }
+
+    // ---- orchestrator inbox ----------------------------------------------------
+    case "check": {
+      const run = currentRun(args);
+      if (str(args, "ack")) {
+        const n = await ack(run, list(args, "ack"));
+        if (!n && !has(args, "wait")) {
+          out({ acked: 0, warning: "nothing to ack with those ids" });
+        }
+      }
+      const types = str(args, "types") ? list(args, "types") : undefined;
+      const r = await check(run, { wait: has(args, "wait"), timeoutMs: num(args, "timeout", 540_000), types });
+      out(r);
+      return;
+    }
+    case "reply": {
+      const [askId] = args.positional;
+      const body = str(args, "body") ?? args.positional[1];
+      if (!askId || !body) throw new Error("usage: pack-leader reply ASK_ID --body \"answer\"");
+      out({ reply: await reply(currentRun(args), askId, body) });
+      return;
+    }
+    case "send": {
+      const [name, ...words] = args.positional;
+      const body = str(args, "body") ?? words.join(" ");
+      if (!name || !body) throw new Error("usage: pack-leader send NAME \"text\" [--now]");
+      out(await send(currentRun(args), name, body, has(args, "now")));
+      return;
+    }
+    case "status": {
+      await sync().catch(() => {});
+      const state = load();
+      let run: Run | null = null;
+      try {
+        run = currentRun(args, state);
+      } catch {}
+      if (has(args, "json") || !process.stdout.isTTY) out(run ? view(state, run) : { runs: Object.values(state.runs) });
+      else process.stdout.write(run ? statusText(state, run) : dim("no active run\n"));
+      return;
+    }
+
+    // ---- worker side ---------------------------------------------------------
+    case "done": {
+      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const outcome = str(args, "outcome");
+      const summary = str(args, "summary");
+      if ((outcome !== "succeeded" && outcome !== "failed") || !summary) throw new Error("usage: pack-leader done --outcome succeeded|failed --summary \"...\" [--files-modified a,b] [--report-path P]");
+      const m = await done(ctx, { outcome, summary, files: list(args, "files-modified"), reportPath: str(args, "report-path") ?? null });
+      out({ reported: m.id, task_id: m.task_id, outcome, next: "End your turn and wait for the orchestrator." });
+      return;
+    }
+    case "ask": {
+      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const r = await ask(ctx, { body: args.positional.join(" ") || str(args, "body"), resumeId: str(args, "id"), timeoutMs: num(args, "timeout", 600_000) });
+      if (r.result === "timeout") out({ ...r, next: `No answer yet. Run \`pack-leader ask --id ${r.ask_id}\` to keep waiting.` });
+      else out({ result: "reply", ask_id: r.ask_id, answer: r.reply!.body });
+      return;
+    }
+    case "heartbeat": {
+      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const m = await heartbeat(ctx, args.positional.join(" ") || str(args, "body") || "working");
+      out({ heartbeat: m.id });
+      return;
+    }
+    case "inbox": {
+      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const msgs = await inbox(ctx);
+      out({ messages: msgs.map((m) => ({ id: m.id, ts: m.ts, body: m.body })) });
+      return;
+    }
+
+    // ---- herdr-driven --------------------------------------------------------
+    case "sidebar": {
+      const { runSidebar } = await import("./sidebar.ts");
+      await runSidebar();
+      return;
+    }
+    case "sidebar-open": {
+      // herdr action: the pack as a column to the right of the focused pane, focused so j/k/Enter work at once.
+      const h = here();
+      if (!h.paneId) throw new Error("no pane to open the sidebar next to");
+      out({ sidebar_pane_id: await openSidebar(h.paneId, has(args, "left"), !has(args, "no-focus")) });
+      return;
+    }
+    case "event": {
+      // pane.closed / pane.exited: a worker's pane went away.
+      let data: { pane_id?: string } = {};
+      try {
+        const e = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON ?? "{}");
+        data = e.data ?? e;
+      } catch {}
+      if (data.pane_id) await sync().catch(() => {});
+      return;
+    }
+    default:
+      throw new Error(`unknown command: ${command}\n${usage()}`);
+  }
+}
+
+/**
+ * The sidebar as a narrow column right of `target` (left with `onLeft`), once:
+ * a run that already has a live sidebar pane keeps it. Returns the sidebar pane id.
+ */
+async function openSidebar(target: string, onLeft = false, focus = false): Promise<string> {
+  const state = load();
+  for (const r of activeRuns(state)) {
+    if (!r.sidebar_pane_id) continue;
+    try {
+      const p = await getPane(r.sidebar_pane_id);
+      if (p.workspace_id === target.split(":")[0]) {
+        if (focus) await paneFocus(r.sidebar_pane_id).catch(() => {});
+        return r.sidebar_pane_id;
+      }
+    } catch {}
+  }
+  const argv = ["plugin", "pane", "open", "--plugin", process.env.HERDR_PLUGIN_ID ?? "pack-leader", "--entrypoint", "sidebar", "--placement", "split", "--direction", "right", "--no-focus", "--target-pane", target];
+  const res = spawnSync(herdrBin, argv, { encoding: "utf8" });
+  if (res.status !== 0) throw new Error(res.stderr.trim() || "herdr couldn't open the sidebar pane");
+  const r = JSON.parse(res.stdout).result;
+  const pane: string | undefined = r?.pane?.pane_id ?? r?.plugin_pane?.pane?.pane_id;
+  if (!pane) throw new Error("herdr did not report the sidebar pane id");
+  // The split lands on the right; `--left` swaps it with the pane it was split from. Keep it narrow.
+  if (onLeft) spawnSync(herdrBin, ["pane", "swap", "--source-pane", pane, "--target-pane", target]);
+  spawnSync(herdrBin, ["pane", "resize", "--direction", onLeft ? "left" : "right", "--amount", "0.25", "--pane", pane]);
+  await paneFocus(focus ? pane : target).catch(() => {});
+  return pane;
+}
+
+function view(state: State, run: Run) {
+  return {
+    run,
+    tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t), ready: ready(state, t) })),
+    workers: runWorkers(state, run.id).map((w) => workerSummary(w, state)),
+    inbox: unacked(state, run.id).map((m) => ({ id: m.id, type: m.type, from: m.from, body: m.body })),
+  };
+}
+
+const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕") };
+
+function statusText(state: State, run: Run): string {
+  const lines = [`${bold("" + run.id)} ${run.objective}`, dim(`orchestrator ${run.orchestrator.pane_id ?? "?"} · ${run.orchestrator.cwd}`), ""];
+  for (const w of runWorkers(state, run.id)) {
+    const t = w.task_id ? state.tasks[w.task_id] : null;
+    lines.push(`${glyph[w.last_status] ?? "?"} ${bold(w.name)} ${dim(w.pane_id)} ${t ? `${t.id} ${t.status} · ${t.title}` : dim("no task")}`);
+  }
+  const pending = runTasks(state, run.id).filter((t) => t.status === "pending");
+  if (pending.length) lines.push("", dim("pending: ") + pending.map((t) => `${t.id}${ready(state, t) ? "" : "(waits)"} ${t.title}`).join(", "));
+  const box = unacked(state, run.id);
+  lines.push("", box.length ? fg.yellow(`${box.length} unread: `) + box.map((m) => `${m.id} ${m.type} from ${m.from}`).join(", ") : dim("inbox empty"));
+  lines.push(dim(`${runMessages(state, run.id).length} messages · pack-leader check --wait to continue`));
+  return lines.join("\n") + "\n";
+}
+
+function usage(): string {
+  return `Pack Leader: an orchestrator agent and its pack of workers, on herdr.
+
+Orchestrator (the agent you talk to):
+  pack-leader run create --objective "..." [--no-sidebar]   bind a run to this pane and open the sidebar
+  pack-leader run show | list | close [--release]
+  pack-leader task create --spec "..." [--title T] [--depends-on a,b]
+  pack-leader task list | show ID | update ID --status S
+  pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--cwd D] [--placement tab|split] [--direction right|down] [-- agent args]
+                                                hidden tab by default; split puts it next to you
+  pack-leader worker list | show NAME | read NAME [--lines N] | focus NAME
+  pack-leader worker stop NAME | release NAME [--force] [--keep-pane] | retain NAME
+  pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
+  pack-leader worker resend NAME                 send the current task again (after a startup dialog)
+  pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention]
+  pack-leader reply ASK_ID --body "..."
+  pack-leader send NAME "text" [--now]
+  pack-leader status [--json]
+Worker (inside a pane pack-leader started; IDs come from the environment):
+  pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
+  pack-leader ask "question" [--timeout MS] | pack-leader ask --id ID
+  pack-leader heartbeat "note" | pack-leader inbox
+Either:
+  pack-leader skill [--install]                        the guide; or install it into Claude Code
+  pack-leader sidebar                                  the pack, live (run by herdr in a pane)
+Plugin root: ${pluginRoot}
+`;
+}
+
+main().catch((err) => {
+  process.stderr.write(JSON.stringify({ error: (err as Error).message }) + "\n");
+  process.exit(1);
+});

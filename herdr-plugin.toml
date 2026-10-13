@@ -1,0 +1,43 @@
+# Pack Leader: an orchestrator agent and its pack. The agent you talk to starts worker
+# agents in sibling panes, hands each one a task, and waits for their reports;
+# Pack Leader keeps the run state outside the agents so it survives context compaction.
+# The sidebar pane shows one box per worker. See the README.
+id = "pack-leader"
+name = "Pack Leader"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "An orchestrator agent, its pack of workers, and a sidebar that shows the pack"
+platforms = ["linux", "macos"]
+
+# prefix+<your key>: the pack, as a column next to the focused pane.
+[[actions]]
+id = "sidebar"
+title = "Pack Leader: show the pack"
+command = ["node", "src/cli.ts", "sidebar-open"]
+
+# Installs the `pack-leader` skill into Claude Code and puts `pack-leader` on PATH.
+[[actions]]
+id = "install-skill"
+title = "Pack Leader: install the skill"
+command = ["node", "src/cli.ts", "skill", "--install"]
+
+# Closes the run bound to the focused pane and releases its workers' panes.
+[[actions]]
+id = "close-run"
+title = "Pack Leader: close this pane's run"
+command = ["node", "src/cli.ts", "run", "close", "--release"]
+
+[[panes]]
+id = "sidebar"
+title = "Pack Leader"
+placement = "split"
+command = ["sh", "-c", "exec node --no-warnings \"$HERDR_PLUGIN_ROOT/src/cli.ts\" sidebar"]
+
+# A worker's pane going away settles its dispatch as exited.
+[[events]]
+on = "pane.closed"
+command = ["node", "src/cli.ts", "event", "pane.closed"]
+
+[[events]]
+on = "pane.exited"
+command = ["node", "src/cli.ts", "event", "pane.exited"]
