@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f6f0">
+  <meta name="description" content="Give your coding agent a team. Pack Leader coordinates Claude Code, Codex and pi workers inside herdr, with isolated worktrees, live status and a record of every handoff.">
+  <meta property="og:title" content="Pack Leader">
+  <meta property="og:description" content="A herdr plugin that lets one coding agent coordinate Claude Code, Codex and pi workers in parallel.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/leader-tab.webp">
+  <title>Pack Leader</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="page">
+    <header class="header">
+      <a class="brand" href="./" aria-label="Pack Leader home">
+        <img class="mascot-icon" src="assets/wolf.png" width="44" height="44" alt="">
+        <span>Pack Leader</span>
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="#tour">Tour</a>
+        <a href="https://github.com/zenodea/pack-leader/blob/main/docs/guide.md">Guide</a>
+        <a href="https://github.com/zenodea/pack-leader">GitHub <span aria-hidden="true">↗</span></a>
+        <a class="nav-install" href="#install">Install <span aria-hidden="true">↓</span></a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <img class="hero-mascot" src="assets/wolf.png" width="124" height="124" alt="A wolf in sheep’s clothing, holding its disguise in place.">
+          <div>
+            <h1 id="hero-title">Pack Leader</h1>
+            <p class="intro">A herdr plugin that lets one coding agent run a team of Claude Code, Codex or pi workers. Each worker gets a task, a tab and a Git worktree. A sidebar shows what each one is doing.</p>
+            <div class="hero-actions">
+              <a class="button primary" href="#install">Install <span aria-hidden="true">↓</span></a>
+              <a class="text-link" href="https://github.com/zenodea/pack-leader/blob/main/docs/guide.md">Read the guide <span aria-hidden="true">↗</span></a>
+            </div>
+            <p class="compatibility">Claude Code <span aria-hidden="true">/</span> Codex <span aria-hidden="true">/</span> pi</p>
+            <p class="platform-note">An independent plugin for <a href="https://herdr.dev/">herdr</a>. Open source. Runs in your terminal.</p>
+          </div>
+        </div>
+        <figure class="hero-shot">
+          <a href="assets/leader-tab.webp" target="_blank" rel="noopener" aria-label="Open the full-size screenshot of a Pack Leader run in herdr">
+            <img class="shot" src="assets/leader-tab.webp" width="1417" height="917" fetchpriority="high" alt="A herdr window with three panes. Pack Leader, the orchestrator’s Claude Code session, starts three workers in worktrees, waits for reports, and answers a worker’s question. Observer, a second agent under it, summarises the run and answers “why is tests blocked?”. Pack, the sidebar on the right, shows the goal, one unread message and three boxes: parser done, validator working, and tests blocked, asking whether to reject the import or skip rows. The tab bar lists leader, parser, validator and tests.">
+          </a>
+          <figcaption>The leader tab of a run: <strong>Pack Leader</strong> coordinates, the <strong>Observer</strong> answers you, the <strong>Pack</strong> sidebar shows every worker. Real herdr session, staged demo data.</figcaption>
+        </figure>
+      </section>
+
+      <section class="features" aria-label="Why Pack Leader">
+        <article>
+          <h2>Delegate</h2>
+          <p>Mix agents, give each a clear task, and use separate Git worktrees. One coordinator keeps the pack moving.</p>
+        </article>
+        <article>
+          <h2>Supervise</h2>
+          <p>Live status, worker questions and approval gates make blockers visible. Send a followup without hunting through tabs.</p>
+        </article>
+        <article>
+          <h2>Review</h2>
+          <p>Specs, attempts and reports outlive an agent's context window. Inspect the handoffs, then decide what to merge.</p>
+        </article>
+      </section>
+
+      <section class="tour" id="tour" aria-labelledby="tour-title">
+        <div class="tour-heading">
+          <h2 id="tour-title">A run in herdr</h2>
+        </div>
+
+        <article class="tour-item tour-item-tall" aria-labelledby="tour-pack">
+          <div class="tour-text">
+            <h3 id="tour-pack">The Pack sidebar</h3>
+            <p>Agent, runtime and state. The task. The last thing the worker said: a heartbeat, a note, a report, or an open question with its choices.</p>
+            <p>A worker can ask for a decision and wait. The coordinator answers in the usual case; you can step in when you want to. Click a box to select it, click again to open the worker's tab.</p>
+            <a class="text-link" href="https://github.com/zenodea/pack-leader/blob/main/docs/guide.md#commands">See the commands <span aria-hidden="true">↗</span></a>
+          </div>
+          <figure>
+            <img class="shot" src="assets/pack-pane.webp" width="350" height="590" loading="lazy" alt="The Pack sidebar. Goal: Ship CSV import. Unread: 1. Three boxes: parser (claude), runtime 4m30s, done, succeeded: Parse CSV input. validator (codex), working, Validate imported rows, checking edge cases. tests (pi), BLOCKED, Cover invalid input, asks: Reject invalid rows, or skip them? with the choices Reject import and Skip rows. The tests box is selected.">
+            <figcaption>The sidebar, cropped from the screen above.</figcaption>
+          </figure>
+        </article>
+
+        <article class="tour-item" aria-labelledby="tour-observer">
+          <div class="tour-text">
+            <h3 id="tour-observer">The Observer</h3>
+            <p>A second agent under the leader reads the run state and the leader's last turns, then answers you in plain words. It never acts on the run.</p>
+            <p>Want the leader to know something? Say “pass on: …” and it arrives as a message the leader picks up on its next check.</p>
+          </div>
+          <figure>
+            <img class="shot" src="assets/observer-pane.webp" width="820" height="330" loading="lazy" alt="The Observer pane. It ran pack-leader observe and reports: parser done, validator working through edge cases, tests blocked on a question. You ask “why is tests blocked?” and it answers that the spec left invalid-row handling open, so the worker asked instead of guessing, and the leader just answered Reject import.">
+            <figcaption>The observer, cropped from the screen above.</figcaption>
+          </figure>
+        </article>
+
+        <article class="tour-item tour-item-wide" aria-labelledby="tour-worker">
+          <div class="tour-text">
+            <h3 id="tour-worker">A worker's tab</h3>
+            <p>Each worker starts in a tab of its own, in its own Git worktree, with a dispatch preamble that spells out the task and how to report. It talks to the leader only through the <code>pack-leader</code> CLI: a report, a question, a note.</p>
+          </div>
+          <figure>
+            <a href="assets/worker-tab.webp" target="_blank" rel="noopener" aria-label="Open the full-size screenshot of a worker tab">
+              <img class="shot" src="assets/worker-tab.webp" width="1417" height="917" loading="lazy" alt="The parser worker’s tab in herdr. Its Claude Code session starts with the dispatch preamble naming the worker, run, task and rules, then reads the code, writes src/csv/parse.ts and its tests, runs them (14 passed), commits, and reports with pack-leader done --outcome succeeded. The tab bar shows the parser tab selected next to leader, validator and tests.">
+            </a>
+            <figcaption>The parser worker, after reporting back. Real herdr session, staged demo data.</figcaption>
+          </figure>
+        </article>
+      </section>
+
+      <section class="install" id="install" aria-labelledby="install-title">
+        <div class="install-heading">
+          <div>
+            <h2 id="install-title">Install</h2>
+          </div>
+          <img class="mascot-icon" src="assets/wolf.png" width="72" height="72" alt="" loading="lazy">
+        </div>
+        <p class="requirements"><a href="https://herdr.dev/docs/install/">herdr 0.9+</a> · Node.js 22.18+ · An authenticated agent CLI · Linux or macOS</p>
+        <div class="code-block">
+          <pre tabindex="0" aria-label="Install Pack Leader"><code id="install-commands">herdr plugin install zenodea/pack-leader
+herdr plugin action invoke install-skill --plugin pack-leader</code></pre>
+          <button class="copy-button" type="button" data-copy="install-commands" hidden>Copy</button>
+        </div>
+        <p class="copy-status" role="status" aria-live="polite"></p>
+        <div class="first-prompt">
+          <span class="prompt-label">Example prompt</span>
+          <blockquote>“Implement CSV import. Give parsing and validation to separate workers in isolated worktrees. Write tests, report back, then review the changes.”</blockquote>
+        </div>
+        <p class="install-note">Pack Leader does not merge anything. The coordinator and you review the workers' changes.</p>
+      </section>
+      <p class="more">Also supported: task dependencies, session adoption, setup hooks and SSH workers. <a href="https://github.com/zenodea/pack-leader#what-you-can-do">Full feature list <span aria-hidden="true">↗</span></a></p>
+    </main>
+
+    <footer>
+      <a class="brand footer-brand" href="./"><img class="mascot-icon" src="assets/wolf.png" width="28" height="28" alt=""><span>Pack Leader</span></a>
+      <p>Independent of the herdr project. <a href="https://github.com/zenodea/pack-leader/blob/main/LICENSE">Code: MIT.</a></p>
+      <a href="https://github.com/zenodea/pack-leader">Source <span aria-hidden="true">↗</span></a>
+    </footer>
+  </div>
+</body>
+</html>

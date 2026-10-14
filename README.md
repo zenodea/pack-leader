@@ -1,6 +1,4 @@
-# Pack Leader
-
-**One conversation. Parallel agents. A record of every handoff.**
+# Pack Leader <img src="site/assets/wolf.png" width="40" height="40" align="absmiddle" alt="A wolf in sheep’s clothing">
 
 Pack Leader is an independent [herdr](https://github.com/herdrdev/herdr) plugin that lets your
 coding agent coordinate a team of **Claude Code, Codex or pi** workers. The
@@ -10,7 +8,11 @@ run in their own tabs or splits; a live sidebar keeps the whole run visible.
 Tasks, messages and dispatch history live outside the agents' context windows.
 Inspect assignments, current attempts and reports—even after a worker's tab closes.
 
-[Full guide](docs/guide.md) · [Command reference](docs/guide.md#commands) · [Changelog](docs/CHANGELOG.md)
+[Full guide](docs/guide.md) · [Command reference](docs/guide.md#commands) · [Website preview](site/README.md) · [Changelog](docs/CHANGELOG.md)
+
+<img src="site/assets/leader-tab.webp" width="760" alt="A herdr window with three panes: Pack Leader, the orchestrator; Observer, a second agent that answers questions about the run; and Pack, the sidebar showing parser done, validator working, and tests asking a question. The tab bar lists one tab per worker.">
+
+*The leader tab of a run: Pack Leader, the Observer and the Pack sidebar. A real herdr session with staged demo data, not a capture of private sessions.*
 
 ## Install
 
@@ -26,7 +28,7 @@ This installs the skill for configured Claude Code, Codex and pi environments,
 and links `pack-leader` into `~/.local/bin`. Keep that directory on your `PATH`;
 run orchestration commands inside herdr.
 
-## Start a pack
+## Usage
 
 Tell your agent what to delegate:
 
@@ -79,7 +81,11 @@ an agent's claims.
 | **Audit handoffs** | `dispatch list` and `dispatch show ID --preamble` expose attempts and exact instructions. Outcomes carry summaries, changed-file lists and report paths; release archives screens for later `worker read`. |
 | **Run remotely** | SSH host profiles route launch, messaging, observation and release while keeping run state on the leader. See [Remote workers](#remote-workers). |
 
-## Stay in control
+## Supervision
+
+<img src="site/assets/pack-pane.webp" width="300" alt="The Pack sidebar: parser done, validator working, and tests blocked, asking whether to reject invalid CSV rows or skip them, with both choices visible.">
+
+*The Pack sidebar. A worker question shows its choices. Demo data.*
 
 ```bash
 pack-leader status --json                         # current run, tasks and workers
@@ -187,4 +193,5 @@ Node runs the TypeScript directly; there is no build step.
 
 [MIT](LICENSE). The orchestration skill's supervision loop, task-spec contract
 and completion accounting were adapted from [Orca](https://github.com/stablyai/orca)
-(MIT), rewritten for herdr's panes, tabs and agents.
+(MIT), rewritten for herdr's panes, tabs and agents. The user-supplied mascot image
+is separate from the code licence; see [asset notes](site/assets/README.md).
