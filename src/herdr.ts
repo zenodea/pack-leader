@@ -171,6 +171,15 @@ export const paneFocus = (pane_id: string) => herdr("pane.focus", { pane_id });
 export const paneClose = (pane_id: string) => herdr("pane.close", { pane_id });
 
 /** Label a worker's pane with its task so the herdr sidebar and the Pack Leader sidebar agree. */
+/** The pane's own name, as `herdr pane rename` sets it: what the sidebar and borders show first. */
+export async function renamePane(pane_id: string, label: string | null): Promise<void> {
+  try {
+    await herdr("pane.rename", { pane_id, label }, { timeoutMs: 3000 });
+  } catch (err) {
+    logHerdrError("pane.rename", err, { pane: pane_id });
+  }
+}
+
 export async function labelPane(pane_id: string, title: string | null): Promise<void> {
   try {
     if (title === null) await herdr("pane.report_metadata", { pane_id, source: "pack-leader", clear_title: true }, { timeoutMs: 3000 });

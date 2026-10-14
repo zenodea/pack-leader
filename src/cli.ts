@@ -21,7 +21,7 @@
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
-import { agentFocus, agentRead, getPane, labelPane, notify, paneFocus } from "./herdr.ts";
+import { agentFocus, agentRead, getPane, renamePane, notify, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
         let warning: string | undefined;
         try {
           log({ event: "run.created", run: run.id, pane: h.paneId });
-          if (h.paneId) await labelPane(h.paneId, "leader");
+          if (h.paneId) await renamePane(h.paneId, "leader");
           if (!has(args, "no-sidebar") && h.paneId) {
             sidebar = await openSidebar(h.paneId, has(args, "left")).catch(() => null);
             if (sidebar) await update((s) => void (s.runs[run.id]!.sidebar_pane_id = sidebar));
@@ -597,19 +597,18 @@ function askReply(askId: string, r: Message, options?: string[]) {
 }
 
 /**
- * The sidebar as a narrow column right of `target` (left with `onLeft`), once:
- * a live sidebar pane in this workspace, from any run, is reused. Returns the sidebar pane id.
+ * The sidebar as a narrow column right of `target` (left with `onLeft`), once per run:
+ * the run orchestrated from `target` keeps its live sidebar pane. Returns the sidebar pane id.
  */
 async function openSidebar(target: string, onLeft = false, focus = false): Promise<string> {
   const state = load();
-  const runs = Object.values(state.runs).filter((r) => r.sidebar_pane_id).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  for (const r of runs) {
-    if (!r.sidebar_pane_id) continue;
+  const owner = activeRuns(state).find((r) => r.orchestrator.pane_id === target);
+  if (owner?.sidebar_pane_id) {
     try {
-      const p = await getPane(r.sidebar_pane_id);
+      const p = await getPane(owner.sidebar_pane_id);
       if (p.workspace_id === workspaceOf(target)) {
-        if (focus) await paneFocus(r.sidebar_pane_id).catch(() => {});
-        return r.sidebar_pane_id;
+        if (focus) await paneFocus(owner.sidebar_pane_id).catch(() => {});
+        return owner.sidebar_pane_id;
       }
     } catch {}
   }
@@ -619,6 +618,7 @@ async function openSidebar(target: string, onLeft = false, focus = false): Promi
   const r = JSON.parse(res.stdout).result;
   const pane: string | undefined = r?.pane?.pane_id ?? r?.plugin_pane?.pane?.pane_id;
   if (!pane) throw new Error("herdr did not report the sidebar pane id");
+  if (owner) await update((s) => void (s.runs[owner.id] && (s.runs[owner.id]!.sidebar_pane_id = pane))).catch(() => {});
   // The split lands on the right; `--left` swaps it with the pane it was split from. Keep it narrow.
   if (onLeft) spawnSync(herdrBin, ["pane", "swap", "--source-pane", pane, "--target-pane", target]);
   spawnSync(herdrBin, ["pane", "resize", "--direction", onLeft ? "left" : "right", "--amount", "0.25", "--pane", pane]);

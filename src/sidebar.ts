@@ -137,17 +137,26 @@ export async function runSidebar(): Promise<void> {
     }
   };
 
+  const pane = process.env.HERDR_PANE_ID ?? null;
+  const workspace = pane && /^([A-Za-z0-9_-]+):[A-Za-z0-9_-]+$/.exec(pane)?.[1];
+  const boundRun = (): Run | undefined => (pane ? Object.values(state.runs).find((r) => r.sidebar_pane_id === pane) : undefined);
+  const mine = (): Run[] => {
+    const bound = boundRun();
+    if (bound) return bound.status === "active" ? [bound] : [];
+    return activeRuns(state).filter((r) => !workspace || r.orchestrator.workspace_id === workspace);
+  };
+  let sawRuns = mine().length > 0;
+
   const rows = (): { run: Run; worker: Worker }[] => {
     const list: { run: Run; worker: Worker }[] = [];
-    for (const run of activeRuns(state)) for (const w of runWorkers(state, run.id)) list.push({ run, worker: w });
+    for (const run of mine()) for (const w of runWorkers(state, run.id)) list.push({ run, worker: w });
     return list;
   };
 
   const draw = () => {
     const cols = out.columns || 30;
     const lines: string[] = [];
-    const runs = activeRuns(state);
-    // Closed runs are never drawn: activeRuns only.
+    const runs = mine();
     if (!runs.length) lines.push(dim("no active run — pack-leader run create"));
     let i = 0;
     // Lines of the selected box; the first box of a run brings its goal line along.
@@ -178,7 +187,7 @@ export async function runSidebar(): Promise<void> {
       for (const l of preview) tail.push(truncate(l, cols));
     }
     if (message) tail.push("", fg.yellow(truncate(message, cols)));
-    const footer = [(connected ? "" : fg.red("offline · ")) + (help ? dim("j/k move · enter open worker · o back · r peek · R refresh · q quit") : dim("enter opens a worker · ? help"))];
+    const footer = [(connected ? "" : fg.red("offline · ")) + (help ? dim("j/k move · enter open worker · o back · r peek · R refresh · q quit") : "")];
 
     const rowsAvail = out.rows || 24;
     const pinned = tail.slice(-Math.floor(rowsAvail / 2));
@@ -250,7 +259,12 @@ export async function runSidebar(): Promise<void> {
     out.write(screen.showCursor + screen.main);
     process.exit(0);
   };
-  const finished = () => Object.keys(state.runs).length > 0 && activeRuns(state).length === 0;
+  const finished = () => {
+    const bound = boundRun();
+    if (bound) return bound.status !== "active";
+    if (mine().length) sawRuns = true;
+    return sawRuns && mine().length === 0;
+  };
   const leave = async () => {
     const pane = process.env.HERDR_PANE_ID;
     if (pane) await paneClose(pane).catch(() => {});
