@@ -23,7 +23,18 @@ export type WorktreeInfo = {
 };
 
 /** A worktree in `state.worktrees`, keyed by path: which start attempt owns its lease and whether it is still on disk. */
-export type WorktreeRecord = WorktreeInfo & { worker: string; run_id: string; dispatch_id?: string; created_at: string; released_at?: string; removed?: boolean };
+export type WorktreeRecord = WorktreeInfo & {
+  worker: string;
+  run_id: string;
+  dispatch_id?: string;
+  created_at: string;
+  released_at?: string;
+  removed?: boolean;
+  /** Released with --keep-worktree: the sweep leaves it alone. */
+  kept?: boolean;
+  /** Fail-closed pane/cleanup lifecycle; only a confirmed pane closure clears this. */
+  cleanup_protection?: "release_in_progress" | "pane_kept" | "pane_close_failed" | "forgotten";
+};
 
 function git(cwd: string, args: string[]): string {
   try {

@@ -111,11 +111,13 @@ test("pruning drops acked heartbeats first and never an unacked message", async 
   assert.ok(load().messages.some((m) => m.id === "ask0"));
 });
 
-test("inbox returns unread followups and late replies, and acks them", async () => {
+test("inbox returns unread followups and late replies, and resolves unknown remote delivery evidence", async () => {
   const s = base();
+  const remoteHost = { name: "alpha", ssh_target: "alpha", workspace_id: "remote-ws", leader_ssh_target: "leader" };
   s.messages.push(
     msg("f1", "followup", false, { delivered: false }),
     msg("f2", "followup", true, { delivered: true }),
+    msg("f-unknown", "followup", false, { delivered: false, delivery_unknown: { target: "w1:p2", worker_started_at: s.workers.bob!.started_at, execution_host: remoteHost, seq_before: 1, observed_at: "t", reason: "lost response" } }),
     msg("rep1", "reply", false, { reply_to: "a1" }),
     msg("rep2", "reply", true, { reply_to: "a2" }),
     msg("rep3", "reply", false, { reply_to: "a3", to: "alice" }),
@@ -123,12 +125,13 @@ test("inbox returns unread followups and late replies, and acks them", async () 
   );
   save(s);
   const got = await inbox(ctx);
-  assert.deepEqual(got.map((m) => m.id), ["f1", "rep1"]);
+  assert.deepEqual(got.map((m) => m.id), ["f1", "f-unknown", "rep1"]);
   const after = load().messages;
-  for (const id of ["f1", "rep1"]) {
+  for (const id of ["f1", "f-unknown", "rep1"]) {
     const m = after.find((m) => m.id === id)!;
     assert.equal(m.acked, true);
     assert.equal(m.delivered, true);
+    assert.equal(m.delivery_unknown, undefined, "worker inbox consumption resolves unknown-delivery evidence");
   }
   assert.equal(after.find((m) => m.id === "rep3")!.acked, false);
   assert.deepEqual(await inbox(ctx), []);

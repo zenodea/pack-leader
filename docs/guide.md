@@ -66,7 +66,12 @@ it never received its task: read its screen, answer the dialog only when it is
 plainly safe (Pack Leader already accepts Claude Code's folder-trust check on
 its own), then `pack-leader worker resend <name>`.
 
-`run create` opens the Pack Leader sidebar next to you. Each worker starts in a
+`run create` opens the Pack Leader sidebar next to you and an observer agent
+under you (`--no-observer` skips it): a second agent the user talks to about
+the run, which reads `pack-leader observe` (state plus your last turns) and
+never acts on the run. What the user tells it to pass on reaches you as a
+`user` message in `check`. Leave the observer alone: it is not a worker and
+`worker list` does not show it. Each worker starts in a
 hidden tab of its own; the sidebar shows it as a box (agent, runtime and
 state, objective, last message: a heartbeat, a `note`, a report, an open
 question with its options, or your answer) under the run's goal; a click
@@ -104,6 +109,27 @@ Use `pack-leader task create` with `--depends-on` for planned fan-out with order
 then `pack-leader worker start <name> --task <id>` when `pack-leader task list` shows the
 task ready. A dependency that is already `failed` or `blocked` is accepted with a
 `warning`: the new task waits until it succeeds. Prefer parallel waves over chains deeper than three steps.
+
+Task parent links are provenance and tree organization only: they do not block readiness,
+complete a parent automatically, or authorize a worker to spawn children. For example,
+decompose a larger task into records, inspect the tree, then dispatch each ready task
+independently:
+
+```bash
+pack-leader task create --spec "Implement account import" --title "Account import"
+# Suppose the command prints t7.
+pack-leader task create --spec "Parse the CSV input" --title "CSV parser" --parent t7
+pack-leader task create --spec "Validate imported rows" --title "Row validation" --parent t7
+pack-leader task tree t7
+pack-leader worker start parser --task t8
+pack-leader worker start validator --task t9
+```
+
+`task update t8 --parent t7` reparents a task; `--parent none` makes it a root.
+Parent changes are coordinator-only, can be combined with `--status`, and are refused
+while a task is dispatched or has an unsettled dispatch claim. Workers may still read
+trees. `task show` includes its parent and direct child ids. Tree output reports subtree
+status counts and diagnoses malformed legacy links; very deep output is bounded safely.
 
 Keep waiting until every dispatched task has settled. Do not stop, release, or
 start a duplicate worker without a `done` report or positive proof the agent
@@ -148,6 +174,7 @@ listed in `ack_unknown`.
 | `ask`       | The worker is blocked on a question. With `options`, `check` adds them and a `reply_hint` to paste | `pack-leader reply <id> --body "<answer>"`; with `options`, name one (exactly or by a unique case-insensitive prefix) or add `--free` to answer outside them |
 | `attention` | The worker settled, vanished, or went quiet without reporting; `status` says which: `idle`/`done`, `blocked`, `exited` (pane gone), `unverifiable` (agent gone, pane alive), `stalled` (owes a report, no sign of life for `PACK_STALL_MS`, default 20 min, `0` off; never while its question is open) | `pack-leader worker read <name>`; re-prompt it to run `pack-leader done`, or release with `--force` |
 | `note`      | A non-blocking line from a worker that keeps working      | Read it, act if needed (a `send`, a new task), then ack it                               |
+| `user`      | A line from the human (`pack-leader say`, often relayed by the observer) | It is an instruction, not a report: act on it, then ack it                   |
 
 A reply to an ask with options must name one of them; anything else is an
 error that lists the options and leaves the ask open. Pass `--free` only when
@@ -191,6 +218,21 @@ prompt while it handles a follow-up). An orchestrator that sits idle with unread
 reports, questions or notes older than a minute is nudged once more
 (`PACK_RENUDGE_MS`).
 
+## Durable task approval gates
+
+Gates are coordinator-owned records, separate from task status and worker `ask`/`reply` messages. Each stores its run/task, reason, coordinator creator, creation time, status, and (after resolution) the explicit decision, time, and optional reason. Create one for any non-dispatched task, including a task between settled stages:
+
+```text
+pack-leader gate create --task t4 --reason "Review the migration plan before retrying"
+pack-leader gate list [--task t4]
+pack-leader gate show g5
+pack-leader gate resolve g5 --decision approve|reject [--reason "..."]
+```
+
+A pending or rejected gate blocks every new dispatch, including a failed-task retry and a redispatch; all gates on the task must be approved. Task readiness, task summaries, worker views, and run status show gate blockers. Approval releases only that gate. Rejection remains a blocker and does not change the task's status. `task update` cannot bypass a gate: returning a task to pending leaves the gate in place. A task already dispatched, or accepted for start but not yet registered, cannot receive a new gate; gate creation and start admission serialize under the state lock.
+
+Gate creation and resolution require the active run's coordinator. Decisions are explicit and immutable; repeating the same decision is an idempotent retry, while trying to change an approved/rejected decision fails. Gate list/show are read-only and work for closed runs until pruning removes the run. Existing v1 state files load with no gates, and pruning removes gates with their run.
+
 ## Task-spec contract
 
 Every spec must be self-contained. Name:
@@ -212,13 +254,40 @@ is installed or copied into a new worktree; the preamble tells the worker its
 path and branch, to commit on that branch, and to install dependencies itself.
 Pack Leader refuses to start two workers in the same worktree.
 
-`pack-leader worker release` removes a worktree Pack Leader created, together
-with its workspace, and prints its path and branch; the branch is never
-deleted, so the work stays reachable. It is kept instead, and the release says
-so, with `--keep-worktree`, when it has uncommitted changes (never forced), when
-the pane stays open (`--keep-pane` or a retained worker), or when it was an
-existing checkout (`--worktree <path>`). `worker list`, `worker show` and
-`status` show each worker's worktree.
+An optional `--setup-command "..."` is an explicit authorization to execute that
+shell command in the materialized worktree before the worker agent starts. It is
+disabled by default, requires `--worktree new|PATH`, and is never discovered from
+repository scripts. For `--worktree PATH`, it runs in that existing checkout too;
+Pack Leader does not clean up or delete an adopted or dirty checkout if setup fails.
+`--setup-timeout MS` applies only with a setup command (default 120000, maximum
+300000). The bounded stdout/stderr log is private under Pack Leader's state
+folder; its path and truncation status are saved on the dispatch. A nonzero exit,
+timeout, or spawn/log failure prevents both agent launch and task prompt. The hook
+runs once for that `worker start`, not on later `worker prompt` redispatches.
+Setup is not sandboxed: a descendant that deliberately escapes its process group
+may outlive the timeout, but Pack Leader bounds its wait, closes local output
+pipes, and records incomplete cleanup in the dispatch metadata.
+
+`pack-leader worker release` removes a clean worktree Pack Leader created,
+together with its workspace, by default, and prints its path and branch; the
+branch is never deleted, so the work stays reachable and you merge it from the
+main checkout. The accepted `--remove-worktree` flag is a legacy alias for this
+default behavior. Do not pass `--keep-worktree` to "keep the work": the branch
+already does that. Pass it only when the user asked to keep the checkout. A
+worktree is also kept when it has uncommitted changes (never forced), when the
+pane stays open (`--keep-pane` or a retained worker), or when it was an existing
+checkout (`--worktree <path>`).
+
+Automatic cleanup is fail-closed: a checkout is eligible only after its owned
+pane is confirmed closed or herdr confirms it is already missing. A forgotten
+worker (`run close` without `--release`), a retained/kept pane, an uncertain
+close failure, or an interrupted release remains protected across repeated
+sweeps and run pruning. Inspect the pane and checkout before manual recovery; if
+no process still uses it, remove a clean checkout yourself with `git worktree
+remove <path>` (do not use `--force` for dirty work). A protected worktree record
+is retained through run pruning so Pack Leader cannot later mistake it for a
+released checkout.
+`worker list`, `worker show` and `status` show each worker's worktree.
 
 ## Completion accounting
 
@@ -265,28 +334,32 @@ picks a specific one). `task show` lists a task's `dispatch_ids`.
 - It refuses while a worker still has a dispatched task. Wait for the reports,
   or pass `--release` to release every worker (their tasks are marked failed
   with "run closed", their dispatches settled, and each screen archived as on
-  a normal release; worktrees are kept), or `--force` to close anyway.
+  a normal release; their clean checkouts are removed), or `--force` to close anyway.
 - It closes the run's sidebar pane, unless another active run still shows it,
   and forgets the run's workers. Without `--release` their panes stay open and
   are listed under `forgotten`.
 - A closed run cannot be closed again without `--force`, and cannot be written
   to: `--run <id>` or `PACK_RUN_ID` naming it is an error, except for the
   read-only `run show`, `run list`, `task show`, `task list`, `status`,
-  `worker show`, `worker read` and `dispatch list|show`.
+  `worker show`, `worker read`, `dispatch list|show` and `gate list|show`.
 
-Closed runs stay in the state until pruned. `pack-leader run prune` keeps the 5
+`run close` ends with garbage collection: closed runs past the 5 most recent
+go with their records and archives, and every released checkout Pack Leader
+created is removed with its workspace, unless it was kept on request, a worker
+still uses it, or it has uncommitted changes (never forced). `pack-leader run
+prune` does the same on demand and reports it under `worktrees`. It keeps the 5
 most recently closed runs and deletes the rest with every record that
-carries their run id (tasks, workers, messages, dispatches, worktree records)
+carries their run id (tasks, workers, messages, dispatches, gates, worktree records)
 and their screen archives; `--keep N` changes the 5, `--older-than 2d` (units `s m h d w`)
 deletes only runs closed longer ago than that (all of them unless `--keep` is
 also given), `--all` deletes every closed run, and `--dry-run` prints what
 would go (it touches neither the state nor the archives). Active runs are
 never pruned, nor is a run closed less than an hour ago whose workers a `run close` is still releasing; it is
-listed under `skipped` with the command to finish it (`pack-leader run close --run <id> --force`), and a worktree on disk is never deleted by pruning. `pack-leader status` counts closed runs;
+listed under `skipped` with the command to finish it (`pack-leader run close --run <id> --force`). `run prune` also removes eligible released, clean checkouts Pack Leader created; live, forgotten, protected, existing, or dirty checkouts are left in place. Its dry run classifies dirty checkouts as kept without writing state or lock files. `pack-leader status` counts closed runs;
 `status --all` lists them.
 
-Commands that name a task or worker (`task show`, `task update`, `worker show`,
-`read`, `focus`, `stop`, `retain`) only find it in the current run.
+Commands that name a task or worker (`task show`, `task tree`, `task update`,
+`worker show`, `read`, `focus`, `stop`, `retain`) only find it in the current run.
 
 ## Worker obligations
 
@@ -325,38 +398,47 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
 
 ```text
 # runs
-pack-leader run create --objective "..." [--no-sidebar] [--left] [--another] [--cwd D] | show | list
+pack-leader run create --objective "..." [--no-sidebar] [--no-observer] [--left] [--another] [--cwd D] | show | list
 pack-leader run close [--release] [--force]
 pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 pack-leader status [--json] [--all]
 pack-leader COMMAND ... [--run ID]
 # tasks
-pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S [--summary S] [--force]
+pack-leader task create --spec "..." [--title T] [--depends-on a,b] [--parent ID]
+pack-leader task list | show ID | tree [ID] | update ID [--status S] [--parent ID|none] [--summary S] [--force]
+# approval gates (coordinator only)
+pack-leader gate create --task ID --reason TEXT
+pack-leader gate list [--task ID] | show ID
+pack-leader gate resolve ID --decision approve|reject [--reason TEXT]
 # workers
-pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--cwd D] [--placement tab|split]
-                         [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [--title T] [--target-pane P]
-                         [--ratio R] [--no-default-args] [--no-bar] [--timeout MS] [-- agent args]
+pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--cwd D] [--placement tab|split] [--host NAME]
+                         [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [--setup-command STRING [--setup-timeout MS]] [--title T] [--target-pane P]
+                         [--ratio R] [--no-default-args] [--timeout MS] [-- agent args]
+pack-leader worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]
 pack-leader worker prompt NAME --spec "..." [--title T] | --task ID | resend NAME
 pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
-pack-leader worker release NAME [--force] [--keep-pane] [--keep-worktree]
+pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree] [--keep-worktree]
+pack-leader host add NAME --ssh-target ALIAS_OR_USER@HOST --workspace-id ID --leader-ssh-target TARGET [--herdr-socket PATH] [--pack-leader BIN] [--leader-pack-leader BIN]
+pack-leader host list | show NAME | remove NAME
 pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 # messaging
 pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
 pack-leader reply ASK_ID --body "..." [--free]
+pack-leader say "text" | --body "..."
 pack-leader send NAME|@all|@idle|@KIND "text" | --body "..." [--now]
-# worker side
+# worker side (adopted sessions use the explicit context prefix in their preamble)
 pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
 pack-leader ask "question" | --body "..." [--options a,b,c] [--timeout MS] | ask --id ID
 pack-leader note "text" | --body "..." | send WORKER "text" | --body "..." [--now] | heartbeat "note" | --body "..." | inbox
 pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]
 # either
 pack-leader config [show] | pick | set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
-pack-leader skill [--install] | sidebar | leader [--run ID] | help
+pack-leader skill [--install] | sidebar | leader [--run ID] | observe [--turns N] | observer [--close] | help
 ```
 
 `pack-leader help` prints the same commands and flags, with a note on each. Flags are validated for the selected command before it can touch state, archives, herdr, or configuration: unknown options fail with a spelling suggestion when one is likely, and options that take a value (including `--keep` and `--timeout`) fail if the value is missing. Boolean switches reject `=value` forms rather than silently treating them as enabled. List-valued options may be repeated or comma-separated.
 
-A flag value that itself starts with `--` must be written `--flag=value` (`--spec=--x`), or it is read as the next flag. `--body` and `--summary` are free text and take the next word whatever it is (`reply m5 --body "--no"`). The `--` separator ends Pack Leader flag parsing; for example, `worker start ... -- --model x` passes those native agent arguments through unchanged.
+A flag value that itself starts with `--` must be written `--flag=value` (`--spec=--x`), or it is read as the next flag. `--body`, `--summary`, and `--setup-command` are free text and take the next word whatever it is (`reply m5 --body "--no"`). The `--` separator ends Pack Leader flag parsing; for example, `worker start ... -- --model x` passes those native agent arguments through unchanged.
 
 What the less obvious flags do:
 
@@ -366,20 +448,63 @@ What the less obvious flags do:
   `--left` opens the sidebar on the left; `--cwd D` must be an existing
   directory and is stored as an absolute path.
 - `task update`: `--summary S` records an outcome summary; `--force` lets a
-  succeeded task change status (otherwise refused).
+  succeeded task change status (otherwise refused); neither bypasses an unapproved gate.
+  `--parent ID|none` changes provenance independently of status; dispatched or
+  actively claimed tasks cannot be reparented.
 - `config set`: `--default` records the selected kind as the default (without
   `--kind`, the current/default kind is selected). `--kind K` also selects that
   kind as the default.
 - `worker start`: `--title T` (task title for `--spec`), `--target-pane P` and
   `--ratio R` (with `--placement split`), `--no-default-args` (no
-  `--allowedTools` for the agent), `--no-bar` (no "back to leader" bar above
-  the worker's pane), `--timeout MS` (agent start, default 45000).
+  `--allowedTools` for the agent), `--timeout MS` (agent start, default 45000), and
+  `--setup-command STRING` (explicit shell authorization, only with `--worktree`,
+  once before agent launch; `--setup-timeout MS` defaults to 120000, max 300000).
+  Setup output is privately logged with a 256 KiB cap; failures block launch and
+  preserve dirty or existing checkouts. Setup is not rerun on `worker prompt`.
   A split without `--direction` goes right; `--direction` with `--placement tab`
-  is an error.
+  is an error. `--host NAME --cwd /remote/path` starts in an existing remote
+  workspace; it accepts tab placement only and rejects worktree/setup options before dispatch.
+- `worker adopt NAME`: attach to one existing named herdr agent only when it is
+  idle or done. `--target-pane P` selects the exact pane when names are duplicated;
+  without it, the name must match one live agent. The session is never restarted,
+  renamed, or moved, and release never closes its pane or tab. Adopted sessions do
+  not inherit Pack Leader's `PACK_*` environment: every dispatch and redispatch
+  includes a shell-quoted `env PACK_ROLE=worker ... pack-leader` prefix with the
+  current run, worker, task, dispatch, and state-directory values; use it before
+  each worker command.
 - `WORKER-COMMAND` is `done`, `ask`, `heartbeat`, `note`, `send` or `inbox`:
   `--run`, `--worker`, `--task`, `--dispatch` override the IDs from the environment
   (orchestrator `send` accepts `--run` only); `ask`, `heartbeat`, `note` and
   `send` also take the text as `--body "..."`.
+- `host add NAME`: stores a trusted SSH profile in `hosts.json` under Pack Leader
+  configuration. `--ssh-target` is an SSH config alias or `user@host`, and
+  `--leader-ssh-target` is the reciprocal target the remote worker uses to call
+  back to this leader. No password or private key is stored. `--pack-leader` and
+  `--leader-pack-leader` name the remote and leader executable paths; the optional
+  `--herdr-socket` selects the remote Unix socket. Adding a profile does not
+  contact the host; `host show/list/remove` manage profiles.
+- Remote prerequisites: both machines need OpenSSH public-key/agent access in
+  **both directions** (leader → execution host and execution host → leader),
+  pre-approved host keys, `BatchMode`-compatible authentication, Node and Pack
+  Leader/herdr installed on the execution host, and an already-open remote herdr
+  workspace. The remote CLI helper only relays allowlisted herdr RPCs over SSH;
+  worker callbacks are limited to done/ask/note/heartbeat/send/inbox and write
+  the leader's authoritative local state. The relay pins the leader's resolved
+  state directory/socket before startup; relative `--report-path` values resolve
+  against the remote worker cwd. If `--herdr-socket` is omitted, the helper uses
+  the remote host's normal `herdrSocketPath()` fallback. SSH is the authentication
+  boundary; there is no TCP state/API listener.
+- Host profiles are snapshotted into each remote worker and dispatch. Editing or
+  removing a profile affects future starts, not in-flight worker operations.
+  Remote pane/workspace IDs are scoped to their host. On disconnect, remote
+  liveness becomes `unreachable`; tasks are preserved and never inferred exited.
+  Remote release is fenced against remote redispatch/resend across SSH preflight,
+  archive, close and state removal; state locks are not held over network I/O.
+  SSH timeouts/output limits use bounded TERM/KILL and close local pipes, but this
+  is not a process sandbox and the remote request may already have been accepted.
+  Remote worktree creation/removal, local setup hooks, and adoption are not
+  supported; use a directory that already exists on the remote host. Without a
+  configured SSH host, real remote end-to-end operation cannot be verified.
 - Run by herdr, not by agents: `sidebar-open [--left] [--no-focus]` and `leader`
   (plugin actions; `leader` focuses the orchestrator of the run the focused
   pane belongs to) and `event pane.closed|pane.exited|tab.closed` (plugin events).

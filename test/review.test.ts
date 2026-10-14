@@ -21,8 +21,8 @@ delete process.env.PACK_WORKTREE_DIR;
 
 const { emptyState, load, save, update } = await import("../src/state.ts");
 const { ack, ask, ASK_TICK_MS, check, done, inbox, markHerdrUnreachable, reply, send, sendTo, sync } = await import("../src/inbox.ts");
-const { getAgent, getPane, herdr, labelPane, subscribeBackoff } = await import("../src/herdr.ts");
-const { preamble, redispatch, releaseWorker, startWorker } = await import("../src/workers.ts");
+const { getAgent, getPane, herdr, labelPane, observePromptReceipt, promptLanded, subscribeBackoff } = await import("../src/herdr.ts");
+const { baseline, preamble, promptWithRetry, redispatch, releaseWorker, startWorker } = await import("../src/workers.ts");
 const { closeRun, pruneRuns } = await import("../src/runs.ts");
 
 /** A handler's answer that is written as is (`""`: no answer at all), for transport tests. */
@@ -169,6 +169,33 @@ test("F2: a redispatched worker that finishes quickly without reporting raises a
   // No sync saw it working: idle at seq 7 is still two state changes past the pre-prompt seq 5.
   const created = await sync();
   assert.deepEqual(created.map((m) => [m.status, m.dispatch_id]), [["idle", r.dispatch_id]]);
+});
+
+test("local timeout recognizes working without a sequence while remote receipt stays unknown", async () => {
+  for (const missingBaseline of [false, true]) {
+    const s = base();
+    s.workers.bob = worker("bob");
+    save(s);
+    calls.length = 0;
+    let prompted = false;
+    handler = (method) => {
+      if (method === "agent.get") {
+        if (missingBaseline && !prompted) throw herdrError("unreachable", "baseline unavailable");
+        return { agent: { pane_id: "w1:p-bob", agent_status: prompted ? "working" : "idle" } };
+      }
+      if (method === "agent.prompt") {
+        prompted = true;
+        throw herdrError("timeout", "accepted but response timed out");
+      }
+      throw new Error(`unexpected ${method}`);
+    };
+    const seq = await baseline("bob", "w1:p-bob");
+    assert.equal(seq, 0, "local compatibility retains zero when the optional baseline is absent/unavailable");
+    await promptWithRetry("w1:p-bob", "one dispatch", seq, 2);
+    assert.equal(prompts().length, 1, "working local agent must not receive a duplicate");
+    assert.equal(await promptLanded("w1:p-bob", 0), true);
+    assert.equal(await observePromptReceipt("w1:p-bob", undefined), "unknown", "strict remote observer still refuses missing sequence evidence");
+  }
 });
 
 // ---- F3: a redispatch whose prompt fails says how to recover -------------------------------------
@@ -639,7 +666,7 @@ test("R10: release and run close drop the worker's undelivered followups and unc
   s.workers.bob = worker("bob", { started_at: iso(5000), owns_pane: false });
   s.workers.ann = worker("ann", { owns_pane: false });
   s.messages.push(
-    msg("f1", { ts: iso(1000) }),
+    msg("f1", { ts: iso(1000), delivery_unknown: { target: "remote:p1", worker_started_at: s.workers.bob!.started_at, execution_host: { name: "alpha", ssh_target: "alpha", workspace_id: "remote", leader_ssh_target: "leader" }, seq_before: 1, observed_at: "t", reason: "lost response" } }),
     msg("r1", { type: "reply", reply_to: "a0", ts: iso(1000) }),
     msg("f2", { to: "ann" }),
     msg("n1", { type: "note", from: "ann", to: "orchestrator" }),
@@ -649,6 +676,7 @@ test("R10: release and run close drop the worker's undelivered followups and unc
   await releaseWorker(load().runs.r1!, "bob", {});
   const acked = () => Object.fromEntries(load().messages.map((m) => [m.id, m.acked]));
   assert.deepEqual(acked(), { f1: true, r1: true, f2: false, n1: false });
+  assert.equal(load().messages.find((m) => m.id === "f1")!.delivery_unknown, undefined, "release resolves persisted unknown delivery with the queued followup");
   await closeRun("r1");
   assert.deepEqual(acked(), { f1: true, r1: true, f2: true, n1: false }, "the orchestrator's own messages stay");
 });

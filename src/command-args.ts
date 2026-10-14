@@ -1,4 +1,5 @@
 import type { Args } from "./args.ts";
+import { SETUP_MAX_TIMEOUT_MS } from "./setup-policy.ts";
 
 type FlagKind = "switch" | "value" | "optional";
 type FlagSchema = Readonly<Record<string, FlagKind>>;
@@ -12,20 +13,22 @@ const schema = (switches: string[] = [], values: string[] = [], optional: string
 
 const withRun = (flags: FlagSchema): FlagSchema => ({ ...flags, run: "value" });
 const run = {
-  create: withRun(schema(["no-sidebar", "left", "another"], ["objective", "cwd"])),
+  create: withRun(schema(["no-sidebar", "no-observer", "left", "another"], ["objective", "cwd"])),
   show: withRun(schema()),
   list: withRun(schema()),
   close: withRun(schema(["release", "force"])),
   prune: withRun(schema(["all", "dry-run"], ["keep", "older-than"])),
 };
 const task = {
-  create: withRun(schema([], ["spec", "title", "depends-on"])),
+  create: withRun(schema([], ["spec", "title", "depends-on", "parent"])),
   list: withRun(schema()),
   show: withRun(schema()),
-  update: withRun(schema(["force"], ["status", "summary"])),
+  tree: withRun(schema()),
+  update: withRun(schema(["force"], ["status", "summary", "parent"])),
 };
 const worker = {
-  start: withRun(schema(["retry", "no-default-args", "no-bar"], ["spec", "task", "kind", "model", "thinking", "cwd", "placement", "direction", "worktree", "base", "branch", "title", "target-pane", "ratio", "timeout"])),
+  start: withRun(schema(["retry", "no-default-args"], ["spec", "task", "kind", "model", "thinking", "cwd", "host", "placement", "direction", "worktree", "base", "branch", "title", "target-pane", "ratio", "timeout", "setup-command", "setup-timeout"])),
+  adopt: withRun(schema([], ["spec", "task", "title", "target-pane"])),
   prompt: withRun(schema([], ["spec", "task", "title"])),
   resend: withRun(schema()),
   list: withRun(schema()),
@@ -39,6 +42,18 @@ const worker = {
 const dispatch = {
   list: withRun(schema([], ["task", "worker"])),
   show: withRun(schema(["preamble"])),
+};
+const gate = {
+  create: withRun(schema([], ["task", "reason"])),
+  list: withRun(schema([], ["task"])),
+  show: withRun(schema()),
+  resolve: withRun(schema([], ["decision", "reason"])),
+};
+const host = {
+  add: schema([], ["ssh-target", "workspace-id", "herdr-socket", "pack-leader", "leader-ssh-target", "leader-pack-leader"]),
+  list: schema(),
+  show: schema(),
+  remove: schema(),
 };
 const workerContext: FlagSchema = { worker: "value", task: "value", dispatch: "value", run: "value" };
 const commandFlags: Record<string, FlagSchema> = {
@@ -58,12 +73,15 @@ const commandFlags: Record<string, FlagSchema> = {
   skill: schema(["install"]),
   sidebar: schema(),
   leader: withRun(schema()),
+  say: withRun(schema([], ["body"])),
+  observe: withRun(schema([], ["turns"])),
+  observer: withRun(schema(["close"])),
   "sidebar-open": schema(["left", "no-focus"]),
   event: schema(),
 };
 
-const subcommands: Record<string, Record<string, FlagSchema>> = { run, task, worker, dispatch };
-const defaultSubcommands = { run: "show", task: "list", worker: "list", dispatch: "list" };
+const subcommands: Record<string, Record<string, FlagSchema>> = { run, task, worker, dispatch, gate, host };
+const defaultSubcommands = { run: "show", task: "list", worker: "list", dispatch: "list", gate: "list", host: "list" };
 
 function ownValue<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
@@ -103,13 +121,22 @@ export function validateCommandArgs(command: string, args: Args): void {
     }
     if (kind === "optional" && value === true) continue;
     if (value === true || value.length === 0) throw new Error(missingValueMessage(name));
-    if (["keep", "timeout", "lines", "ratio"].includes(name) && !Number.isFinite(Number(value))) {
+    if (["keep", "timeout", "lines", "ratio", "setup-timeout"].includes(name) && !Number.isFinite(Number(value))) {
       throw new Error(`--${name} must be a number`);
     }
     if (name === "timeout" && Number(value) < 0) throw new Error("--timeout must be non-negative");
+    if (name === "setup-timeout" && (!Number.isInteger(Number(value)) || Number(value) < 1 || Number(value) > SETUP_MAX_TIMEOUT_MS)) {
+      throw new Error(`--setup-timeout must be an integer from 1 to ${SETUP_MAX_TIMEOUT_MS} milliseconds`);
+    }
     if (name === "older-than" && !/^\d+(?:\.\d+)?(?:ms|s|m|h|d|w)$/.test(value.trim())) {
       throw new Error(`bad duration "${value}": use a number and a unit, like 30m, 12h, 2d, 1w`);
     }
+  }
+  if (command === "worker" && (args.positional[0] ?? "list") === "start") {
+    const setupCommand = args.flags.get("setup-command");
+    if (typeof setupCommand === "string" && !setupCommand.trim()) throw new Error("--setup-command requires a non-empty command");
+    if (args.flags.has("setup-command") && !args.flags.has("worktree")) throw new Error("--setup-command requires --worktree");
+    if (args.flags.has("setup-timeout") && !args.flags.has("setup-command")) throw new Error("--setup-timeout requires --setup-command");
   }
 }
 
@@ -121,8 +148,8 @@ function missingValueMessage(name: string): string {
 }
 
 function commandName(command: string, args: Args): string {
-  const subcommands = ["run", "task", "worker", "dispatch", "config"];
-  return subcommands.includes(command) ? `${command} ${args.positional[0] ?? (command === "task" || command === "worker" || command === "dispatch" ? "list" : "show")}` : command;
+  const subcommands = ["run", "task", "worker", "dispatch", "gate", "host", "config"];
+  return subcommands.includes(command) ? `${command} ${args.positional[0] ?? (["task", "worker", "dispatch", "gate", "host"].includes(command) ? "list" : "show")}` : command;
 }
 
 /** Return a clear suggestion only for a single, reasonably close supported flag. */

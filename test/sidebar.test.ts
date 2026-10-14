@@ -15,7 +15,7 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = join(dir, "no-herdr.sock");
 
 const { emptyState } = await import("../src/state.ts");
-const { boundRunFor, boxAt, boxLines, clickOn, goalLines, keyName, lastMessageFor, scrollFor, splitMouse, statusOf, SELECTED_MESSAGE_LINES } = await import("../src/sidebar.ts");
+const { boundRunFor, boxAt, boxLines, clickOn, goalLines, keyName, lastMessageFor, scrollFor, splitMouse, statusOf, sidebarWorkerTarget, SELECTED_MESSAGE_LINES } = await import("../src/sidebar.ts");
 const { bold, width } = await import("../src/ansi.ts");
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -48,6 +48,18 @@ test("statusOf: liveness findings override herdr's state", () => {
   assert.equal(statusOf(worker({ liveness: "unverifiable" }), live), "unverifiable");
   assert.equal(statusOf(worker({ stalled_since: "t" }), live), "stalled");
   assert.equal(statusOf(worker({ stalled_since: "t" }), null), "stalled");
+});
+
+test("remote sidebar status and targets are independent of local pane IDs", () => {
+  const remote = worker({ execution_host: { name: "alpha", ssh_target: "remote.example", workspace_id: "w1", leader_ssh_target: "leader" }, liveness: "live", last_status: "working" });
+  const collidingLocal = new Map([[remote.pane_id, { status: "idle" as const }]]);
+  assert.equal(statusOf(remote, collidingLocal), "working");
+  assert.equal(statusOf(remote, new Map()), "working");
+  assert.equal(statusOf({ ...remote, liveness: "unreachable", stalled_since: "t" }, collidingLocal), "unreachable");
+  assert.equal(sidebarWorkerTarget(remote), remote.pane_id);
+  assert.equal(sidebarWorkerTarget(worker({ adopted: true })), "w1:p2");
+  assert.equal(sidebarWorkerTarget(worker()), "bob");
+  assert.match(boxLines(remote, null, null, "unreachable", 80).map(plain).join("\n"), /@alpha[\s\S]*UNREACHABLE/);
 });
 
 test("keyName: shift-r from readline is R; plain letters, arrows and punctuation pass through", () => {
@@ -192,10 +204,9 @@ test("goalLines: one paragraph, Goal: in bold on the first line, no hanging inde
   assert.ok(g[0]!.trimStart().startsWith(bold("Goal:") + " Review"));
   for (const l of g) {
     assert.ok(width(l) <= 30);
-    const pad = /^ */.exec(plain(l))![0].length;
-    assert.equal(pad, Math.floor((30 - width(l.trimStart())) / 2), "centred");
+    assert.doesNotMatch(plain(l), /^\s/, "left aligned");
   }
-  assert.equal(plain(g.map((l) => l.trim()).join(" ")), "Goal: Review all changes on the branch for issue 129 and triage the outstanding comments");
+  assert.equal(plain(g.join(" ")), "Goal: Review all changes on the branch for issue 129 and triage the outstanding comments");
   assert.equal(plain(goalLines("line one\n\n  line two", 40).join("|")).trim(), "Goal: line one line two", "newlines flatten");
 });
 

@@ -3,10 +3,11 @@
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { getPane, renamePane, logHerdrError, paneClose, tabRename } from "./herdr.ts";
-import { activeRuns, acquire, log, now, release, runWorkers, type Run, type State, update } from "./state.ts";
-import { archiveDir, settleDispatch } from "./dispatch.ts";
+import { closeObserver } from "./observer.ts";
+import { activeRuns, acquire, log, now, release, runWorkers, START_CLAIM_MS, type Run, type State, update } from "./state.ts";
+import { archiveDir, settleDispatch, startClaimIsFresh } from "./dispatch.ts";
 import { stateDir } from "./paths.ts";
-import { START_CLAIM_MS, type ReleaseResult, releaseWorker } from "./workers.ts";
+import { type ReleaseResult, releaseWorker } from "./workers.ts";
 
 const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
 const RUN_START_FENCE_TIMEOUT_MS = 120_000;
@@ -92,6 +93,7 @@ export function pruneRuns(state: State, o: PruneOptions = {}): PruneResult {
       const map = v as Record<string, unknown>;
       for (const [k, e] of Object.entries(map)) {
         if (!owned(e)) continue;
+        if (key === "worktrees" && typeof e === "object" && e !== null && "cleanup_protection" in e) continue;
         delete map[k];
         n++;
       }
@@ -121,6 +123,7 @@ export type CloseResult = {
   forgotten: { worker: string; pane_id: string; tab_id: string | null }[];
   failed_tasks: string[];
   closed_sidebar: string | null;
+  closed_observer: string | null;
 };
 
 /**
@@ -139,10 +142,7 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
     const busy = workers.filter((w) => w.task_id && state.tasks[w.task_id]?.status === "dispatched");
     const registered = new Set(workers.map((w) => w.dispatch_id).filter((id): id is string => Boolean(id)));
     const starting = Object.values(state.dispatches ?? {}).filter((d) => d.run_id === runId && !d.settled_at && !registered.has(d.id));
-    const activeStarts = starting.filter((d) => {
-      const started = Date.parse(d.started_at);
-      return Number.isFinite(started) && Date.now() - started <= START_CLAIM_MS;
-    });
+    const activeStarts = starting.filter((d) => startClaimIsFresh(d, START_CLAIM_MS));
     if (!o.release && !o.force) {
       if (busy.length) throw new Error(`workers still dispatched in run ${runId}: ${busy.map((w) => w.name).join(", ")}; pass --release to release them, or --force to close anyway`);
       if (activeStarts.length) throw new Error(`workers still starting in run ${runId}: ${activeStarts.map((d) => d.worker).join(", ")}; pass --release to release them, or --force to close anyway`);
@@ -198,7 +198,10 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
     for (const w of runWorkers(state, runId)) {
       forgotten.push({ worker: w.name, pane_id: w.pane_id, tab_id: w.tab_id ?? null });
       const wt = w.worktree ? state.worktrees?.[w.worktree.path] : undefined;
-      if (wt && wt.worker === w.name && wt.run_id === w.run_id && wt.dispatch_id === w.worktree_dispatch_id) wt.released_at ??= now();
+      if (wt && wt.worker === w.name && wt.run_id === w.run_id && wt.dispatch_id === w.worktree_dispatch_id) {
+        delete wt.released_at;
+        wt.cleanup_protection = "forgotten";
+      }
       delete state.workers[w.name];
     }
     const r = state.runs[runId];
@@ -216,8 +219,9 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
       logHerdrError("sidebar.close", err, { run: runId, pane: sidebar });
     }
   }
+  const closed_observer = await closeObserver(run);
   if (run.orchestrator.pane_id) await renamePane(run.orchestrator.pane_id, null);
   if (run.orchestrator.tab_id && run.orchestrator.tab_label) await tabRename(run.orchestrator.tab_id, run.orchestrator.tab_label).catch(() => {});
-  log({ event: "run.closed", run: runId, released: released.map((r) => r.worker), forgotten: forgotten.map((f) => f.worker), failed_tasks: failed, closed_sidebar });
-  return { closed: runId, released, forgotten, failed_tasks: failed, closed_sidebar };
+  log({ event: "run.closed", run: runId, released: released.map((r) => r.worker), forgotten: forgotten.map((f) => f.worker), failed_tasks: failed, closed_sidebar, closed_observer });
+  return { closed: runId, released, forgotten, failed_tasks: failed, closed_sidebar, closed_observer };
 }

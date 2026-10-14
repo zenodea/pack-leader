@@ -4,6 +4,7 @@ import { createConnection, type Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { herdrSocketPath } from "./paths.ts";
 import { log } from "./state.ts";
+import { currentExecutionHost, remoteHerdr } from "./remote.ts";
 
 export class HerdrError extends Error {
   readonly code: string;
@@ -31,6 +32,8 @@ export function lineReader(onLine: (line: string) => void): (chunk: Buffer | str
 let nextId = 0;
 
 export function herdr<T = any>(method: string, params: Record<string, unknown> = {}, opts: { timeoutMs?: number } = {}): Promise<T> {
+  const remote = currentExecutionHost();
+  if (remote) return remoteHerdr<T>(remote, method, params, opts.timeoutMs);
   const id = `pack-leader:${process.pid}:${++nextId}`;
   const timeoutMs = opts.timeoutMs ?? 15_000;
   return new Promise<T>((resolve, reject) => {
@@ -160,6 +163,9 @@ export const paneSwap = (source_pane_id: string, target_pane_id: string) => herd
 /** The share of its split that the first (top or left) pane of `pane_id`'s split takes. herdr clamps to its minimum sizes. */
 export const setSplitRatio = (pane_id: string, ratio: number) => herdr("layout.set_split_ratio", { pane_id, path: [], ratio });
 
+/** A workspace, with the checkout it shows when it is a worktree workspace. */
+export const workspaceGet = async (workspace_id: string): Promise<{ workspace_id: string; label?: string; worktree?: { checkout_path?: string } | null }> => (await herdr("workspace.get", { workspace_id })).workspace;
+
 /** herdr's worktree API: the checkout opens as a workspace of its own (unfocused), with a shell tab. */
 export type WorktreeOpened = { workspace: { workspace_id: string }; tab: TabInfo; root_pane: PaneInfo; already_open?: boolean };
 export const worktreeCreate = (p: { cwd: string; path: string; branch: string; base: string; label: string }): Promise<WorktreeOpened> => herdr("worktree.create", { ...p, focus: false }, { timeoutMs: 60_000 });
@@ -271,10 +277,44 @@ export function subscribe(subs: Subscription[], onEvent: (e: EventEnvelope) => v
 }
 
 /**
- * After a prompt that timed out: did it land anyway? An agent whose state counter moved
- * past `seqBefore`, or that is working now, received something since. A guess, not a
- * receipt: herdr has no delivery acknowledgement.
+ * After a prompt error on a remote host, herdr has no delivery receipt. Its state
+ * counter is only heuristic evidence: changed/working means probable receipt,
+ * unchanged from a successfully captured baseline permits retry, and any failed
+ * or invalid observation is unknown.
  */
+export type PromptReceiptObservation = "received" | "not_received" | "unknown";
+
+const AMBIGUOUS_REMOTE_PROMPT_ERRORS = new Set([
+  "ssh_failed", "ssh_timeout", "ssh_unavailable", "ssh_output_limit", "remote_bad_reply",
+  "bad_reply", "herdr_reply_too_large", "unreachable", "disconnected", "timeout",
+]);
+
+export function isRemotePromptReceiptError(err: unknown, remote = Boolean(currentExecutionHost())): boolean {
+  return remote && AMBIGUOUS_REMOTE_PROMPT_ERRORS.has(String((err as any)?.code ?? ""));
+}
+
+export class PromptDeliveryUnknownError extends HerdrError {
+  constructor(target: string, cause: unknown) {
+    const detail = cause instanceof Error ? `${(cause as Error & { code?: string }).code ?? "error"}: ${cause.message}` : String(cause);
+    super("remote_delivery_unknown", `delivery of the remote prompt to pane ${target} is unknown (${detail}); do not resend automatically. Inspect the worker on its snapshotted execution host and confirm its task/dispatch state before using \`pack-leader worker prompt\`; the current attempt remains authoritative.`);
+    this.name = "PromptDeliveryUnknownError";
+  }
+}
+
+export async function observePromptReceipt(target: string, seqBefore: number | undefined): Promise<PromptReceiptObservation> {
+  try {
+    const a = await getAgent(target);
+    const seq = a?.state_change_seq;
+    if (!Number.isSafeInteger(seq) || (seq as number) < 0 || !["idle", "working", "blocked", "done", "unknown"].includes(a.agent_status)) return "unknown";
+    if (a.agent_status === "working" || (seqBefore !== undefined && (seq as number) > seqBefore)) return "received";
+    if (seqBefore !== undefined && seq === seqBefore) return "not_received";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Local herdr compatibility: working is evidence even when the optional counter is absent. */
 export async function promptLanded(target: string, seqBefore: number): Promise<boolean> {
   try {
     const a = await getAgent(target);

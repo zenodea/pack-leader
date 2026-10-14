@@ -89,8 +89,27 @@ test("WF-4: local usage errors keep compatible JSON and do not invent a herdr co
   assert.match(result.json.error, /usage: pack-leader worker start NAME/);
 });
 
-test("WF-4: non-Error thrown values become a safe JSON error, not serialized details", async () => {
+test("WF-4: CLI error codes are exposed only for known safe error classes", async () => {
   const { cliErrorPayload } = await import("../src/cli.ts");
+  const { HostProfileError } = await import("../src/hosts.ts");
+  const { RemoteError } = await import("../src/remote.ts");
   assert.deepEqual(cliErrorPayload({ code: "not_found", message: "secret", token: "secret" }), { error: "unknown error" });
+  assert.deepEqual(cliErrorPayload(Object.assign(new Error("safe message"), { code: "arbitrary_internal_code" })), { error: "safe message" });
+  assert.deepEqual(cliErrorPayload(new RemoteError("ssh_failed", "remote transport failed")), { error: "remote transport failed", code: "ssh_failed" });
+  assert.deepEqual(cliErrorPayload(new HostProfileError("invalid host")), { error: "invalid host", code: "invalid_host_profile" });
   assert.deepEqual(cliErrorPayload("plain failure"), { error: "plain failure" });
+});
+
+test("known gate errors retain their code while arbitrary code properties are ignored", async () => {
+  const [{ cliErrorPayload }, { GateError }] = await Promise.all([
+    import("../src/cli.ts"),
+    import("../src/gates.ts"),
+  ]);
+  assert.deepEqual(cliErrorPayload(new GateError("task_gate_blocked", "approval required")), {
+    error: "approval required",
+    code: "task_gate_blocked",
+  });
+  assert.deepEqual(cliErrorPayload(Object.assign(new Error("untrusted code"), { code: "spoofed" })), {
+    error: "untrusted code",
+  });
 });

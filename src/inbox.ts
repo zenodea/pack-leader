@@ -3,10 +3,11 @@
 import { watch, type FSWatcher } from "node:fs";
 import { basename, dirname } from "node:path";
 import { hostname } from "node:os";
-import { agentPrompt, getAgent, type HerdrError, listAgents, listPanes, logHerdrError, promptLanded, type AgentStatus, subscribe } from "./herdr.ts";
+import { agentPrompt, getAgent, type HerdrError, isRemotePromptReceiptError, listAgents, listPanes, logHerdrError, observePromptReceipt, promptLanded, type AgentStatus, subscribe } from "./herdr.ts";
 import { stateFile } from "./paths.ts";
 import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load } from "./state.ts";
 import { settleDispatch } from "./dispatch.ts";
+import { withExecutionHost } from "./remote.ts";
 
 export type WorkerContext = { run_id: string; worker: string; task_id: string | null; dispatch_id: string | null };
 
@@ -94,6 +95,7 @@ export function dropUndelivered(state: State, w: Pick<Worker, "name" | "run_id" 
     if (m.to !== w.name || m.acked || (m.type !== "followup" && m.type !== "reply") || !withinWorkerLifetime(state, w, m)) continue;
     m.acked = true;
     delete m.delivery_claim;
+    delete m.delivery_unknown;
     n++;
   }
   return n;
@@ -107,15 +109,15 @@ export const ASK_TICK_MS = 2000;
  * it, so the directory is watched, not the file), or after the fallback tick. A
  * change that comes between two waits makes the next wait return at once.
  */
-function stateWatcher(): { next: (ms: number) => Promise<void>; close: () => void } {
-  let wake: (() => void) | null = null;
+function stateWatcher(): { next: (ms: number) => Promise<boolean>; cancel: () => void; close: () => void } {
+  let wake: ((changed: boolean) => void) | null = null;
   let dirty = false;
   let w: FSWatcher | null = null;
   const name = basename(stateFile);
   try {
     w = watch(dirname(stateFile), (_e, f) => {
       if (f && f !== name) return;
-      if (wake) wake();
+      if (wake) wake(true);
       else dirty = true;
     });
     w.on("error", () => {
@@ -125,19 +127,21 @@ function stateWatcher(): { next: (ms: number) => Promise<void>; close: () => voi
   } catch {
     w = null;
   }
+  const cancel = () => wake?.(false);
   return {
     next: (ms) =>
-      new Promise<void>((r) => {
-        if (dirty) return (dirty = false), r();
-        const timer = setTimeout(fire, ms);
-        function fire() {
+      new Promise<boolean>((resolve) => {
+        if (dirty) return (dirty = false), resolve(true);
+        const timer = setTimeout(() => finish(false), ms);
+        function finish(changed: boolean) {
           clearTimeout(timer);
           wake = null;
-          r();
+          resolve(changed);
         }
-        wake = fire;
+        wake = finish;
       }),
-    close: () => w?.close(),
+    cancel,
+    close: () => { cancel(); w?.close(); },
   };
 }
 
@@ -238,15 +242,18 @@ export const replyHint = (ask: Pick<Message, "id" | "options">): string =>
 
 export async function done(ctx: WorkerContext, o: { outcome: "succeeded" | "failed"; summary: string; files: string[]; reportPath: string | null }): Promise<Message> {
   const { msg, run } = await update((state) => {
-    const run = state.runs[ctx.run_id];
-    if (!run) throw new Error(`no run ${ctx.run_id}`);
-    const w = state.workers[ctx.worker];
-    if (!w) throw new Error(`worker "${ctx.worker}" is not registered (released?)`);
-    const taskId = ctx.task_id ?? w.task_id;
-    const t = taskId ? state.tasks[taskId] : null;
+    const rawRun = state.runs[ctx.run_id];
+    if (!rawRun) throw new Error(`no run ${ctx.run_id}`);
+    if (rawRun.status !== "active") throw new Error(`run ${rawRun.id} is closed`);
+    const rawWorker = state.workers[ctx.worker];
+    if (!rawWorker || rawWorker.run_id !== rawRun.id) throw new Error(`worker "${ctx.worker}" is not registered in run ${rawRun.id}`);
+    const taskId = ctx.task_id ?? rawWorker.task_id;
+    const rawTask = taskId ? state.tasks[taskId] : null;
+    if (!rawTask) throw new Error(`no task ${taskId}`);
+    const dispatch = ctx.dispatch_id ?? rawWorker.dispatch_id;
+    if (rawTask.dispatch_id !== dispatch) throw new Error(`stale dispatch ${dispatch}: task ${rawTask.id} is on ${rawTask.dispatch_id}. Use the IDs from your latest preamble.`);
+    const { run, worker: w, task: t } = requireCurrentWorker(state, { ...ctx, task_id: taskId, dispatch_id: dispatch });
     if (!t) throw new Error(`no task ${taskId}`);
-    const dispatch = ctx.dispatch_id ?? w.dispatch_id;
-    if (t.dispatch_id !== dispatch) throw new Error(`stale dispatch ${dispatch}: task ${t.id} is on ${t.dispatch_id}. Use the IDs from your latest preamble.`);
     if (t.status !== "dispatched") throw new Error(`task ${t.id} is already ${t.status} (${t.outcome?.summary ?? "no summary"}); nothing more to report for this dispatch`);
     t.status = o.outcome;
     t.updated_at = now();
@@ -283,6 +290,21 @@ export async function note(ctx: WorkerContext, body: string): Promise<Message> {
   });
   log({ event: "worker.note", run: run.id, worker: ctx.worker, id: msg.id });
   await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} left a note (${msg.id}); it is not waiting on you. Run \`pack-leader check --wait --timeout 540000\` and ack it with \`--ack ${msg.id}\`.`);
+  return msg;
+}
+
+/**
+ * A line from the human to the orchestrator (`pack-leader say`, from the observer or any shell):
+ * a `user` message in the run's inbox, read by the next `check` like a report. An idle
+ * orchestrator is nudged; the human is at the observer, not at its keyboard, so nothing collides.
+ */
+export async function say(run: Run, body: string): Promise<Message> {
+  const msg = await update((state) => {
+    if (state.runs[run.id]?.status !== "active") throw new Error(`run ${run.id} is closed`);
+    return message(state, { run_id: run.id, type: "user", from: "user", to: "orchestrator", task_id: null, dispatch_id: null, body });
+  });
+  log({ event: "user.say", run: run.id, id: msg.id });
+  await nudgeOrchestrator(run, `Pack Leader: the user says (${msg.id}): ${body.replace(/\s+/g, " ").trim()}. Run \`pack-leader check --wait --timeout 540000\`, act on it, and ack it with \`--ack ${msg.id}\`.`);
   return msg;
 }
 
@@ -375,6 +397,7 @@ export async function inbox(ctx: WorkerContext): Promise<Message[]> {
       // message, and consuming it here is itself a final acknowledgment.
       if (m.delivery_claim && deliveryClaimIsActive(m.delivery_claim)) continue;
       delete m.delivery_claim;
+      delete m.delivery_unknown;
       m.acked = true;
       m.delivered = true;
       mine.push(m);
@@ -408,7 +431,7 @@ export async function reply(run: Run, askId: string, body: string, o: { free?: b
  * `from` is "orchestrator" or the sending worker's name.
  */
 export async function send(run: Run, worker: string, body: string, force: boolean, from = "orchestrator", senderContext?: WorkerContext): Promise<{ message: Message; delivered: boolean }> {
-  const { msg, waiting } = await update((state) => {
+  const { msg, waiting, target, executionHost } = await update((state) => {
     const currentRun = state.runs[run.id];
     if (!currentRun) throw new Error(`no run ${run.id}`);
     if (currentRun.status !== "active") throw new Error(`run ${run.id} is closed`);
@@ -418,20 +441,21 @@ export async function send(run: Run, worker: string, body: string, force: boolea
     if (sender && w.run_id !== sender.run_id) throw new Error(`worker "${worker}" belongs to run ${w.run_id}, not your run ${sender.run_id}; workers can only message workers of their own run`);
     if (w.run_id !== currentRun.id) throw new Error(`no worker "${worker}" in run ${run.id}`);
     if (sender) touch(sender);
-    return { msg: message(state, { run_id: currentRun.id, type: "followup", from, to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false }), waiting: Boolean(w.awaiting_prompt) };
+    return { msg: message(state, { run_id: currentRun.id, type: "followup", from, to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false }), waiting: Boolean(w.awaiting_prompt), target: w.adopted || w.execution_host ? w.pane_id : worker, executionHost: w.execution_host ?? undefined };
   });
   // A worker that has not been handed its dispatch yet gets the followup after it (queued), even with --now.
   let ready = false;
   let seq: number | undefined;
   try {
-    const a = await getAgent(worker);
+    const a = await withExecutionHost(executionHost, () => getAgent(target));
     ready = !waiting && (force || a.agent_status === "idle" || a.agent_status === "done");
-    seq = a.state_change_seq;
+    if (Number.isSafeInteger(a.state_change_seq) && (a.state_change_seq as number) >= 0) seq = a.state_change_seq;
   } catch {}
   // A concurrent sync() may deliver the queued message first; claim() decides who prompts.
   const delivered = ready ? await deliver(msg.id, worker, body, from, seq) : false;
   log({ event: from === "orchestrator" ? "orchestrator.send" : "worker.send", run: run.id, from, to: worker, delivered });
-  return { message: { ...msg, delivered, acked: delivered }, delivered };
+  const currentMessage = load().messages.find((m) => m.id === msg.id) ?? msg;
+  return { message: currentMessage, delivered };
 }
 
 /** `error`: the recipient was released between expanding the group and sending to it; nothing was sent to it. */
@@ -463,15 +487,32 @@ export async function expandAddress(state: State, run: Run, address: string): Pr
     names = ws.filter((w) => w.task_id && state.tasks[w.task_id]?.status === "dispatched").map((w) => w.name);
     why = `no worker in run ${run.id} has a dispatched task (${ws.map((w) => `${w.name}: ${w.task_id ? state.tasks[w.task_id]?.status ?? "no task" : "no task"}`).join(", ")})`;
   } else if (group === "idle") {
-    let agents;
-    try {
-      agents = await listAgents();
-    } catch (err: any) {
-      throw new Error(`@idle needs live agent status and herdr did not answer: ${err?.message ?? err}`);
+    const localWorkers = ws.filter((w) => !w.execution_host);
+    let localByPane = new Map<string, AgentStatus>();
+    if (localWorkers.length) {
+      try {
+        localByPane = new Map((await listAgents()).map((a) => [a.pane_id, a.agent_status]));
+      } catch (err: any) {
+        throw new Error(`@idle needs local herdr status and herdr did not answer: ${err?.message ?? err}`);
+      }
     }
-    const byPane = new Map(agents.map((a) => [a.pane_id, a.agent_status]));
-    names = ws.filter((w) => byPane.get(w.pane_id) === "idle" || byPane.get(w.pane_id) === "done").map((w) => w.name);
-    why = `no worker in run ${run.id} is idle or done right now (${ws.map((w) => `${w.name}: ${byPane.get(w.pane_id) ?? "no agent"}`).join(", ")})`;
+    const statusByWorker = new Map<string, AgentStatus>();
+    for (const w of ws) {
+      if (!w.execution_host) {
+        const status = localByPane.get(w.pane_id);
+        if (status) statusByWorker.set(w.name, status);
+        continue;
+      }
+      try {
+        const a = await withExecutionHost(w.execution_host, () => getAgent(w.pane_id));
+        statusByWorker.set(w.name, a.agent_status);
+      } catch (err: any) {
+        if (["agent_not_found", "pane_not_found"].includes(err?.code)) continue;
+        throw new Error(`@idle needs remote herdr status for host ${w.execution_host.name}: ${err?.message ?? err}`);
+      }
+    }
+    names = ws.filter((w) => statusByWorker.get(w.name) === "idle" || statusByWorker.get(w.name) === "done").map((w) => w.name);
+    why = `no worker in run ${run.id} is idle or done right now (${ws.map((w) => `${w.name}: ${statusByWorker.get(w.name) ?? "no agent"}`).join(", ")})`;
   } else {
     names = ws.filter((w) => w.kind === group).map((w) => w.name);
     why = `no worker of kind "${group}" in run ${run.id} (kinds: ${[...new Set(ws.map((w) => w.kind))].join(", ")})`;
@@ -535,38 +576,126 @@ const followupPrompt = (id: string, body: string, from = "orchestrator") =>
     ? `[Pack Leader follow-up from the orchestrator] ${body}\n[Pack Leader message id: ${id}]`
     : `[pack-leader follow-up from worker ${from}] ${body}\n[Pack Leader message id: ${id}]`;
 
+type RemoteDeliveryEvidence = NonNullable<Message["delivery_unknown"]>;
+type ReceiptPending = { evidence: RemoteDeliveryEvidence; source: "unknown" | "claim"; claimToken?: string };
+
+function deliveryTarget(w: Worker, worker: string): string {
+  return w.adopted || w.execution_host ? w.pane_id : worker;
+}
+
+function deliveryIdentityCurrent(state: State, worker: string, m: Message, evidence: Pick<RemoteDeliveryEvidence, "target" | "worker_started_at" | "execution_host">): boolean {
+  const w = state.workers[worker];
+  return Boolean(
+    w && meantFor(state, w, m) && w.started_at === evidence.worker_started_at && w.pane_id === evidence.target &&
+    w.execution_host && remoteHostKey(w.execution_host) === remoteHostKey(evidence.execution_host),
+  );
+}
+
 /**
- * Prompt a queued followup under an owned, expiring claim. The claim fences
- * concurrent send()/sync() calls but is not an acknowledgment: a dead sender
- * can be reclaimed, and only successful delivery or inbox consumption settles
- * the message. True when this call finalized delivery.
- * A worker released (or replaced by a new one of the name) since gets nothing.
- * `seqBefore`, the agent's state counter before the prompt, lets a timed-out
- * prompt that visibly landed count as delivered instead of being sent twice.
+ * Reconcile persisted remote uncertainty (or an expired pre-prompt claim) without
+ * holding the state lock over SSH. A valid unchanged baseline permits retry;
+ * failed/invalid observation remains unknown and is never treated as nonreceipt.
+ */
+async function reconcileRemoteDelivery(id: string, worker: string): Promise<"none" | "received" | "not_received" | "unknown" | "stale"> {
+  const state = load();
+  const m = state.messages.find((entry) => entry.id === id);
+  const w = state.workers[worker];
+  if (!m || !w || m.delivered || m.acked || !meantFor(state, w, m)) return "none";
+  let pending: ReceiptPending | undefined;
+  if (m.delivery_unknown) {
+    pending = { evidence: m.delivery_unknown, source: "unknown" };
+  } else if (m.delivery_claim && !deliveryClaimIsActive(m.delivery_claim)) {
+    const host = m.delivery_claim.execution_host ?? w.execution_host;
+    if (host) pending = {
+      source: "claim",
+      claimToken: m.delivery_claim.token,
+      evidence: {
+        target: m.delivery_claim.target ?? w.pane_id,
+        worker_started_at: m.delivery_claim.worker_started_at ?? w.started_at,
+        execution_host: host,
+        ...(m.delivery_claim.seq_before !== undefined ? { seq_before: m.delivery_claim.seq_before } : {}),
+        observed_at: m.delivery_claim.claimed_at,
+        reason: "remote sender claim expired before delivery was finalized",
+      },
+    };
+  }
+  if (!pending) return "none";
+  const { evidence } = pending;
+  if (!deliveryIdentityCurrent(state, worker, m, evidence)) return "stale";
+
+  const observation = await withExecutionHost(evidence.execution_host, () => observePromptReceipt(evidence.target, evidence.seq_before));
+  return update((current) => {
+    const currentMessage = current.messages.find((entry) => entry.id === id);
+    if (!currentMessage || currentMessage.delivered || currentMessage.acked) return "stale";
+    const samePending = pending!.source === "unknown"
+      ? currentMessage.delivery_unknown?.observed_at === evidence.observed_at
+      : currentMessage.delivery_claim?.token === pending!.claimToken;
+    if (!samePending) return "stale";
+    if (!deliveryIdentityCurrent(current, worker, currentMessage, evidence)) {
+      if (pending!.source === "claim") delete currentMessage.delivery_claim;
+      return "stale";
+    }
+    if (observation === "received") {
+      currentMessage.delivered = true;
+      currentMessage.acked = true;
+      delete currentMessage.delivery_claim;
+      delete currentMessage.delivery_unknown;
+      return "received";
+    }
+    if (observation === "not_received") {
+      delete currentMessage.delivery_claim;
+      delete currentMessage.delivery_unknown;
+      return "not_received";
+    }
+    currentMessage.delivery_unknown = { ...evidence, observed_at: now() };
+    delete currentMessage.delivery_claim;
+    return "unknown";
+  });
+}
+
+/**
+ * Prompt a queued followup under an owned, expiring claim. Local claims retain
+ * at-least-once recovery; remote claims persist the recipient snapshot and are
+ * reconciled before any retry after an ambiguous response or process death.
  */
 async function deliver(id: string, worker: string, body: string, from = "orchestrator", seqBefore?: number): Promise<boolean> {
-  const token = await update((state) => {
-    const m = state.messages.find((m) => m.id === id);
-    if (!m || m.delivered || m.acked) return null;
+  const reconciled = await reconcileRemoteDelivery(id, worker);
+  if (reconciled === "received") return true;
+  if (reconciled === "unknown" || reconciled === "stale") return false;
+  const claim = await update((state) => {
+    const m = state.messages.find((entry) => entry.id === id);
+    if (!m || m.delivered || m.acked || m.delivery_unknown) return null;
     if (m.delivery_claim && deliveryClaimIsActive(m.delivery_claim)) return null;
     const w = state.workers[worker];
     if (!w || !meantFor(state, w, m)) return null;
+    if (m.delivery_claim && (m.delivery_claim.execution_host ?? w.execution_host)) return null;
+    delete m.delivery_claim;
     const token = nextId(state, "dc");
+    const target = deliveryTarget(w, worker);
     m.delivery_claim = {
       token,
       pid: process.pid,
       host: hostname(),
       claimed_at: now(),
       lease_until: new Date(Date.now() + DELIVERY_CLAIM_LEASE_MS).toISOString(),
+      target,
+      worker_started_at: w.started_at,
+      execution_host: w.execution_host ?? null,
+      ...(seqBefore !== undefined ? { seq_before: seqBefore } : {}),
     };
-    return token;
+    return { token, target, workerStartedAt: w.started_at, executionHost: w.execution_host ?? undefined };
   });
-  if (!token) return false;
-  const finalize = async () => update((state) => {
-    const m = state.messages.find((m) => m.id === id);
-    if (!m || m.delivery_claim?.token !== token) return false;
+  if (!claim) return false;
+  const { token, target, workerStartedAt, executionHost } = claim;
+  const matchesClaim = (state: State, m: Message) => {
     const w = state.workers[worker];
-    if (!w || !meantFor(state, w, m)) {
+    return Boolean(w && meantFor(state, w, m) && w.started_at === workerStartedAt && deliveryTarget(w, worker) === target &&
+      (executionHost ? w.execution_host && remoteHostKey(w.execution_host) === remoteHostKey(executionHost) : !w.execution_host));
+  };
+  const finalize = async () => update((state) => {
+    const m = state.messages.find((entry) => entry.id === id);
+    if (!m || m.delivery_claim?.token !== token) return false;
+    if (!matchesClaim(state, m)) {
       delete m.delivery_claim;
       return false;
     }
@@ -574,20 +703,50 @@ async function deliver(id: string, worker: string, body: string, from = "orchest
     m.delivered = true;
     m.acked = true;
     delete m.delivery_claim;
+    delete m.delivery_unknown;
     return true;
   });
+  const clearClaim = async () => update((state) => {
+    const m = state.messages.find((entry) => entry.id === id);
+    if (m?.delivery_claim?.token === token) delete m.delivery_claim;
+  }).catch(() => {});
   try {
-    await agentPrompt(worker, followupPrompt(id, body, from));
+    await withExecutionHost(executionHost, () => agentPrompt(target, followupPrompt(id, body, from)));
     return await finalize();
   } catch (err) {
-    if ((err as HerdrError).code === "timeout" && seqBefore !== undefined && (await promptLanded(worker, seqBefore))) {
+    if (isRemotePromptReceiptError(err, Boolean(executionHost))) {
+      const observation = await withExecutionHost(executionHost, () => observePromptReceipt(target, seqBefore));
+      if (observation === "received") {
+        log({ event: "followup.remote_receipt_probable", worker, id });
+        return await finalize();
+      }
+      if (observation === "unknown") {
+        await update((state) => {
+          const m = state.messages.find((entry) => entry.id === id);
+          if (!m || m.delivery_claim?.token !== token) return;
+          if (!matchesClaim(state, m)) { delete m.delivery_claim; return; }
+          m.delivery_unknown = {
+            target,
+            worker_started_at: workerStartedAt,
+            execution_host: executionHost!,
+            ...(seqBefore !== undefined ? { seq_before: seqBefore } : {}),
+            observed_at: now(),
+            reason: `${(err as HerdrError).code ?? "remote_error"}: ${(err as Error).message}`,
+          };
+          delete m.delivery_claim;
+        });
+        log({ event: "followup.delivery_unknown", worker, id });
+        return false;
+      }
+      // A successful unchanged-baseline observation confirms nonreceipt; queue it for a later pass.
+      await clearClaim();
+      return false;
+    }
+    if (!executionHost && (err as HerdrError).code === "timeout" && seqBefore !== undefined && (await promptLanded(target, seqBefore))) {
       log({ event: "followup.timeout_landed", worker, id });
       return await finalize();
     }
-    await update((state) => {
-      const m = state.messages.find((m) => m.id === id);
-      if (m?.delivery_claim?.token === token) delete m.delivery_claim;
-    }).catch(() => {});
+    await clearClaim();
     return false;
   }
 }
@@ -638,26 +797,59 @@ export async function markHerdrUnreachable(): Promise<void> {
   }).catch(() => {});
 }
 
-export async function sync(): Promise<Message[]> {
+function remoteHostKey(host: NonNullable<Worker["execution_host"]>): string {
+  return JSON.stringify([host.name, host.ssh_target, host.workspace_id, host.herdr_socket ?? null, host.pack_leader ?? null]);
+}
+
+export async function sync(o: { skipLocal?: boolean } = {}): Promise<Message[]> {
   // A worker recorded after this moment may be missing from the snapshot below without being gone.
   const snapAt = Date.now();
-  const agents = await listAgents().catch(() => null);
-  const panes = await listPanes().catch(() => null);
-  if (!agents || !panes) {
-    await markHerdrUnreachable();
-    return [];
+  const initialState = load();
+  const initialWorkers = Object.values(initialState.workers).filter((w) => initialState.runs[w.run_id]?.status === "active");
+  const localPair = o.skipLocal ? null : await Promise.all([listAgents(), listPanes()]).then(([agents, panes]) => ({ byPane: new Map(agents.map((a) => [a.pane_id, a])), paneIds: new Set(panes.map((p) => p.pane_id)) })).catch(() => null);
+  if (!localPair) await markHerdrUnreachable();
+  const remotePairs = new Map<string, { byPane: Map<string, any>; paneIds: Set<string> }>();
+  const remoteProfiles = new Map<string, NonNullable<Worker["execution_host"]>>();
+  for (const w of initialWorkers) if (w.execution_host) {
+    const key = remoteHostKey(w.execution_host);
+    if (!remoteProfiles.has(key)) remoteProfiles.set(key, w.execution_host);
   }
-  const byPane = new Map(agents.map((a) => [a.pane_id, a]));
-  const paneIds = new Set(panes.map((p) => p.pane_id));
+  await Promise.all([...remoteProfiles].map(async ([key, profile]) => {
+    try {
+      const snapshot = await withExecutionHost(profile, async () => {
+        const [agents, panes] = await Promise.all([listAgents(), listPanes(profile.workspace_id)]);
+        return { byPane: new Map(agents.map((a) => [a.pane_id, a])), paneIds: new Set(panes.map((p) => p.pane_id)) };
+      });
+      remotePairs.set(key, snapshot);
+    } catch (err) {
+      log({ event: "remote.host_unreachable", host: profile.name, code: (err as any)?.code ?? "error", error: (err as Error).message });
+    }
+  }));
+  const localByPane = localPair?.byPane ?? new Map();
   const toDeliver: { worker: string; body: string; id: string; from: string; seq?: number }[] = [];
   const renudge: { run: string; pane: string; text: string }[] = [];
   const created = await update((state) => {
     const out: Message[] = [];
-    for (const r of activeRuns(state)) if (r.herdr_unreachable_since) r.herdr_unreachable_since = null;
+    if (localPair) for (const r of activeRuns(state)) if (r.herdr_unreachable_since) r.herdr_unreachable_since = null;
     for (const w of Object.values(state.workers)) {
       const run = state.runs[w.run_id];
       if (!run || run.status !== "active") continue;
       if (Date.parse(w.started_at) > snapAt) continue;
+      const snapshot = w.execution_host ? remotePairs.get(remoteHostKey(w.execution_host)) : localPair;
+      if (!snapshot) {
+        if (w.execution_host) {
+          w.host_unreachable_since ??= now();
+          w.liveness = "unreachable";
+          w.liveness_reason = `SSH/herdr host ${w.execution_host.name} unreachable since ${w.host_unreachable_since}`;
+          // The gap is not a pane-missing observation; recovery must start a fresh two-poll check.
+          w.missing_since = null;
+          w.agent_missing_since = null;
+        }
+        continue;
+      }
+      if (w.execution_host) w.host_unreachable_since = null;
+      const byPane = snapshot.byPane;
+      const paneIds = snapshot.paneIds;
       const a = byPane.get(w.pane_id);
       const t = Date.now();
 
@@ -687,6 +879,7 @@ export async function sync(): Promise<Message[]> {
       // A missing pane keeps its last status until the second miss.
       const status: AgentStatus | "exited" = paneGone ? "exited" : a ? a.agent_status : paneAlive ? "unknown" : w.last_status;
       const seq = a?.state_change_seq ?? 0;
+      const receiptSeq = Number.isSafeInteger(a?.state_change_seq) && (a!.state_change_seq as number) >= 0 ? a!.state_change_seq : undefined;
       const task = w.task_id ? state.tasks[w.task_id] : null;
       const owes = task?.status === "dispatched";
       const changed = status !== w.last_status || (a && seq !== w.last_seq);
@@ -745,9 +938,11 @@ export async function sync(): Promise<Message[]> {
         for (const m of state.messages) {
           if (m.to !== w.name || m.type !== "followup" || m.delivered || m.acked || !meantFor(state, w, m)) continue;
           if (m.delivery_claim && deliveryClaimIsActive(m.delivery_claim)) continue;
-          if (m.delivery_claim) delete m.delivery_claim;
+          // Keep expired remote claims intact: deliver() must reconcile their snapshotted
+          // recipient before it can clear the claim or issue another prompt.
+          if (m.delivery_claim && !m.delivery_claim.execution_host && !w.execution_host) delete m.delivery_claim;
           // Only the first prompt of the pass knows the agent's counter before it; later ones retry on a timeout, as before.
-          toDeliver.push({ worker: w.name, body: m.body, id: m.id, from: m.from, ...(first ? { seq } : {}) });
+          toDeliver.push({ worker: w.name, body: m.body, id: m.id, from: m.from, ...(first && receiptSeq !== undefined ? { seq: receiptSeq } : {}) });
           first = false;
         }
       }
@@ -758,7 +953,7 @@ export async function sync(): Promise<Message[]> {
     const limit = renudgeMs();
     for (const r of activeRuns(state)) {
       const pane = r.orchestrator.pane_id;
-      const o = pane ? byPane.get(pane) : undefined;
+      const o = pane && localPair ? localByPane.get(pane) : undefined;
       if (!pane || limit <= 0 || !o || (o.agent_status !== "idle" && o.agent_status !== "done")) continue;
       const stale = state.messages.filter((m) => m.run_id === r.id && m.to === "orchestrator" && !m.acked && RENUDGE_TYPES.includes(m.type) && !m.nudged_at && Date.now() - Date.parse(m.ts) > limit);
       if (!stale.length) continue;
@@ -786,7 +981,7 @@ export async function sync(): Promise<Message[]> {
 export const EXITED_SUMMARY = "worker exited before reporting";
 
 /** What `check` can return; also the default filter. */
-export const CHECK_TYPES = ["done", "ask", "attention", "note"] as const;
+export const CHECK_TYPES = ["done", "ask", "attention", "note", "user"] as const;
 
 /** `--types` as given, checked against CHECK_TYPES. */
 export function checkTypes(given: string[]): string[] {
@@ -857,22 +1052,41 @@ export async function check(run: Run, o: { wait: boolean; timeoutMs: number; typ
       link.up = up;
     },
   );
+  const changes = stateWatcher();
+  let nextPollAt = Date.now() + 1500;
   try {
     for (;;) {
       const left = deadline - Date.now();
       if (left <= 0) return warned({ result: "timeout", pending: 0 });
-      await new Promise<void>((r) => {
-        poke = r;
-        setTimeout(r, Math.min(left, 1500));
+      // State-file wakes are for messages, not poll scheduling: repeated writes must
+      // never move the next remote liveness sync farther into the future.
+      const waitMs = Math.min(left, Math.max(0, nextPollAt - Date.now()));
+      const stateChange = changes.next(waitMs);
+      const reason = await new Promise<"event" | "state" | "timeout">((resolve) => {
+        let settled = false;
+        let timer: NodeJS.Timeout;
+        const finish = (result: "event" | "state" | "timeout") => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          poke = null;
+          if (result !== "state") changes.cancel();
+          resolve(result);
+        };
+        poke = () => finish("event");
+        timer = setTimeout(() => finish("timeout"), waitMs);
+        stateChange.then((changed) => finish(changed ? "state" : "timeout"));
       });
-      poke = null;
-      if (link.up === false) await markHerdrUnreachable();
-      else await sync();
+      if (reason !== "state" || Date.now() >= nextPollAt) {
+        await sync({ skipLocal: link.up === false });
+        if (Date.now() >= nextPollAt) nextPollAt = Date.now() + 1500;
+      }
       const m = pick(load());
       if (m) return warned(m);
     }
   } finally {
     stop();
+    changes.close();
     if (beat) clearInterval(beat);
   }
 }

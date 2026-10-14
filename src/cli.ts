@@ -1,12 +1,15 @@
 // Pack Leader: an orchestrator agent and its pack of workers, on herdr.
 //
 // Orchestrator side (the agent you talk to):
-//   pack-leader run create --objective "..." [--no-sidebar] [--left] [--another] [--cwd D] | show | list | close [--release] [--force]
+//   pack-leader run create --objective "..." [--no-sidebar] [--no-observer] [--left] [--another] [--cwd D] | show | list | close [--release] [--force]
 //   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 //   pack-leader status [--json] [--all]
-//   pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S [--summary S] [--force]
+//   pack-leader task create --spec "..." [--title T] [--depends-on a,b] [--parent ID] | list | show ID | tree [ID] | update ID [--status S] [--parent ID|none] [--summary S] [--force]
+//   pack-leader gate create --task ID --reason TEXT | list [--task ID] | show ID | resolve ID --decision approve|reject [--reason TEXT]
 //   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind K] [--model M] [--thinking L] [--cwd D] [--placement tab|split]
-//                            [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
+//                            [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]]
+//                            [--setup-command STRING [--setup-timeout MS]] [-- agent args]
+//   pack-leader worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]
 //   pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
 //   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
 //   pack-leader worker release NAME [--force] [--keep-pane] [--keep-worktree]
@@ -14,7 +17,7 @@
 //   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
 //   pack-leader reply ASK_ID --body "..." [--free]
 //   pack-leader send NAME|@all|@idle|@KIND "text" [--now]
-// Worker side (inside a pane pack-leader started; IDs come from the environment):
+// Worker side (registered worker session; adopted sessions use the explicit context prefix):
 //   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
 //   pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
 //   pack-leader note "text" | pack-leader send WORKER "text" [--now] | pack-leader heartbeat "note" | pack-leader inbox
@@ -22,19 +25,27 @@
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { validateCommandArgs } from "./command-args.ts";
 import { fg, bold, dim } from "./ansi.ts";
-import { HerdrError, agentFocus, agentRead, getPane, renamePane, notify, paneFocus, tabGet, tabRename } from "./herdr.ts";
+import { HerdrError, agentFocus, agentRead, getPane, listAgents, renamePane, notify, paneFocus, tabGet, tabRename } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
-import { resolve } from "node:path";
-import { ack, ask, check, checkTypes, done, envMs, heartbeat, herdrWarning, inbox, note, reply, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
+import { join, resolve } from "node:path";
+import { ack, ask, check, checkTypes, done, envMs, heartbeat, herdrWarning, inbox, note, reply, say, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
+import { closeObserver, digest, OBSERVER_TURNS, startObserver, transcriptPath, transcriptTail } from "./observer.ts";
+import { readFileSync } from "node:fs";
 import { herdrBin, pluginRoot } from "./paths.ts";
-import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Message, type Run, type State, type Task, type TaskStatus, unacked, update } from "./state.ts";
+import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, taskGateBlockers, type Message, type Run, type State, type Task, type TaskStatus, unacked, update } from "./state.ts";
+import { createGate, GateError, resolveGate, runGates } from "./gates.ts";
 import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
-import { closeRun, parseDuration, pruneRuns, removeArchives } from "./runs.ts";
-import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
+import { assertTaskParentMutable, taskTree, TaskHierarchyError, validateTaskParent } from "./hierarchy.ts";
+import { closeRun, parseDuration, type PruneOptions, pruneRuns, removeArchives } from "./runs.ts";
+import { AdoptionError, adoptWorker } from "./adoption.ts";
+import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, sweepWorktrees, taskSummary, workerSummary } from "./workers.ts";
+import { SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS } from "./setup-policy.ts";
 import { guide, installSkill } from "./skill.ts";
 import { configFile, defaultsFor, loadConfig, saveConfig } from "./config.ts";
 import { choose } from "./choose.ts";
+import { addHost, getHost, HostProfileError, listHosts, removeHost } from "./hosts.ts";
+import { callbackFlagValues, executeRemoteRpc, forwardWorkerCallback, readStdinJson, RemoteError, validateCallbackRequest, withExecutionHost } from "./remote.ts";
 
 const out = (v: unknown) => process.stdout.write(JSON.stringify(v, null, 2) + "\n");
 
@@ -66,6 +77,16 @@ export function here(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()):
   return { paneId, workspaceId, tabId: s(env.HERDR_TAB_ID), cwd: s(ctx.focused_pane_cwd) ?? s(ctx.workspace_cwd) ?? cwd };
 }
 
+/** `run prune` and the tail of `run close`: closed runs past the kept ones with their records and archives, then released checkouts. */
+async function collectGarbage(opts: PruneOptions): Promise<Record<string, unknown>> {
+  // Preserve released checkout leases until the sweep has revalidated and removed them.
+  const worktrees = await sweepWorktrees();
+  const r = await update((state) => pruneRuns(state, opts));
+  const archives = removeArchives(r.runs.map((x) => x.id));
+  if (r.runs.length) log({ event: "run.pruned", runs: r.runs.map((x) => x.id), removed: r.removed, archives: archives.length });
+  return { pruned: r.runs, removed: r.removed, archives_removed: archives, worktrees, ...(r.skipped ? { skipped: r.skipped } : {}) };
+}
+
 /** The run a command means; read-only commands pass `allowClosed` so a closed run can still be looked at by id. */
 function currentRun(args: Args, state = load(), allowClosed = false): Run {
   const h = here();
@@ -80,15 +101,48 @@ function runWorker(args: Args, name: string, state = load(), allowClosed = false
   return w;
 }
 
+/** Gate mutations belong to the coordinator, never to a worker's pane or environment. */
+function requireGateCoordinator(state: State, run: Run): void {
+  if (run.status !== "active") throw new GateError("gate_run_closed", `run ${run.id} is closed`);
+  const paneId = here().paneId;
+  if (process.env.PACK_ROLE === "worker" || process.env.PACK_WORKER || (paneId && Object.values(state.workers).some((w) => !w.execution_host && w.pane_id === paneId))) {
+    throw new GateError("gate_coordinator_only", "task gates can only be changed by the run coordinator");
+  }
+}
+
 function requireHerdr(): void {
   if (process.env.HERDR_ENV !== "1" && !process.env.HERDR_PLUGIN_ID && !process.env.HERDR_SOCKET_PATH) throw new Error("not inside herdr (HERDR_ENV is not 1)");
 }
 
-async function main(): Promise<void> {
-  const [command = "help", ...argv] = process.argv.slice(2);
+function requireCoordinatorParentMutation(state: State): void {
+  const paneId = here().paneId;
+  const isWorker = process.env.PACK_ROLE === "worker" || Boolean(process.env.PACK_WORKER) || Boolean(
+    paneId && Object.values(state.workers).some((worker) => !worker.execution_host && worker.pane_id === paneId),
+  );
+  if (isWorker) {
+    throw new TaskHierarchyError("TASK_PARENT_COORDINATOR_ONLY", "only the coordinator may change task parent provenance");
+  }
+}
+
+async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> {
+  const [command = "help", ...argv] = inputArgv;
+  if (command === "__remote-rpc") {
+    process.stdout.write(JSON.stringify(await executeRemoteRpc(await readStdinJson())) + "\n");
+    return;
+  }
+  if (command === "__remote-callback") {
+    await runRemoteCallbackRelay();
+    return;
+  }
   const args = parseArgs(argv);
   validateCommandArgs(command, args);
   const fromAction = Boolean(process.env.HERDR_PLUGIN_ID) && !process.env.PACK_ROLE;
+  if (process.env.PACK_REMOTE_CALLBACK_TARGET && process.env.PACK_REMOTE_CALLBACK_ACTIVE !== "1") {
+    if (command !== "help" && command !== "--help" && command !== "-h" && command !== "skill") {
+      await forwardWorkerCallback(inputArgv);
+      return;
+    }
+  }
 
   switch (command) {
     case "help":
@@ -124,6 +178,7 @@ async function main(): Promise<void> {
         });
         // The run is committed: whatever fails from here on is a warning next to it, never a lost run id.
         let sidebar: string | null = null;
+        let observer: Record<string, unknown> | null = null;
         let warning: string | undefined;
         try {
           log({ event: "run.created", run: run.id, pane: h.paneId });
@@ -138,11 +193,19 @@ async function main(): Promise<void> {
             if (sidebar) await update((s) => void (s.runs[run.id]!.sidebar_pane_id = sidebar));
             if (sidebar) await renamePane(sidebar, "Pack");
           }
+          // The observer goes under the orchestrator once the sidebar stands to its right, so the sidebar keeps its full height.
+          if (!has(args, "no-observer") && h.paneId) {
+            const current = load().runs[run.id];
+            if (current) {
+              const ob = await startObserver(current).catch((err) => ({ warning: `observer not opened: ${(err as Error).message}` }) as { warning: string });
+              observer = ob;
+            }
+          }
         } catch (err) {
           warning = `run ${run.id} was created, but ${sidebar ? `recording its sidebar pane ${sidebar} failed` : "a step after creating it failed"}: ${(err as Error).message}`;
           sidebar = null;
         }
-        out({ run: { ...run, sidebar_pane_id: sidebar }, hint: `Workers start in hidden tabs of workspace ${h.workspaceId ?? "?"}; the sidebar ${sidebar ? `(pane ${sidebar})` : "was not opened"} shows them. PACK_RUN_ID=${run.id} selects this run explicitly.`, ...(warning ? { warning } : {}) });
+        out({ run: { ...run, sidebar_pane_id: sidebar }, observer, hint: `Workers start in hidden tabs of workspace ${h.workspaceId ?? "?"}; the sidebar ${sidebar ? `(pane ${sidebar})` : "was not opened"} shows them. PACK_RUN_ID=${run.id} selects this run explicitly.`, ...(warning ? { warning } : {}) });
         return;
       }
       if (sub === "show") {
@@ -161,7 +224,9 @@ async function main(): Promise<void> {
         const run = currentRun(args, load(), true);
         const r = await closeRun(run.id, { release: has(args, "release"), force: has(args, "force") });
         if (fromAction) await notify("Pack Leader", `run ${run.id} closed${r.released.length ? `, released ${r.released.map((x) => x.worker).join(", ")}` : ""}`);
-        out(r);
+        // Garbage collection rides on every close: old closed runs (keeping 5) with their archives, and released checkouts.
+        const gc = await collectGarbage({}).catch((err) => ({ error: (err as Error).message }));
+        out({ ...r, garbage_collected: gc });
         return;
       }
       if (sub === "prune") {
@@ -169,14 +234,13 @@ async function main(): Promise<void> {
         if (keep !== undefined && !(Number.isInteger(keep) && keep >= 0)) throw new Error("--keep takes a whole number >= 0");
         const olderThan = str(args, "older-than");
         const opts = { keep, all: has(args, "all"), olderThanMs: olderThan ? parseDuration(olderThan) : undefined };
-        const r = has(args, "dry-run") ? pruneRuns(load(), opts) : await update((state) => pruneRuns(state, opts));
         if (has(args, "dry-run")) {
-          out({ dry_run: true, pruned: r.runs, removed: r.removed, ...(r.skipped ? { skipped: r.skipped } : {}) });
+          const r = pruneRuns(load(), opts);
+          const worktrees = await sweepWorktrees({ dryRun: true });
+          out({ dry_run: true, pruned: r.runs, removed: r.removed, worktrees, ...(r.skipped ? { skipped: r.skipped } : {}) });
           return;
         }
-        const archives = removeArchives(r.runs.map((x) => x.id));
-        if (r.runs.length) log({ event: "run.pruned", runs: r.runs.map((x) => x.id), removed: r.removed, archives: archives.length });
-        out({ pruned: r.runs, removed: r.removed, archives_removed: archives, ...(r.skipped ? { skipped: r.skipped } : {}) });
+        out(await collectGarbage(opts));
         return;
       }
       throw new Error(`unknown: pack-leader run ${sub}`);
@@ -190,21 +254,32 @@ async function main(): Promise<void> {
         if (!spec) throw new Error("pass --spec \"<self-contained task spec>\"");
         const run = currentRun(args);
         const { task, stuck } = await update((state) => {
+          const lockedRun = currentRun(args, state);
+          if (lockedRun.id !== run.id) throw new Error(`run ${run.id} changed before task creation; retry`);
+          if (has(args, "parent")) requireCoordinatorParentMutation(state);
           const deps = list(args, "depends-on");
           for (const d of deps) if (!state.tasks[d] || state.tasks[d]!.run_id !== run.id) throw new Error(`no task ${d} in run ${run.id}`);
-          const t = { id: nextId(state, "t"), run_id: run.id, title: str(args, "title") ?? spec.split("\n")[0]!.slice(0, 60), spec, status: "pending" as const, depends_on: deps, worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
+          const t: Task = { id: nextId(state, "t"), run_id: run.id, title: str(args, "title") ?? spec.split("\n")[0]!.slice(0, 60), spec, status: "pending", depends_on: deps, worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
+          if (has(args, "parent")) validateTaskParent(state, run.id, t.id, str(args, "parent")!);
+          if (has(args, "parent")) t.parent_id = str(args, "parent")!;
           state.tasks[t.id] = t;
           // A dependency that already failed or is blocked will not succeed by itself: say so now, not at start time.
           const stuck = deps.filter((d) => state.tasks[d]!.status === "failed" || state.tasks[d]!.status === "blocked").map((d) => `${d} (${state.tasks[d]!.status})`);
           return { task: t, stuck };
         });
-        out({ task: taskSummary(task), ...(stuck.length ? { warning: `depends on ${stuck.join(", ")}; ${task.id} is not ready until ${stuck.length === 1 ? "it succeeds" : "they succeed"} (task update ID --status pending to retry one)` } : {}) });
+        out({ task: taskSummary(task, load()), ...(stuck.length ? { warning: `depends on ${stuck.join(", ")}; ${task.id} is not ready until ${stuck.length === 1 ? "it succeeds" : "they succeed"} (task update ID --status pending to retry one)` } : {}) });
         return;
       }
       if (sub === "list") {
         const state = load();
         const run = currentRun(args, state, true);
-        out({ tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t), ready: ready(state, t) })) });
+        out({ tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t, state), ready: ready(state, t) })) });
+        return;
+      }
+      if (sub === "tree") {
+        const state = load();
+        const run = currentRun(args, state, true);
+        out({ tree: taskTree(state, run.id, id) });
         return;
       }
       if (sub === "show") {
@@ -212,34 +287,98 @@ async function main(): Promise<void> {
         const run = currentRun(args, state, true);
         const t = id ? state.tasks[id] : undefined;
         if (!t || t.run_id !== run.id) throw new Error(`no task ${id} in run ${run.id}`);
-        out({ task: t, dispatch_ids: taskDispatchIds(state, t.id) });
+        const parent = typeof t.parent_id === "string" ? state.tasks[t.parent_id] : undefined;
+        const children = runTasks(state, run.id).filter((candidate) => candidate.parent_id === t.id).sort((a, b) => a.id.localeCompare(b.id));
+        out({ task: { ...t, parent_id: t.parent_id ?? null, gate_blockers: taskGateBlockers(state, t.id).map((g) => ({ id: g.id, status: g.status, reason: g.reason })) }, parent: parent?.run_id === run.id ? { id: parent.id, title: parent.title } : null, child_ids: children.map((child) => child.id), dispatch_ids: taskDispatchIds(state, t.id) });
         return;
       }
       if (sub === "update") {
         const status = str(args, "status");
-        if (!id || !status) throw new Error("usage: pack-leader task update ID --status pending|blocked|failed|succeeded [--summary S] [--force]");
-        if (!isSettable(status)) throw new Error(`bad status ${status}`);
+        const changeParent = has(args, "parent");
+        const parentArg = str(args, "parent");
+        if (!id || (!status && !changeParent)) throw new Error("usage: pack-leader task update ID [--status pending|blocked|failed|succeeded] [--parent ID|none] [--summary S] [--force]");
+        if (status !== undefined && !isSettable(status)) throw new Error(`bad status ${status}`);
         const t = await update((state) => {
           const run = currentRun(args, state);
+          if (changeParent) requireCoordinatorParentMutation(state);
           const t = state.tasks[id];
           if (!t || t.run_id !== run.id) throw new Error(`no task ${id} in run ${run.id}`);
-          refuseTransition(t, status, has(args, "force"));
-          t.status = status;
+          if (changeParent) {
+            assertTaskParentMutable(state, t);
+            const parentId = parentArg === "none" ? null : parentArg!;
+            validateTaskParent(state, run.id, t.id, parentId);
+            t.parent_id = parentId;
+          }
+          if (status) {
+            refuseTransition(t, status, has(args, "force"));
+            t.status = status;
+            // Back to pending is a fresh start: the last attempt's worker, dispatch and outcome no longer describe it.
+            if (status === "pending") Object.assign(t, { worker: null, dispatch_id: null, outcome: null });
+            else if (str(args, "summary")) t.outcome = { summary: str(args, "summary")!, files_modified: [], report_path: null };
+          }
           t.updated_at = now();
-          // Back to pending is a fresh start: the last attempt's worker, dispatch and outcome no longer describe it.
-          if (status === "pending") Object.assign(t, { worker: null, dispatch_id: null, outcome: null });
-          else if (str(args, "summary")) t.outcome = { summary: str(args, "summary")!, files_modified: [], report_path: null };
           return t;
         });
-        out({ task: taskSummary(t) });
+        out({ task: taskSummary(t, load()) });
         return;
       }
       throw new Error(`unknown: pack-leader task ${sub}`);
     }
 
+    // ---- durable task approval gates -----------------------------------------
+    case "gate": {
+      const [sub = "list", id] = args.positional;
+      if (sub === "create") {
+        const taskId = str(args, "task");
+        const reason = str(args, "reason");
+        if (!taskId || !reason) throw new Error('usage: pack-leader gate create --task ID --reason "TEXT"');
+        const state = load();
+        const run = currentRun(args, state);
+        requireGateCoordinator(state, run);
+        const gate = await createGate(run.id, taskId, reason);
+        out({ gate });
+        return;
+      }
+      if (sub === "list") {
+        const state = load();
+        const run = currentRun(args, state, true);
+        const taskId = str(args, "task");
+        if (taskId && (!state.tasks[taskId] || state.tasks[taskId]!.run_id !== run.id)) throw new GateError("gate_task_not_found", `no task ${taskId} in run ${run.id}`);
+        out({ gates: runGates(state, run.id, taskId) });
+        return;
+      }
+      if (sub === "show") {
+        if (!id) throw new Error("usage: pack-leader gate show ID");
+        const state = load();
+        const run = currentRun(args, state, true);
+        const gate = state.gates?.[id];
+        if (!gate || gate.run_id !== run.id) throw new GateError("gate_not_found", `no gate ${id} in run ${run.id}`);
+        out({ gate });
+        return;
+      }
+      if (sub === "resolve") {
+        const decision = str(args, "decision");
+        if (!id || (decision !== "approve" && decision !== "reject")) throw new Error('usage: pack-leader gate resolve ID --decision approve|reject [--reason "TEXT"]');
+        const state = load();
+        const run = currentRun(args, state);
+        requireGateCoordinator(state, run);
+        const gate = await resolveGate(run.id, id, decision, str(args, "reason"));
+        out({ gate });
+        return;
+      }
+      throw new Error(`unknown: pack-leader gate ${sub}`);
+    }
+
     // ---- worker --------------------------------------------------------------
     case "worker": {
       const [sub = "list", name] = args.positional;
+      if (sub === "adopt") {
+        requireHerdr();
+        if (!name) throw new Error("usage: pack-leader worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]");
+        const r = await adoptWorker({ run: currentRun(args), name, taskId: str(args, "task"), spec: str(args, "spec"), title: str(args, "title"), targetPane: str(args, "target-pane") });
+        out({ worker: { name: r.worker.name, kind: r.worker.kind, pane_id: r.pane_id, cwd: r.worker.cwd, adopted: true }, task: taskSummary(r.task), dispatch_id: r.worker.dispatch_id });
+        return;
+      }
       if (sub === "start") {
         requireHerdr();
         if (!name) throw new Error("usage: pack-leader worker start NAME --spec \"...\" | --task ID");
@@ -263,6 +402,7 @@ async function main(): Promise<void> {
           taskId: str(args, "task"),
           retry: has(args, "retry"),
           cwd: str(args, "cwd"),
+          host: str(args, "host"),
           placement,
           direction,
           targetPane: str(args, "target-pane"),
@@ -271,13 +411,14 @@ async function main(): Promise<void> {
           model: str(args, "model") ?? defaults.model ?? undefined,
           thinking: str(args, "thinking") ?? defaults.thinking ?? undefined,
           noDefaultArgs: has(args, "no-default-args"),
-          noBar: has(args, "no-bar"),
           timeoutMs: num(args, "timeout", 45_000),
           worktree: str(args, "worktree"),
           base: str(args, "base"),
           branch: str(args, "branch"),
+          setupCommand: str(args, "setup-command"),
+          setupTimeoutMs: str(args, "setup-timeout") === undefined ? undefined : num(args, "setup-timeout", SETUP_DEFAULT_TIMEOUT_MS),
         });
-        out({ worker: { name: r.worker.name, kind: r.worker.kind, model: r.worker.model ?? null, thinking: r.worker.thinking ?? null, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd, worktree: r.worker.worktree ?? null }, task: taskSummary(r.task), ...(r.warning ? { warning: r.warning } : {}) });
+        out({ worker: { name: r.worker.name, kind: r.worker.kind, model: r.worker.model ?? null, thinking: r.worker.thinking ?? null, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd, worktree: r.worker.worktree ?? null, execution_host: r.worker.execution_host?.name ?? null }, task: taskSummary(r.task, load()), ...(r.warning ? { warning: r.warning } : {}) });
         if (r.warning) process.exitCode = 1;
         return;
       }
@@ -317,18 +458,21 @@ async function main(): Promise<void> {
           return;
         }
         if (run && !live) throw new Error(`no worker "${name}" in run ${run.id}`);
-        const text = await agentRead(name, lines);
+        const worker = state.workers[name];
+        const remote = worker?.execution_host;
+        const target = worker && (!run || worker.run_id === run.id) && (worker.adopted || remote) ? worker.pane_id : name;
+        const text = await withExecutionHost(remote ?? undefined, () => agentRead(target, lines));
         process.stdout.write(text.endsWith("\n") ? text : text + "\n");
         return;
       }
       if (sub === "focus") {
-        runWorker(args, name);
-        await agentFocus(name);
+        const worker = runWorker(args, name);
+        await withExecutionHost(worker.execution_host ?? undefined, () => agentFocus(worker.adopted || worker.execution_host ? worker.pane_id : name));
         return;
       }
       if (sub === "stop") {
-        runWorker(args, name);
-        await stopWorker(name);
+        const worker = runWorker(args, name);
+        await stopWorker(name, worker.adopted ? worker.pane_id : name);
         out({ stopped: name });
         return;
       }
@@ -347,13 +491,13 @@ async function main(): Promise<void> {
       if (sub === "resend") {
         const run = currentRun(args);
         const r = await resendPreamble(run, name);
-        out({ worker: name, task: taskSummary(r.task), dispatch_id: r.dispatch_id, resent: true });
+        out({ worker: name, task: taskSummary(r.task, load()), dispatch_id: r.dispatch_id, resent: true });
         return;
       }
       if (sub === "prompt") {
         const run = currentRun(args);
         const r = await redispatch(run, name, str(args, "task"), str(args, "spec"), str(args, "title"));
-        out({ worker: name, task: taskSummary(r.task), dispatch_id: r.dispatch_id, ...(r.warning ? { warning: r.warning } : {}) });
+        out({ worker: name, task: taskSummary(r.task, load()), dispatch_id: r.dispatch_id, ...(r.warning ? { warning: r.warning } : {}) });
         if (r.warning) process.exitCode = 1;
         return;
       }
@@ -470,7 +614,7 @@ async function main(): Promise<void> {
       const outcome = str(args, "outcome");
       const summary = str(args, "summary");
       if ((outcome !== "succeeded" && outcome !== "failed") || !summary) throw new Error("usage: pack-leader done --outcome succeeded|failed --summary \"...\" [--files-modified a,b] [--report-path P]");
-      const m = await done(ctx, { outcome, summary, files: list(args, "files-modified"), reportPath: reportPath(str(args, "report-path")) });
+      const m = await done(ctx, { outcome, summary, files: list(args, "files-modified"), reportPath: reportPath(str(args, "report-path"), process.env.PACK_REMOTE_CALLBACK_CWD ?? process.cwd()) });
       out({ reported: m.id, task_id: m.task_id, outcome, next: "End your turn and wait for the orchestrator." });
       return;
     }
@@ -508,6 +652,44 @@ async function main(): Promise<void> {
         })),
       });
       return;
+    }
+
+    case "host": {
+      const [sub = "list", name] = args.positional;
+      if (sub === "add") {
+        if (!name) throw new Error("usage: pack-leader host add NAME --ssh-target ALIAS_OR_USER@HOST --workspace-id ID --leader-ssh-target TARGET");
+        const sshTarget = str(args, "ssh-target");
+        const workspaceId = str(args, "workspace-id");
+        const leaderTarget = str(args, "leader-ssh-target");
+        if (!sshTarget || !workspaceId || !leaderTarget) throw new Error("host add requires --ssh-target, --workspace-id and --leader-ssh-target");
+        const host = await addHost({
+          name,
+          ssh_target: sshTarget,
+          workspace_id: workspaceId,
+          leader_ssh_target: leaderTarget,
+          ...(str(args, "herdr-socket") ? { herdr_socket: str(args, "herdr-socket") } : {}),
+          ...(str(args, "pack-leader") ? { pack_leader: str(args, "pack-leader") } : {}),
+          ...(str(args, "leader-pack-leader") ? { leader_pack_leader: str(args, "leader-pack-leader") } : {}),
+        });
+        out({ host });
+        return;
+      }
+      if (sub === "list") {
+        out({ hosts: listHosts() });
+        return;
+      }
+      if (sub === "show") {
+        if (!name) throw new Error("usage: pack-leader host show NAME");
+        out({ host: getHost(name) });
+        return;
+      }
+      if (sub === "remove") {
+        if (!name) throw new Error("usage: pack-leader host remove NAME");
+        await removeHost(name);
+        out({ removed: name });
+        return;
+      }
+      throw new Error(`unknown: pack-leader host ${sub}`);
     }
 
     case "config": {
@@ -550,6 +732,54 @@ async function main(): Promise<void> {
       await runSidebar();
       return;
     }
+    case "say": {
+      // The human (or the observer on their behalf) to the orchestrator, through the run's inbox.
+      const run = currentRun(args);
+      const body = args.positional.join(" ") || str(args, "body");
+      if (!body) throw new Error("usage: pack-leader say \"<what the orchestrator should hear>\"");
+      const m = await say(run, body);
+      out({ sent: m.id, run: run.id, to: "orchestrator", body, next: "The orchestrator reads it on its next `pack-leader check`." });
+      return;
+    }
+    case "observe": {
+      // What the observer (or anyone) reads before answering "what is going on": state plus the orchestrator's last turns.
+      const state = load();
+      const run = currentRun(args, state, true);
+      const turns = num(args, "turns", OBSERVER_TURNS);
+      const file = await transcriptPath(run);
+      let tail: ReturnType<typeof transcriptTail> = [];
+      if (file) {
+        try {
+          tail = transcriptTail(readFileSync(file, "utf8"), turns);
+        } catch {}
+      }
+      let live: Map<string, { status: import("./herdr.ts").AgentStatus }> | null = null;
+      try {
+        live = new Map((await listAgents()).map((a) => [a.pane_id, { status: a.agent_status }]));
+      } catch {}
+      process.stdout.write(digest(state, run, live, tail, file) + "\n");
+      return;
+    }
+    case "observer": {
+      // (Re)open the observer pane under the orchestrator; `--close` closes it.
+      requireHerdr();
+      const run = currentRun(args);
+      if (has(args, "close")) {
+        out({ closed_observer: await closeObserver(run) });
+        return;
+      }
+      if (run.observer?.pane_id) {
+        try {
+          await getPane(run.observer.pane_id);
+          throw new Error(`run ${run.id} already has an observer in pane ${run.observer.pane_id}; pass --close first`);
+        } catch (err) {
+          if (!/already has an observer/.test((err as Error).message)) await update((s) => void (s.runs[run.id] && (s.runs[run.id]!.observer = null)));
+          else throw err;
+        }
+      }
+      out({ observer: await startObserver(run) });
+      return;
+    }
     case "leader": {
       // herdr action (or a human in a worker pane): back to the orchestrator of the run this pane belongs to.
       requireHerdr();
@@ -579,6 +809,71 @@ async function main(): Promise<void> {
     default:
       throw new Error(`unknown command: ${command}\n${usage()}`);
   }
+}
+
+function validateCallbackAuthority(request: any): void {
+  // stateDir/stateFile are captured at module load (often on the SSH login host).
+  // Read the explicitly selected leader file so this check and the re-exec agree.
+  const state = load(join(request.state_dir, "state.json"));
+  const context = request.context;
+  const run = state.runs[context.run_id];
+  if (!run || run.status !== "active") throw new RemoteError("stale_callback_context", `callback run ${context.run_id} is missing or closed`);
+  const worker = state.workers[context.worker];
+  if (!worker || worker.run_id !== run.id) throw new RemoteError("stale_callback_context", `worker ${context.worker} is not currently registered in run ${run.id}`);
+
+  const taskFlags = callbackFlagValues(request.argv, "task");
+  const dispatchFlags = callbackFlagValues(request.argv, "dispatch");
+  if (taskFlags.length > 1 || dispatchFlags.length > 1) throw new RemoteError("bad_callback_request", "callback task and dispatch overrides may each be supplied only once");
+  const taskId = taskFlags[0] ?? context.task_id;
+  const dispatchId = dispatchFlags[0] ?? context.dispatch_id;
+  const currentTask = worker.task_id ?? null;
+  const currentDispatch = worker.dispatch_id ?? null;
+  if (taskId !== currentTask || dispatchId !== currentDispatch) {
+    throw new RemoteError("stale_callback_context", `callback context for ${worker.name} is stale: supplied task ${taskId ?? "none"}/dispatch ${dispatchId ?? "none"}, current task ${currentTask ?? "none"}/dispatch ${currentDispatch ?? "none"}`);
+  }
+  if ((currentTask === null) !== (currentDispatch === null)) throw new RemoteError("stale_callback_context", `worker ${worker.name} has an incomplete current task/dispatch binding`);
+  if (currentTask !== null) {
+    const task = state.tasks[currentTask];
+    if (!task || task.run_id !== run.id || task.worker !== worker.name || task.dispatch_id !== currentDispatch) {
+      throw new RemoteError("stale_callback_context", `worker ${worker.name} has no current task binding for ${currentTask}/${currentDispatch}`);
+    }
+    const dispatch = state.dispatches?.[currentDispatch!];
+    if (dispatch && (dispatch.run_id !== run.id || dispatch.worker !== worker.name || dispatch.task_id !== currentTask)) {
+      throw new RemoteError("stale_callback_context", `dispatch ${currentDispatch} is not bound to worker ${worker.name} and task ${currentTask}`);
+    }
+  }
+}
+
+async function runRemoteCallbackRelay(): Promise<void> {
+  const request = await readStdinJson();
+  validateCallbackRequest(request);
+  validateCallbackAuthority(request);
+  const env = { ...process.env };
+  for (const key of ["HERDR_SESSION", "HERDR_PLUGIN_ID", "HERDR_PLUGIN_CONTEXT_JSON", "PACK_REMOTE_CALLBACK_TARGET", "PACK_REMOTE_CALLBACK_LEADER_BIN", "PACK_REMOTE_CALLBACK_STATE_DIR", "PACK_REMOTE_CALLBACK_LEADER_SOCKET", "PACK_REMOTE_CALLBACK_CWD"]) delete env[key];
+  env.HERDR_PLUGIN_STATE_DIR = request.state_dir;
+  env.HERDR_SOCKET_PATH = request.leader_socket;
+  env.PACK_REMOTE_CALLBACK_CWD = request.cwd;
+  env.PACK_ROLE = "worker";
+  env.PACK_REMOTE_CALLBACK_ACTIVE = "1";
+  env.PACK_RUN_ID = request.context.run_id;
+  env.PACK_WORKER = request.context.worker;
+  if (request.context.task_id === null) delete env.PACK_TASK_ID;
+  else env.PACK_TASK_ID = request.context.task_id;
+  if (request.context.dispatch_id === null) delete env.PACK_DISPATCH_ID;
+  else env.PACK_DISPATCH_ID = request.context.dispatch_id;
+  const cliPath = process.argv[1];
+  if (!cliPath) {
+    process.stdout.write(JSON.stringify({ stdout: "", stderr: "leader callback relay cannot locate the Pack Leader CLI entrypoint\n", exit_code: 1 }) + "\n");
+    return;
+  }
+  const result = spawnSync(process.execPath, ["--no-warnings", resolve(cliPath), ...request.argv], {
+    env,
+    encoding: "utf8",
+    timeout: 660_000,
+    maxBuffer: 1_000_000,
+  });
+  const stderr = (result.stderr ?? "") + (result.error ? `${result.error.message}\n` : "");
+  process.stdout.write(JSON.stringify({ stdout: result.stdout ?? "", stderr, exit_code: result.status ?? 1 }) + "\n");
 }
 
 type Settable = "pending" | "blocked" | "failed" | "succeeded";
@@ -669,7 +964,7 @@ function view(state: State, run: Run) {
   return {
     ...(warning ? { warning } : {}),
     run,
-    tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t), ready: ready(state, t), dispatches: perTask.get(t.id) ?? 0 })),
+    tasks: runTasks(state, run.id).map((t) => ({ ...taskSummary(t, state), ready: ready(state, t), dispatches: perTask.get(t.id) ?? 0 })),
     workers: runWorkers(state, run.id).map((w) => workerSummary(w, state)),
     inbox: unacked(state, run.id).map((m) => ({ id: m.id, type: m.type, from: m.from, body: m.body })),
   };
@@ -681,7 +976,7 @@ function dispatchCounts(state: State, run: Run): Map<string, number> {
   return n;
 }
 
-const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕"), unverifiable: fg.red("?"), stalled: fg.red("◌") };
+const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕"), unverifiable: fg.red("?"), unreachable: fg.red("⌁"), stalled: fg.red("◌") };
 
 /** An argv as one shell line, quoting what needs it. */
 const shellLine = (argv: string[]) => argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
@@ -694,15 +989,17 @@ function statusText(state: State, run: Run): string {
   for (const w of runWorkers(state, run.id)) {
     const t = w.task_id ? state.tasks[w.task_id] : null;
     const n = t ? perTask.get(t.id) ?? 0 : 0;
-    const shown = w.liveness === "unverifiable" ? "unverifiable" : w.stalled_since ? "stalled" : w.last_status;
+    const shown = w.liveness === "unverifiable" || w.liveness === "unreachable" ? w.liveness : w.stalled_since ? "stalled" : w.last_status;
     const live = w.liveness ? (w.liveness === "live" ? dim(w.liveness) : fg.red(w.liveness)) + dim(` (${w.liveness_reason ?? "?"})`) : dim("liveness ?");
-    lines.push(`${glyph[shown] ?? "?"} ${bold(w.name)} ${dim(w.pane_id)} ${live} ${t ? `${t.id} ${t.status}${n > 1 ? dim(` (${n} dispatches)`) : ""} · ${t.title}` : dim("no task")}`);
+    lines.push(`${glyph[shown] ?? "?"} ${bold(w.name)} ${w.execution_host ? dim(`[${w.execution_host.name}] `) : ""}${dim(w.pane_id)} ${live} ${t ? `${t.id} ${t.status}${n > 1 ? dim(` (${n} dispatches)`) : ""} · ${t.title}` : dim("no task")}`);
     if (w.worktree) lines.push(dim(`  worktree ${w.worktree.branch ?? "(detached)"} · ${w.worktree.path}`));
     const next = nextAction(state, w);
     if (next) lines.push(`  ${fg.yellow("next:")} ${shellLine(next)}`);
   }
   const pending = runTasks(state, run.id).filter((t) => t.status === "pending");
   if (pending.length) lines.push("", dim("pending: ") + pending.map((t) => `${t.id}${ready(state, t) ? "" : "(waits)"} ${t.title}`).join(", "));
+  const blockedByGate = runTasks(state, run.id).flatMap((t) => taskGateBlockers(state, t.id).map((g) => ({ task: t, gate: g })));
+  if (blockedByGate.length) lines.push(dim("approval gates: ") + blockedByGate.map(({ task, gate }) => `${task.id} ${gate.id} ${gate.status}`).join(", "));
   const box = unacked(state, run.id);
   lines.push("", box.length ? fg.yellow(`${box.length} unread: `) + box.map((m) => `${m.id} ${m.type} from ${m.from}`).join(", ") : dim("inbox empty"));
   lines.push(dim(`${runMessages(state, run.id).length} messages · pack-leader check --wait to continue`));
@@ -714,37 +1011,57 @@ function usage(): string {
 
 Orchestrator (the agent you talk to)
  Runs
-  pack-leader run create --objective "..." [--no-sidebar] [--left] [--another] [--cwd D]
+  pack-leader run create --objective "..." [--no-sidebar] [--no-observer] [--left] [--another] [--cwd D]
                                                 bind a run to this pane and open the sidebar (--left: on the left);
                                                 --another: a second run on this pane; --cwd: must be a directory
   pack-leader run show | list
   pack-leader run close [--release] [--force]          fail dispatched tasks, settle their dispatches, close the sidebar;
                                                 --release releases (and archives) workers first, --force closes anyway
   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
-                                                delete closed runs, their records and screen archives (keeps 5)
+                                                delete closed runs, their records and screen archives (keeps 5), and
+                                                remove released checkouts (never forced; branches stay). run close does this too
   pack-leader status [--json] [--all]                active runs and a count of closed ones; --all lists those too
   pack-leader COMMAND ... [--run ID]             any orchestrator command: that run, not the pane's own (or $PACK_RUN_ID)
  Tasks
-  pack-leader task create --spec "..." [--title T] [--depends-on a,b]
-  pack-leader task list | show ID | update ID --status S [--summary S] [--force]
+  pack-leader task create --spec "..." [--title T] [--depends-on a,b] [--parent ID]
+  pack-leader task list | show ID | tree [ID]
+  pack-leader task update ID [--status S] [--parent ID|none] [--summary S] [--force]
+                                                parent is coordinator-only provenance (not a dependency); --parent none unparents;
                                                 back to pending clears worker, dispatch and outcome; succeeded is
-                                                final unless --force; a dispatched task settles only via done/release
+                                                final unless --force; dispatched or actively claimed tasks cannot
+                                                be reparented and dispatched tasks settle only via done/release
+ Approval gates
+  pack-leader gate create --task ID --reason TEXT
+  pack-leader gate list [--task ID] | show ID
+  pack-leader gate resolve ID --decision approve|reject [--reason TEXT]
+                                                pending/rejected gates block every start or retry;
+                                                resolutions are immutable; only the coordinator can change gates
+ Execution hosts
+  pack-leader host add NAME --ssh-target ALIAS_OR_USER@HOST --workspace-id ID --leader-ssh-target TARGET
+                    [--herdr-socket PATH] [--pack-leader BIN] [--leader-pack-leader BIN]
+  pack-leader host list | show NAME | remove NAME        trusted profiles only; credentials stay in OpenSSH
  Workers
-  pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--model M] [--thinking L] [--cwd D]
+  pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--model M] [--thinking L] [--cwd D] [--host NAME]
                     [--placement tab|split] [--direction right|down]
                     [--worktree new|PATH [--base REF] [--branch B]] [--title T] [--target-pane P] [--ratio R]
-                    [--no-default-args] [--no-bar] [--timeout MS] [-- agent args]
+                    [--setup-command STRING [--setup-timeout MS]] [--no-default-args] [--timeout MS] [-- agent args]
                                                 hidden tab by default; split puts it next to you, on the right
                                                 unless --direction (an error with --placement tab). --worktree new: its own
                                                 checkout at <repo>-wt/NAME (or $PACK_WORKTREE_DIR/NAME) on pack/RUN/NAME
+                                                --setup-command runs an explicitly authorized shell hook there once before agent launch
+                                                --setup-timeout defaults to ${SETUP_DEFAULT_TIMEOUT_MS}ms (maximum ${SETUP_MAX_TIMEOUT_MS}ms); hook output is logged privately
+                                                --host NAME --cwd /remote/path uses an existing remote workspace (tab only)
+  pack-leader worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]
+                                                attach supervision to one existing idle/done agent; never starts or owns its pane
   pack-leader worker prompt NAME --spec "..." [--title T] | --task ID   a new dispatch in the same session
   pack-leader worker resend NAME                 send the current dispatch's text again (after a startup dialog)
   pack-leader worker list | show NAME            rows carry liveness, attention and next_action (argv to run)
   pack-leader worker read NAME [--lines N] [--dispatch ID]   its screen; after release, the archived one
   pack-leader worker focus NAME | stop NAME | retain NAME
-  pack-leader worker release NAME [--force] [--keep-pane] [--keep-worktree]
-                                                archive the screen, close its tab or pane; a worktree pack-leader created
-                                                goes with its workspace (never forced; the branch stays) unless --keep-worktree
+  pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree] [--keep-worktree]
+                                                archive the screen, close only a pane/tab Pack Leader owns; adopted sessions stay open
+                                                a worktree pack-leader created goes with its workspace by default (--remove-worktree is a legacy alias;
+                                                never forced; the branch stays) unless --keep-worktree
   pack-leader dispatch list [--task ID] [--worker NAME]   every hand-over in the run
   pack-leader dispatch show ID [--preamble]      one record; --preamble prints the exact text sent
  Messaging
@@ -752,8 +1069,9 @@ Orchestrator (the agent you talk to)
                                                 --wait: returns on the first message; a timeout under PACK_MIN_WAIT_MS (5 min)
                                                 is raised to it. A JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
   pack-leader reply ASK_ID --body "..." [--free]     an ask with options takes one (or a unique prefix); --free for free text
+  pack-leader say "text" | --body "..."              from the human (or the observer) to the orchestrator: a user message in check
   pack-leader send NAME|@all|@idle|@KIND "text" | --body "..." [--now]   @all: dispatched workers; @idle: idle or done; @KIND: by kind
-Worker (inside a pane pack-leader started; IDs come from the environment)
+Worker (registered session; adopted workers use the explicit prefix in their preamble)
   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
   pack-leader ask "question" | --body "..." [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
   pack-leader note "text" | --body "..."               non-blocking line for the orchestrator (blocker, finding, delay)
@@ -761,6 +1079,7 @@ Worker (inside a pane pack-leader started; IDs come from the environment)
   pack-leader heartbeat "note" | --body "..." | pack-leader inbox
   pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]
                                                 done/ask/note/heartbeat/send/inbox: override the IDs from the environment; orchestrator send accepts --run only
+Remote host requirements: reciprocal non-interactive SSH access, pre-trusted host keys, and Pack Leader/herdr/Node already installed remotely. Remote worktrees, local setup hooks and adoption are unsupported; host disconnects preserve workers/tasks as unreachable, not exited.
 Either
   pack-leader config [show]                            default harness and per-harness model and thinking level for new workers
   pack-leader config pick                              choose them from searchable lists (needs a terminal)
@@ -768,6 +1087,8 @@ Either
   pack-leader skill [--install]                        the guide; or install it into Claude Code, Codex and pi
   pack-leader sidebar                                  the pack, live (run by herdr in a pane)
   pack-leader leader [--run ID]                        focus this pane's orchestrator (from a worker pane or the sidebar)
+  pack-leader observe [--turns N]                      the run, its workers, unread messages and the orchestrator's last N turns (8)
+  pack-leader observer [--close]                       (re)open the observer agent under the orchestrator, or close it
   pack-leader help                                     this list
 Plugin root: ${pluginRoot}
 `;
@@ -776,7 +1097,8 @@ Plugin root: ${pluginRoot}
 /** Keep CLI failures machine-readable without exposing arbitrary thrown-object details. */
 export function cliErrorPayload(err: unknown): { error: string; code?: string } {
   const error = err instanceof Error ? err.message : typeof err === "string" ? err : "unknown error";
-  const code = err instanceof HerdrError && typeof err.code === "string" ? err.code : undefined;
+  const known = err instanceof HerdrError || err instanceof TaskHierarchyError || err instanceof GateError || err instanceof AdoptionError || err instanceof RemoteError || err instanceof HostProfileError;
+  const code = known && typeof err.code === "string" ? err.code : undefined;
   return { error, ...(code === undefined ? {} : { code }) };
 }
 

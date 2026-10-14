@@ -24,7 +24,7 @@ test("the flag contract accepts current commands, default subcommands, config de
     ["task", ["list", "--run", "r1"]],
     ["task", ["show", "t1", "--run", "r1"]],
     ["task", ["update", "t1", "--status", "pending", "--summary", "--still text", "--force", "--run", "r1"]],
-    ["worker", ["start", "api", "--run", "r1", "--spec", "work", "--task", "t1", "--retry", "--kind", "pi", "--model", "m", "--thinking", "high", "--cwd", "/tmp", "--placement", "split", "--direction", "down", "--worktree", "new", "--base", "HEAD", "--branch", "b", "--title", "title", "--target-pane", "w1:p1", "--ratio", "0.5", "--no-default-args", "--no-bar", "--timeout", "45000", "--", "--dryrun", "--model", "x"]],
+    ["worker", ["start", "api", "--run", "r1", "--spec", "work", "--task", "t1", "--retry", "--kind", "pi", "--model", "m", "--thinking", "high", "--cwd", "/tmp", "--placement", "split", "--direction", "down", "--worktree", "new", "--setup-command", "printf setup", "--setup-timeout", "300000", "--base", "HEAD", "--branch", "b", "--title", "title", "--target-pane", "w1:p1", "--ratio", "0.5", "--no-default-args", "--timeout", "45000", "--", "--dryrun", "--model", "x"]],
     ["worker", ["prompt", "api", "--spec", "work", "--title", "title", "--task", "t1", "--run", "r1"]],
     ["worker", ["resend", "api", "--run", "r1"]],
     ["worker", ["--run", "r1"]],
@@ -38,6 +38,11 @@ test("the flag contract accepts current commands, default subcommands, config de
     ["dispatch", ["--run", "r1"]],
     ["dispatch", ["list", "--task", "t1", "--worker", "api", "--run", "r1"]],
     ["dispatch", ["show", "d1", "--preamble", "--run", "r1"]],
+    ["gate", ["create", "--task", "t1", "--reason", "review", "--run", "r1"]],
+    ["gate", ["list", "--task", "t1", "--run", "r1"]],
+    ["gate", ["show", "g1", "--run", "r1"]],
+    ["gate", ["resolve", "g1", "--decision", "approve", "--reason", "checked", "--run", "r1"]],
+    ["gate", ["--run", "r1"]],
     ["check", ["--wait", "--timeout", "1000", "--ack", "m1,m2", "--types", "done,note", "--run", "r1"]],
     ["reply", ["m1", "--body", "--no is free text", "--free", "answer", "--run", "r1"]],
     ["send", ["@all", "--body", "follow up", "--now", "--worker", "api", "--task", "t1", "--dispatch", "d1", "--run", "r1"]],
@@ -63,6 +68,7 @@ test("the flag contract accepts current commands, default subcommands, config de
   const workerStart = parseArgs(cases.find(([command, argv]) => command === "worker" && argv[0] === "start")![1]);
   assert.deepEqual(workerStart.rest, ["--dryrun", "--model", "x"]);
   assert.equal(parseArgs(["--body", "--dryrun"]).flags.get("body"), "--dryrun");
+  assert.equal(parseArgs(["--setup-command", "--some-shell-token"]).flags.get("setup-command"), "--some-shell-token");
 });
 
 test("default subcommands use CLI defaults and reject flags from unrelated subcommands", () => {
@@ -70,6 +76,9 @@ test("default subcommands use CLI defaults and reject flags from unrelated subco
   assert.throws(() => validateCommandArgs("task", parseArgs(["--spec=work"])), /unknown option --spec for task list/);
   assert.throws(() => validateCommandArgs("worker", parseArgs(["--spec=work"])), /unknown option --spec for worker list/);
   assert.throws(() => validateCommandArgs("dispatch", parseArgs(["--preamble"])), /unknown option --preamble for dispatch list/);
+  assert.throws(() => validateCommandArgs("gate", parseArgs(["create", "--task", "t1", "--reason", "r", "--force"])), /unknown option --force for gate create/);
+  assert.throws(() => validateCommandArgs("gate", parseArgs(["resolve", "g1", "--decision"])), /--decision requires a value/);
+  assert.throws(() => validateCommandArgs("gate", parseArgs(["show", "g1", "--decision", "approve"])), /unknown option --decision for gate show/);
 });
 
 test("schema lookup rejects inherited command, subcommand, and flag names", () => {
@@ -84,6 +93,9 @@ test("schema lookup rejects inherited command, subcommand, and flag names", () =
 test("unknown options fail with a command-specific spelling suggestion; values and switches are checked", () => {
   assert.throws(() => validateCommandArgs("run", parseArgs(["prune", "--all", "--dryrun"])), /unknown option --dryrun for run prune; did you mean --dry-run\?/);
   assert.throws(() => validateCommandArgs("worker", parseArgs(["release", "api", "--keep-panee"])), /unknown option --keep-panee for worker release; did you mean --keep-pane\?/);
+  assert.throws(() => validateCommandArgs("worker", parseArgs(["start", "api", "--setup-command", "printf setup"])), /--setup-command requires --worktree/);
+  assert.throws(() => validateCommandArgs("worker", parseArgs(["start", "api", "--worktree", "new", "--setup-timeout", "100"])), /--setup-timeout requires --setup-command/);
+  assert.throws(() => validateCommandArgs("worker", parseArgs(["start", "api", "--worktree", "new", "--setup-command", "printf setup", "--setup-timeout", "300001"])), /--setup-timeout must be an integer/);
   assert.throws(() => validateCommandArgs("run", parseArgs(["prune", "--keep", "--all"])), /--keep requires a value/);
   assert.throws(() => validateCommandArgs("check", parseArgs(["--timeout"])), /--timeout requires a value/);
   assert.throws(() => validateCommandArgs("check", parseArgs(["--timeout", "soon"])), /--timeout must be a number/);
@@ -154,6 +166,16 @@ test("WF-1: typoed destructive dry-run and malformed values leave isolated fixtu
   assert.equal(malformedTimeout.code, 1);
   assert.match(malformedTimeout.json.error, /--timeout must be a number/);
   assert.deepEqual(snapshot(stateDir), before, "invalid timeout is rejected before the message can be acked");
+
+  for (const argv of [
+    ["worker", "start", "api", "--setup-command", "npm ci"],
+    ["worker", "start", "api", "--worktree", "new", "--setup-timeout", "100"],
+  ]) {
+    const invalidSetup = await cli(stateDir, argv);
+    assert.equal(invalidSetup.code, 1, argv.join(" "));
+    assert.match(invalidSetup.json.error, /--setup-(command|timeout) requires/);
+    assert.deepEqual(snapshot(stateDir), before, `invalid setup combination had no effects: ${argv.join(" ")}`);
+  }
 
   for (const argv of [
     ["constructor", "--name=x"],

@@ -9,12 +9,13 @@ import { ensureDir, stateDir } from "./paths.ts";
 import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, unacked, type Worker } from "./state.ts";
 import { formatOptions, sync } from "./inbox.ts";
 import { loadTheme, noTheme, type Theme } from "./theme.ts";
+import { withExecutionHost } from "./remote.ts";
 
 type Live = Map<string, { status: AgentStatus; title: string | null; agent: string | null }>;
 
-const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕"), unverifiable: fg.red("?"), stalled: fg.red("◌") };
-const word: Record<string, string> = { idle: "idle", done: "done", working: "working", blocked: "BLOCKED", unknown: "?", exited: "gone", unverifiable: "NO AGENT", stalled: "STALLED" };
-const alarming = new Set(["blocked", "unverifiable", "stalled"]);
+const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕"), unverifiable: fg.red("?"), unreachable: fg.red("⌁"), stalled: fg.red("◌") };
+const word: Record<string, string> = { idle: "idle", done: "done", working: "working", blocked: "BLOCKED", unknown: "?", exited: "gone", unverifiable: "NO AGENT", unreachable: "UNREACHABLE", stalled: "STALLED" };
+const alarming = new Set(["blocked", "unverifiable", "unreachable", "stalled"]);
 
 function elapsed(iso: string): string {
   const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
@@ -72,7 +73,7 @@ export function boxLines(w: Worker, t: Task | null, last: Message | null, st: st
   const inner = Math.max(1, cols - 4);
   const accent = theme.accent ? fgRgb(theme.accent) : fg.cyan;
   const name = selected ? accent(bold(w.name)) : bold(w.name);
-  const harness = [dim(w.kind), w.model ? dim(w.model) : "", w.thinking ? dim(w.thinking) : ""].filter(Boolean).join(" ");
+  const harness = [dim(w.kind), w.model ? dim(w.model) : "", w.thinking ? dim(w.thinking) : "", w.execution_host ? dim(`@${w.execution_host.name}`) : ""].filter(Boolean).join(" ");
   const agentLine = `${glyph[st] ?? "?"} ${name} ${harness}`;
   // Selected, a long model name moves the harness to a line of its own instead of being cut.
   const agent = selected && width(agentLine) > inner ? [`${glyph[st] ?? "?"} ${name}`, ...wrapAll(harness, inner - 2).map((l) => "  " + l)] : [agentLine];
@@ -114,18 +115,13 @@ export function boundRunFor(state: State, pane: string | null): Run | undefined 
   return pane ? activeRuns(state).find((r) => r.sidebar_pane_id === pane) : undefined;
 }
 
-/** Each line centred in `cols` by leading spaces. */
-export function centred(lines: string[], cols: number): string[] {
-  return lines.map((l) => " ".repeat(Math.max(0, Math.floor((cols - width(l)) / 2))) + l);
-}
-
-/** The run's goal as one paragraph, `Goal:` in bold, wrapped to the width and each line centred. */
+/** The run's goal as one paragraph, `Goal:` in bold, wrapped to the width, left aligned. */
 export function goalLines(objective: string, cols: number): string[] {
   const label = "Goal:";
   const w = Math.max(8, cols);
   // A word wider than the pane (a branch name, a path) is split so no line gets cut.
   const text = oneLine(objective).split(" ").flatMap((word) => (width(word) <= w ? [word] : [...word.match(new RegExp(`.{1,${w}}`, "g")) ?? [word]])).join(" ");
-  return centred(wrapAll(`${label} ${text}`, w), w).map((l) => (l.trimStart().startsWith(label) ? l.replace(label, bold(label)) : l));
+  return wrapAll(`${label} ${text}`, w).map((l) => (l.startsWith(label) ? bold(label) + l.slice(label.length) : l));
 }
 
 /** What a click on box `i` does: select it, or open it when it is the selected one already (two clicks open). */
@@ -162,10 +158,16 @@ export function boxAt(boxes: { start: number; end: number }[], scroll: number, r
  */
 export function statusOf(w: Worker, live: ReadonlyMap<string, { status: AgentStatus }> | null): string {
   if (w.liveness === "unverifiable") return "unverifiable";
+  if (w.liveness === "unreachable") return "unreachable";
   if (w.stalled_since) return "stalled";
+  // The live map belongs to the local herdr instance; remote pane IDs can collide.
+  if (w.execution_host) return w.liveness === "exited" ? "exited" : w.last_status;
   if (live) return live.get(w.pane_id)?.status ?? "exited";
   return w.liveness === "exited" ? "exited" : "unknown";
 }
+
+/** Adopted and remote sessions are addressed by their recorded pane, never an ambiguous name. */
+export const sidebarWorkerTarget = (w: Worker): string => w.adopted || w.execution_host ? w.pane_id : w.name;
 
 /** The key a keypress means. readline names shift-r "r" with `shift` set, so letters are upper-cased here. */
 export function keyName(key: { name?: string; shift?: boolean; sequence?: string }): string | undefined {
@@ -269,8 +271,12 @@ export async function runSidebar(): Promise<void> {
     selRun ??= runs[0] ?? null;
     if (selRun) {
       header.push(...goalLines(selRun.objective, cols));
-      const box = unacked(state, selRun.id).length;
-      if (box) header.push(...centred(wrapAll(`${box} unread for the orchestrator`, Math.max(8, cols)), cols).map((l) => fg.yellow(l)));
+      const pending = unacked(state, selRun.id);
+      const yours = pending.filter((m) => m.type === "user").length;
+      const box = pending.length - yours;
+      if (box || yours) header.push("");
+      if (box) header.push(fg.yellow(`Unread: ${box}`));
+      if (yours) header.push(fg.yellow(`From you: ${yours}`));
     }
     // The preview and a message stay pinned above the footer; the boxes scroll.
     const tail: string[] = [];
@@ -385,7 +391,7 @@ export async function runSidebar(): Promise<void> {
   const openSelected = () => {
     // The worker lives in its own tab: this switches to it. herdr's tab keys (or `o` here) come back.
     const cur = rows()[sel];
-    if (cur) void agentFocus(cur.worker.name).catch((e) => ((message = e.message), schedule()));
+    if (cur) void withExecutionHost(cur.worker.execution_host ?? undefined, () => agentFocus(sidebarWorkerTarget(cur.worker))).catch((e) => ((message = e.message), schedule()));
   };
   const move = (by: number) => {
     const n = rows().length;
@@ -437,7 +443,7 @@ export async function runSidebar(): Promise<void> {
           previewFor = null;
           break;
         }
-        void agentRead(cur.worker.name, 12)
+        void withExecutionHost(cur.worker.execution_host ?? undefined, () => agentRead(sidebarWorkerTarget(cur.worker), 12))
           .then((t) => {
             preview = t.trimEnd().split("\n").slice(-12);
             previewFor = cur.worker.name;

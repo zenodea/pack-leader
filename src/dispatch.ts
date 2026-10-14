@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { herdr } from "./herdr.ts";
 import { ensureDir, stateDir } from "./paths.ts";
 import { idSeq, now, type Dispatch, type State, type Task } from "./state.ts";
+import { assertTaskGatesApproved } from "./gates.ts";
+import type { HostProfile } from "./hosts.ts";
 
 export const archiveDir = (runId: string) => join(stateDir, "archive", runId);
 
@@ -12,7 +14,8 @@ export const archiveDir = (runId: string) => join(stateDir, "archive", runId);
  * Record a dispatch where its id was minted. A dispatch of a task that failed
  * before is a retry of that task's last dispatch.
  */
-export function createDispatch(state: State, d: { id: string; task: Task; worker: string; preamble: string; cwd: string; worktreePath?: string }): Dispatch {
+export function createDispatch(state: State, d: { id: string; task: Task; worker: string; preamble: string; cwd: string; worktreePath?: string; paneId?: string; executionHost?: HostProfile }): Dispatch {
+  assertTaskGatesApproved(state, d.task.id);
   const prev = d.task.status === "failed" && d.task.dispatch_id && d.task.dispatch_id !== d.id ? d.task.dispatch_id : undefined;
   const rec: Dispatch = {
     id: d.id,
@@ -23,6 +26,8 @@ export function createDispatch(state: State, d: { id: string; task: Task; worker
     preamble: d.preamble,
     cwd: d.cwd,
     ...(d.worktreePath ? { worktree_path: d.worktreePath } : {}),
+    ...(d.paneId ? { pane_id: d.paneId } : {}),
+    ...(d.executionHost ? { execution_host: { ...d.executionHost } } : {}),
     started_at: now(),
     ...(prev ? { retry_of: prev } : {}),
   };
@@ -30,12 +35,16 @@ export function createDispatch(state: State, d: { id: string; task: Task; worker
   return rec;
 }
 
+/** Kept as a re-export for lifecycle callers; gates use the cycle-free helper directly. */
+export { startClaimIsFresh } from "./claims.ts";
+
 /** Settle a dispatch once; a later settle (a done after a forced release) does not overwrite it. */
 export function settleDispatch(state: State, id: string | null | undefined, outcome: "succeeded" | "failed"): void {
   const d = id ? state.dispatches?.[id] : undefined;
   if (!d || d.settled_at) return;
   d.settled_at = now();
   d.outcome = outcome;
+  delete d.claim_until;
 }
 
 /** A dispatch as `list`/`show` print it: the preamble replaced by its length. */

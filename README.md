@@ -1,65 +1,117 @@
 # Pack Leader
 
-A [herdr](https://github.com/zenodea/herdr) plugin that turns the coding agent
-you are talking to into the orchestrator of a pack of worker agents.
+**One conversation. Parallel agents. A record of every handoff.**
 
-You give the orchestrator a job. It splits the job into tasks, starts one worker
-per task in a hidden tab, answers their questions, and waits for their reports.
-You keep watching one pane: the orchestrator, with a sidebar that shows every
-worker's state, task and last message. The run state (tasks, dispatches,
-messages, screen archives) lives in a file outside every agent's context, so a
-context compaction in the orchestrator loses nothing, and a worker that goes
-quiet or dies is noticed and reported.
+Pack Leader is an independent [herdr](https://github.com/herdrdev/herdr) plugin that lets your
+coding agent coordinate a team of **Claude Code, Codex or pi** workers. The
+coordinator delegates tasks, answers questions and collects reports. Workers
+run in their own tabs or splits; a live sidebar keeps the whole run visible.
 
-Everything happens through one CLI, `pack-leader`, that both sides run from
-their shells. The orchestrator learns it from a skill the plugin installs. The
-shape of that skill (orchestrator loop, task-spec contract, worker obligations,
-completion accounting) is adapted from the orchestration skill of
-[Orca](https://github.com/stablyai/orca) (MIT), rewritten for herdr's panes,
-tabs and agents.
+Tasks, messages and dispatch history live outside the agents' context windows.
+Inspect assignments, current attempts and reports—even after a worker's tab closes.
 
-```
-┌─────────────────────────────────────────┬────────────────────────┐
-│                                         │ goal ship it           │
-│   orchestrator (the one you talk to)    │ ┌────────────────────┐ │
-│                                         │ │ ◐ api claude       │ │
-│   $ pack-leader check --wait            │ │ runtime 3m · work… │ │
-│                                         │ │ Fix the API        │ │
-│                                         │ │ ↳ tests green      │ │
-│      workers run in hidden tabs:        │ └────────────────────┘ │
-│      api   docs                         │ ┌────────────────────┐ │
-│      Enter (or a second click) in the   │ │ ● docs claude      │ │
-│      sidebar opens one, `o` comes back  │ │ runtime 2m · idle  │ │
-│                                         │ └────────────────────┘ │
-└─────────────────────────────────────────┴────────────────────────┘
-```
+[Full guide](docs/guide.md) · [Command reference](docs/guide.md#commands) · [Changelog](docs/CHANGELOG.md)
 
 ## Install
 
+Requires **herdr 0.9+**, **Node.js 22.18+**, and an installed, authenticated
+agent CLI. Supported platforms: Linux and macOS.
+
 ```bash
-herdr plugin install zenodea/pack-leader   # or: herdr plugin link ~/pack-leader
+herdr plugin install zenodea/pack-leader
 herdr plugin action invoke install-skill --plugin pack-leader
 ```
 
-The second line installs the skill into Claude Code, Codex and pi (whichever
-are set up) and links `pack-leader` into `~/.local/bin`. Needs herdr 0.9+ and
-Node 22.18+. To let the orchestrator run `pack-leader` without permission
-prompts, allow it in Claude Code's settings (`~/.claude/settings.json`):
+This installs the skill for configured Claude Code, Codex and pi environments,
+and links `pack-leader` into `~/.local/bin`. Keep that directory on your `PATH`;
+run orchestration commands inside herdr.
 
-```json
-{ "permissions": { "allow": ["Bash(pack-leader:*)"] } }
+## Start a pack
+
+Tell your agent what to delegate:
+
+> Implement CSV import. Give parsing and validation to separate workers in
+> isolated worktrees. Have them write tests, review their reports, then integrate.
+
+The skill guides the agent through the workflow. You can also use the CLI:
+
+```bash
+pack-leader run create --objective "Implement CSV import"
+pack-leader worker start parser --worktree new \
+  --spec "Implement CSV parsing and its tests; commit changes and report results."
+pack-leader worker start validator --worktree new \
+  --spec "Implement row validation and its tests; commit changes and report results."
+pack-leader check --wait --timeout 540000
 ```
 
-Workers get that rule automatically. Optionally bind the sidebar, and a key
-that brings you back to the orchestrator from any worker's tab, in herdr's
-`config.toml`:
+A run opens a sidebar and an **observer agent** for progress questions; skip
+these with `--no-sidebar` or `--no-observer`. The observer reads run state and
+recent coordinator turns. `pack-leader say "…"` sends your instructions to the
+coordinator.
+
+Keep checking until every task has an explicit outcome. Answer questions with
+`reply MESSAGE_ID --body "…"` and acknowledge messages with `check --ack MESSAGE_ID`.
+After reviewing the work, reuse a worker with `worker prompt`, retain its pane
+with `worker retain`, or release it:
+
+```bash
+pack-leader worker release parser
+pack-leader worker release validator
+pack-leader run close
+```
+
+Worktree branches survive release. **Review and merge them separately:** Pack
+Leader coordinates the work; it does not automatically merge branches or verify
+an agent's claims.
+
+## What you can do
+
+| Capability | How it works |
+| --- | --- |
+| **Plan work** | Tasks carry specs, titles and outcomes. Use `--depends-on` for ordering, `worker start --retry` for failed tasks, and `--parent` / `task tree` for hierarchy. Parent links are not dependencies. |
+| **Require approval** | `gate create --task TASK_ID --reason "…"` blocks dispatch. Resolve with `gate resolve GATE_ID --decision approve\|reject`. Decisions are durable, coordinator-owned and immutable—not worker questions. |
+| **Choose agents** | `config pick` or `config set` sets defaults. Override `--kind`, `--model` and `--thinking` per worker; pass native agent arguments after `--`. |
+| **Isolate changes** | `--worktree new` creates a branch and checkout; `--worktree PATH` reuses one. `--base` / `--branch` customize new checkouts. Ordinary `--cwd` execution needs no Git repository. |
+| **Prepare checkouts** | `--setup-command "npm ci"` runs before a local worktree agent launches, with bounded logs and `--setup-timeout` in milliseconds. Failure blocks launch; reuse does not rerun setup. |
+| **Adopt sessions** | `worker adopt NAME --spec "…"` attaches to an existing named idle/done local agent without restarting it. `--target-pane` disambiguates names. Release never closes adopted sessions. |
+| **Send followups** | Address one worker, `@all`, `@idle` or a kind such as `@pi`. Delivery waits for readiness or `inbox`; `--now` requests immediate delivery. Workers can message same-run peers. |
+| **Supervise explicitly** | Workers use `ask` (optionally with choices), `note`, `heartbeat` and `done --outcome succeeded\|failed`. Status shows liveness, attention and next actions. Idle is not completion. |
+| **Audit handoffs** | `dispatch list` and `dispatch show ID --preamble` expose attempts and exact instructions. Outcomes carry summaries, changed-file lists and report paths; release archives screens for later `worker read`. |
+| **Run remotely** | SSH host profiles route launch, messaging, observation and release while keeping run state on the leader. See [Remote workers](#remote-workers). |
+
+## Stay in control
+
+```bash
+pack-leader status --json                         # current run, tasks and workers
+pack-leader status --all                          # fleet overview, including closed runs
+pack-leader worker read parser                   # live screen or archived output
+pack-leader worker focus parser                  # open its tab
+pack-leader worker stop parser                   # interrupt; not a completion report
+pack-leader send @all "Report test commands and results."
+pack-leader observe --turns 6                     # run digest and recent coordinator turns
+pack-leader run prune --dry-run                   # preview record and checkout cleanup
+```
+
+Use `--run RUN_ID` to select a run. Most commands return JSON; help, the skill,
+live screens and terminal status are human-readable. Unknown flags are rejected
+before state changes.
+
+In the sidebar, click a worker to select it; **Enter** or a second click opens
+its tab. Press **`o`** in the sidebar or run `pack-leader leader` to return to the
+coordinator. Selection follows herdr's accent colour. Workers use hidden tabs
+by default; `--placement split` places one beside you instead.
+
+<details>
+<summary>Optional: keyboard shortcuts and Claude Code permissions</summary>
+
+Add shortcuts to herdr's `config.toml`:
 
 ```toml
 [[keys.command]]
 key = "prefix+alt+w"
 type = "plugin_action"
 command = "pack-leader.sidebar"
-description = "Pack Leader: the pack"
+description = "Pack Leader: show the pack"
 
 [[keys.command]]
 key = "prefix+a"
@@ -68,68 +120,71 @@ command = "pack-leader.focus-leader"
 description = "Pack Leader: back to the leader"
 ```
 
-The sidebar outlines the selected worker in herdr's accent colour (`[ui]
-accent` in that file) and shows that box's task and last message in full; the
-others stay one line each.
+To avoid repeated CLI permission prompts for a Claude Code coordinator, add
+this rule to its existing `~/.claude/settings.json` permissions:
 
-## Use
-
-Tell the orchestrator to delegate: "split this into workers", "fan out over
-these three modules", "spawn a worker to fix the tests while you review". The
-skill makes it run this loop:
-
-```bash
-pack-leader run create --objective "..."                 # binds the run to this pane, opens the sidebar
-pack-leader worker start api --worktree new --spec "..." # one hidden tab (and git worktree) per worker
-pack-leader check --wait --timeout 540000                # the oldest unread report, question or alert
-pack-leader reply m7 --body "postgres"                   # answer a worker's question
-pack-leader check --ack m7 --wait
-pack-leader worker release api                           # archives its screen, closes its tab
-pack-leader run close --release
+```json
+{ "permissions": { "allow": ["Bash(pack-leader:*)"] } }
 ```
 
-Workers get a `[pack-leader dispatch]` preamble as their first prompt and talk
-back with `pack-leader done`, `ask` (blocking, optionally with `--options`),
-`note` (non-blocking), `heartbeat` and `inbox`. The orchestrator can message one
-worker, `@all`, `@idle` or `@claude`, and workers of the same run can message
-each other.
+New Claude Code workers receive this rule by default.
 
-`pack-leader help` lists every command and flag. `pack-leader skill` prints the
-full guide the agents follow ([docs/guide.md](docs/guide.md)).
+</details>
 
-## What you get
+## Remote workers
 
-| | |
-|---|---|
-| **One view** | Orchestrator plus sidebar, its goal pinned above a scrolling list of workers. Workers live in hidden tabs; a click selects one and Enter or a second click opens it, `o` or the back-to-the-leader key comes back. `--placement split` puts a worker next to you instead. |
-| **Isolation** | `--worktree new` gives a worker its own git worktree and herdr workspace, on branch `pack/<run>/<worker>`. |
-| **Supervision** | Each sync judges every worker: `live`, `unverifiable` (agent gone, pane open), `exited`, `stalled`. Anything that needs you becomes an `attention` message with the exact next command to run. |
-| **Nothing lost** | Dispatch records keep the exact preamble sent. Releasing a worker archives its screen, so `worker read` works after the tab is gone. The state file is written atomically under a pid-aware lock. |
-| **Cleanup** | `run close` fails what is still open and closes the sidebar. `run prune` removes old runs, their records and archives. |
+Both machines need Pack Leader, herdr and Node, plus an existing remote herdr
+workspace and working directory. Configure non-interactive SSH **in both
+directions** with trusted host keys: the leader launches workers; workers call
+back with reports and questions.
 
-## How it works
+```bash
+pack-leader host add buildbox --ssh-target buildbox --workspace-id w1 \
+  --leader-ssh-target laptop
+pack-leader worker start remote-tests --host buildbox --cwd /srv/project \
+  --spec "Run the test suite and report failures; do not modify files."
+```
 
-- Every `pack-leader` command is a short-lived process over one JSON state
-  file in `~/.local/state/herdr/plugins/pack-leader/`.
-- Workers are started through herdr's socket API (`tab.create` or
-  `pane.split`, `agent.start`, `agent.prompt`) with `PACK_*` variables in the
-  pane environment; nothing is forked inside the orchestrator.
-- `check --wait` subscribes to herdr's pane and tab events and reconciles each
-  worker's live state against the run's records.
-- The sidebar is a plugin pane that watches the state file and the same events.
+Substitute your SSH aliases, workspace ID and path. Manage profiles with
+`host list`, `host show` and `host remove`; existing workers retain their original
+settings. Custom executable/socket paths are covered in the [guide](docs/guide.md#commands).
 
-See [docs/CHANGELOG.md](docs/CHANGELOG.md) for what each release added.
+Remote placement currently supports **existing directories and tab placement**,
+not remote worktree creation, setup hooks or agent adoption. A lost connection
+marks the host unreachable rather than failing its tasks. SSH access is a trust
+boundary; delivery receipts are heuristic, not exactly-once guarantees. Remote
+regressions use fake SSH/socket transport; live end-to-end SSH remains unverified.
+
+## State and cleanup
+
+- **State:** atomic, lock-protected records normally live under
+  `~/.local/state/herdr/plugins/pack-leader/`. Records survive context compaction;
+  an agent's full memory does not.
+- **Release:** closes only owned panes/tabs and removes clean Pack-created
+  worktrees, preserving branches. `--keep-worktree` retains the checkout.
+  Dirty, existing and potentially still-in-use checkouts are protected.
+- **Shutdown:** `run close` refuses unfinished workers. `--release` releases
+  them and fails unfinished tasks—it does not wait for reports. Close/prune
+  clean up eligible checkouts and old records/archives; five closed runs are
+  kept by default.
+- **Trust:** worktrees isolate Git changes, not permissions. Setup commands run
+  with your access; escaped descendants can outlive a timeout.
+
+For lifecycle rules, recovery procedures and every option, use
+`pack-leader help` or `pack-leader skill`, or read the [full guide](docs/guide.md).
 
 ## Develop
 
 ```bash
-npm install
-npm test              # typecheck + node --test, no herdr needed
-herdr plugin link .   # run this checkout as the installed plugin
+npm ci
+npm test              # typecheck + tests; no live herdr or SSH required
+herdr plugin link .   # use this checkout as the installed plugin
 ```
 
-Node 22.18+ runs the TypeScript directly; there is no build step.
+Node runs the TypeScript directly; there is no build step.
 
-## License
+## License and credits
 
-MIT.
+[MIT](LICENSE). The orchestration skill's supervision loop, task-spec contract
+and completion accounting were adapted from [Orca](https://github.com/stablyai/orca)
+(MIT), rewritten for herdr's panes, tabs and agents.

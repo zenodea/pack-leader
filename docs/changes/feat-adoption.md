@@ -1,0 +1,7 @@
+# Adopt existing herdr agents
+
+`pack-leader worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]` now supervises one already-running herdr agent without starting, renaming, moving, or taking ownership of its pane, tab, or working directory. Adoption requires a uniquely matched live idle/done session (or an exact `--target-pane` selection), rejects protected or managed panes, and claims the task/name/pane through the existing dispatch admission path before final revalidation and prompt. Prompt failure settles and rolls back the claim without closing or interrupting the original session.
+
+Adopted workers are recorded with `owns_pane=false`, `owns_tab=false`, `worktree=null`, and explicit worker-context mode. Their preamble and every redispatch include a shell-quoted `env PACK_ROLE=worker HERDR_PLUGIN_STATE_DIR=... PACK_RUN_ID=... PACK_WORKER=... PACK_TASK_ID=... PACK_DISPATCH_ID=... pack-leader` prefix; pane-addressed supervision keeps duplicate herdr names unambiguous. Release, forced release, and run close remove supervision but never close the foreign pane/tab. Existing v1 state loads with safe defaults.
+
+Regression coverage added in `test/adoption.test.ts` for idle adoption, safety checks, pane-addressed duplicate-name selection, no-environment CLI context, prompt rollback, redispatch/resend context, foreign-resource release, and run-close fencing. **Tests, typecheck, and lint were not run by user request; verification is deferred until all five feature branches are integrated.**

@@ -10,7 +10,7 @@
 export type Args = { positional: string[]; flags: Map<string, string | true>; rest: string[] };
 
 /** Flags whose value is free text: they consume the next token even when it starts with `--`. */
-export const TEXT_FLAGS: ReadonlySet<string> = new Set(["body", "summary"]);
+export const TEXT_FLAGS: ReadonlySet<string> = new Set(["body", "summary", "setup-command"]);
 
 export function parseArgs(argv: string[], textFlags: ReadonlySet<string> = TEXT_FLAGS): Args {
   const positional: string[] = [];

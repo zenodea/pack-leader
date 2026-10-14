@@ -83,6 +83,9 @@ function fakeHerdr(worktreeApi: boolean): Handler {
       case "worktree.open":
         if (!worktreeApi) throw unknownMethod(method);
         return { workspace: { workspace_id: "w8" }, tab: { tab_id: "w8:t1" }, root_pane: { pane_id: "w8:p1" }, already_open: false };
+      case "workspace.get":
+        if (!worktreeApi) throw unknownMethod(method);
+        return { workspace: { workspace_id: params.workspace_id, worktree: { checkout_path: params.workspace_id === "w9" ? lastCreated : undefined } } };
       case "worktree.remove":
         if (!worktreeApi) throw unknownMethod(method);
         git(repo, "worktree", "remove", params.workspace_id === "w9" ? lastCreated! : "?");

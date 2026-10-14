@@ -7,9 +7,11 @@ import { basename, dirname, join } from "node:path";
 import { ensureDir, lockDir, logFile, stateDirDivergence, stateFile } from "./paths.ts";
 import type { AgentStatus } from "./herdr.ts";
 import type { WorktreeInfo, WorktreeRecord } from "./worktree.ts";
+import type { SetupMetadata } from "./setup.ts";
+import type { HostProfile } from "./hosts.ts";
 
 export type TaskStatus = "pending" | "dispatched" | "succeeded" | "failed" | "blocked";
-export type MessageType = "done" | "ask" | "reply" | "heartbeat" | "note" | "followup" | "attention";
+export type MessageType = "done" | "ask" | "reply" | "heartbeat" | "note" | "followup" | "attention" | "user";
 
 export type Run = {
   id: string;
@@ -21,8 +23,27 @@ export type Run = {
   orchestrator: { pane_id: string | null; workspace_id: string | null; tab_id: string | null; tab_label?: string | null; cwd: string };
   /** The sidebar pane pack-leader opened for this run, if any. */
   sidebar_pane_id?: string | null;
+  /** The observer agent under the orchestrator, if one is open (`run create`, `pack-leader observer`). */
+  observer?: { pane_id: string; agent: string } | null;
   /** Set while sync() cannot reach herdr: worker liveness verdicts are stale until it clears. */
   herdr_unreachable_since?: string | null;
+};
+
+export type GateStatus = "pending" | "approved" | "rejected";
+export type GateDecision = "approve" | "reject";
+
+/** A coordinator-owned approval gate; decisions are durable and immutable. */
+export type TaskGate = {
+  id: string;
+  run_id: string;
+  task_id: string;
+  reason: string;
+  created_by: "coordinator";
+  created_at: string;
+  status: GateStatus;
+  decision?: GateDecision;
+  resolved_at?: string;
+  resolution_reason?: string;
 };
 
 export type Task = {
@@ -32,6 +53,8 @@ export type Task = {
   spec: string;
   status: TaskStatus;
   depends_on: string[];
+  /** Optional containment/provenance link; unrelated to execution dependencies. */
+  parent_id?: string | null;
   /** The worker owning the current attempt. */
   worker: string | null;
   dispatch_id: string | null;
@@ -58,6 +81,10 @@ export type Worker = {
   last_seen: string;
   /** Pack Leader split this pane; releasing the worker may close it. */
   owns_pane: boolean;
+  /** This existing herdr session was adopted; supervision does not imply pane/tab ownership. */
+  adopted?: boolean;
+  /** Worker command context is supplied explicitly in preambles for adopted sessions. */
+  context_mode?: "environment" | "explicit";
   /** Pack Leader created a whole tab for the worker (hidden placement); release closes the tab. */
   tab_id?: string | null;
   owns_tab?: boolean;
@@ -77,6 +104,10 @@ export type Worker = {
   unverifiable_dispatch?: string | null;
   /** When a `stalled` attention was raised; cleared by any sign of life (heartbeat, ask, note, send, done, herdr state change). */
   stalled_since?: string | null;
+  /** Immutable SSH profile used for every operation on a remote worker. Absent on local workers and old v1 records. */
+  execution_host?: HostProfile | null;
+  /** First failed remote poll; remote unavailability is not evidence the pane exited. */
+  host_unreachable_since?: string | null;
   /** The git worktree the worker runs in (`worker start --worktree`). */
   worktree?: WorktreeInfo | null;
   /** The initial dispatch that acquired the worktree lease; redispatches keep this lease. */
@@ -90,7 +121,7 @@ export type Worker = {
 /** What an attention message is about: herdr's agent state, or Pack Leader's own liveness findings. */
 export type AttentionStatus = AgentStatus | "exited" | "unverifiable" | "stalled";
 
-export type Liveness = "live" | "unverifiable" | "exited";
+export type Liveness = "live" | "unverifiable" | "exited" | "unreachable";
 
 export type DeliveryClaim = {
   /** Unique attempt token: late completion/failure may only settle its own claim. */
@@ -99,6 +130,21 @@ export type DeliveryClaim = {
   host: string;
   claimed_at: string;
   lease_until: string;
+  /** Remote receipt snapshot written before prompting, so an expired claim can reconcile before retry. */
+  target?: string;
+  worker_started_at?: string;
+  execution_host?: HostProfile | null;
+  seq_before?: number;
+};
+
+/** Durable evidence that a remote followup may have landed but could not be reconciled. */
+export type DeliveryUnknown = {
+  target: string;
+  worker_started_at: string;
+  execution_host: HostProfile;
+  seq_before?: number;
+  observed_at: string;
+  reason: string;
 };
 
 export type Message = {
@@ -130,6 +176,8 @@ export type Message = {
   delivered?: boolean;
   /** Durable in-progress prompt attempt; unlike delivered/acked, this is recoverable. */
   delivery_claim?: DeliveryClaim;
+  /** A remote prompt may have landed; reconcile this evidence before any later automatic retry. */
+  delivery_unknown?: DeliveryUnknown;
   /** When sync re-nudged the orchestrator about it (once). */
   nudged_at?: string;
 };
@@ -151,6 +199,14 @@ export type Dispatch = {
   cwd: string;
   /** Canonical --worktree checkout reserved during initial start admission; absent on older records and ordinary --cwd starts. */
   worktree_path?: string;
+  /** Renewable lease for a worker start that has not registered its pane yet; started_at remains immutable history. */
+  claim_until?: string;
+  /** Explicit --setup-command execution metadata; absent on old starts and starts without a hook. */
+  setup?: SetupMetadata;
+  /** Existing pane reserved by an adoption admission; absent on older/ordinary records. */
+  pane_id?: string;
+  /** Immutable SSH profile used by this dispatch; absent for local and old v1 records. */
+  execution_host?: HostProfile;
   started_at: string;
   settled_at?: string;
   outcome?: "succeeded" | "failed";
@@ -172,9 +228,11 @@ export type State = {
   seq: number;
   /** Optional, like `dispatches`. Every worktree a worker was started in, by path; outlives the worker so release can say where the work is. */
   worktrees?: Record<string, WorktreeRecord>;
+  /** Optional in v1 state files written before durable approval gates existed. */
+  gates?: Record<string, TaskGate>;
 };
 
-export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, workers: {}, messages: [], dispatches: {}, worktrees: {}, seq: 0 });
+export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, workers: {}, messages: [], dispatches: {}, worktrees: {}, gates: {}, seq: 0 });
 
 export const now = () => new Date().toISOString();
 
@@ -450,9 +508,9 @@ export function resolveRun(
   if (opts.paneId) {
     const mine = active.find((r) => r.orchestrator.pane_id === opts.paneId);
     if (mine) return mine;
-    const w = Object.values(state.workers).find((w) => w.pane_id === opts.paneId && state.runs[w.run_id]?.status === "active");
+    const w = Object.values(state.workers).find((w) => !w.execution_host && w.pane_id === opts.paneId && state.runs[w.run_id]?.status === "active");
     if (w) return state.runs[w.run_id]!;
-    const shown = active.find((r) => r.sidebar_pane_id === opts.paneId);
+    const shown = active.find((r) => r.sidebar_pane_id === opts.paneId || r.observer?.pane_id === opts.paneId);
     if (shown) return shown;
   }
   const inWs = opts.workspaceId ? active.filter((r) => r.orchestrator.workspace_id === opts.workspaceId) : [];
@@ -462,10 +520,18 @@ export function resolveRun(
   throw new Error(`several active runs (${active.map((r) => r.id).join(", ")}); pass --run <id>`);
 }
 
-/** A task is ready when every dependency succeeded. */
-export function ready(state: State, task: Task): boolean {
-  return task.status === "pending" && task.depends_on.every((d) => state.tasks[d]?.status === "succeeded");
+/** Gates that still block a task's admission. */
+export function taskGateBlockers(state: State, taskId: string): TaskGate[] {
+  return Object.values(state.gates ?? {}).filter((gate) => gate.task_id === taskId && gate.status !== "approved");
 }
+
+/** A task is ready when dependencies succeeded and every approval gate was approved. */
+export function ready(state: State, task: Task): boolean {
+  return task.status === "pending" && task.depends_on.every((d) => state.tasks[d]?.status === "succeeded") && taskGateBlockers(state, task.id).length === 0;
+}
+
+/** Start claims are admitted before workers are registered; after this lease they are stale. */
+export const START_CLAIM_MS = 5 * 60_000;
 
 export function unacked(state: State, runId: string): Message[] {
   return state.messages.filter((m) => m.run_id === runId && m.to === "orchestrator" && !m.acked);
