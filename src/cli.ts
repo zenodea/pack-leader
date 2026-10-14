@@ -21,7 +21,7 @@
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
-import { agentFocus, agentRead, getPane, labelPane, notify, paneClose, paneFocus } from "./herdr.ts";
+import { agentFocus, agentRead, getPane, labelPane, notify, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { ack, ask, check, checkTypes, done, heartbeat, herdrWarning, inbox, note, reply, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
@@ -135,12 +135,12 @@ async function main(): Promise<void> {
         const opts = { keep, all: has(args, "all"), olderThanMs: olderThan ? parseDuration(olderThan) : undefined };
         const r = has(args, "dry-run") ? pruneRuns(load(), opts) : await update((state) => pruneRuns(state, opts));
         if (has(args, "dry-run")) {
-          out({ dry_run: true, pruned: r.runs, removed: r.removed });
+          out({ dry_run: true, pruned: r.runs, removed: r.removed, ...(r.skipped ? { skipped: r.skipped } : {}) });
           return;
         }
         const archives = removeArchives(r.runs.map((x) => x.id));
         if (r.runs.length) log({ event: "run.pruned", runs: r.runs.map((x) => x.id), removed: r.removed, archives: archives.length });
-        out({ pruned: r.runs, removed: r.removed, archives_removed: archives });
+        out({ pruned: r.runs, removed: r.removed, archives_removed: archives, ...(r.skipped ? { skipped: r.skipped } : {}) });
         return;
       }
       throw new Error(`unknown: pack-leader run ${sub}`);
@@ -307,7 +307,8 @@ async function main(): Promise<void> {
       if (sub === "prompt") {
         const run = currentRun(args);
         const r = await redispatch(run, name, str(args, "task"), str(args, "spec"), str(args, "title"));
-        out({ worker: name, task: taskSummary(r.task), dispatch_id: r.dispatch_id });
+        out({ worker: name, task: taskSummary(r.task), dispatch_id: r.dispatch_id, ...(r.warning ? { warning: r.warning } : {}) });
+        if (r.warning) process.exitCode = 1;
         return;
       }
       throw new Error(`unknown: pack-leader worker ${sub}`);
@@ -340,14 +341,14 @@ async function main(): Promise<void> {
       const run = currentRun(args);
       // Validate before acking anything, so a typo does not half-run the command.
       const types = has(args, "types") ? checkTypes(list(args, "types")) : undefined;
+      // One JSON document on stdout: an ack that matched nothing is said inside the result, not as a second object.
+      let acked: Record<string, unknown> = {};
       if (str(args, "ack")) {
         const n = await ack(run, list(args, "ack"));
-        if (!n && !has(args, "wait")) {
-          out({ acked: 0, warning: "nothing to ack with those ids" });
-        }
+        if (!n && !has(args, "wait")) acked = { acked: 0, ack_warning: "nothing to ack with those ids" };
       }
       const r = await check(run, { wait: has(args, "wait"), timeoutMs: num(args, "timeout", 540_000), types });
-      out(r);
+      out({ ...acked, ...r });
       return;
     }
     case "reply": {

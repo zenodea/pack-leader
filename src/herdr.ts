@@ -92,10 +92,17 @@ export type PaneInfo = {
   focused: boolean;
 };
 
-export const listAgents = async (): Promise<AgentInfo[]> => (await herdr("agent.list")).agents ?? [];
+/** The list a herdr answer carries. An answer without it is an error, not an empty list: sync() would read "no panes" as every worker gone. */
+function listIn<T>(res: any, key: string, method: string): T[] {
+  const v = res?.[key];
+  if (!Array.isArray(v)) throw new HerdrError("bad_result", `herdr ${method} answered without ${key}`);
+  return v as T[];
+}
+
+export const listAgents = async (): Promise<AgentInfo[]> => listIn<AgentInfo>(await herdr("agent.list"), "agents", "agent.list");
 export const getAgent = async (target: string): Promise<AgentInfo> => (await herdr("agent.get", { target })).agent;
 export const getPane = async (pane_id: string): Promise<PaneInfo> => (await herdr("pane.get", { pane_id })).pane;
-export const listPanes = async (workspace_id?: string): Promise<PaneInfo[]> => (await herdr("pane.list", workspace_id ? { workspace_id } : {})).panes ?? [];
+export const listPanes = async (workspace_id?: string): Promise<PaneInfo[]> => listIn<PaneInfo>(await herdr("pane.list", workspace_id ? { workspace_id } : {}), "panes", "pane.list");
 
 export async function paneSplit(p: { target_pane_id: string; direction: "right" | "down"; cwd?: string; env?: Record<string, string>; ratio?: number }): Promise<PaneInfo> {
   const res = await herdr("pane.split", { ...p, focus: false });

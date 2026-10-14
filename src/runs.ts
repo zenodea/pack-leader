@@ -20,6 +20,9 @@ const closedAt = (r: Run): number => {
   return Number.isNaN(t) ? 0 : t;
 };
 
+/** How long after `run close` began its workers may still be being released. */
+export const CLOSE_GRACE_MS = 3_600_000;
+
 export type PruneOptions = {
   /** Keep this many of the most recently closed runs (default 5, or 0 with `olderThanMs`). */
   keep?: number;
@@ -30,7 +33,8 @@ export type PruneOptions = {
   now?: number;
 };
 
-export type PruneResult = { runs: { id: string; objective: string; closed_at: string | null }[]; removed: Record<string, number> };
+/** `skipped`: closed runs that still have worker records (a `run close` still releasing them, or one that died midway); only present when non-empty. */
+export type PruneResult = { runs: { id: string; objective: string; closed_at: string | null }[]; removed: Record<string, number>; skipped?: { id: string; reason: string }[] };
 
 /**
  * Delete closed runs and every record that carries their run_id, in place.
@@ -44,10 +48,20 @@ export function pruneRuns(state: State, o: PruneOptions = {}): PruneResult {
     .filter((r) => r.status === "closed")
     .sort((a, b) => closedAt(b) - closedAt(a));
   const keep = o.all ? 0 : (o.keep ?? (o.olderThanMs !== undefined ? 0 : 5));
-  const doomed = closed.slice(Math.max(0, keep)).filter((r) => o.olderThanMs === undefined || at - closedAt(r) > o.olderThanMs);
+  const old = closed.slice(Math.max(0, keep)).filter((r) => o.olderThanMs === undefined || at - closedAt(r) > o.olderThanMs);
+  // A run closed moments ago that still has worker records is mid-close: its releases still need
+  // those records (and its archive dir). Past CLOSE_GRACE_MS such a close is taken to have died.
+  const skipped: { id: string; reason: string }[] = [];
+  const doomed = old.filter((r) => {
+    const names = Object.values(state.workers).filter((w) => w.run_id === r.id).map((w) => w.name);
+    if (!names.length || at - closedAt(r) > CLOSE_GRACE_MS) return true;
+    skipped.push({ id: r.id, reason: `workers still recorded (${names.join(", ")}): a run close may still be releasing them. If none is, run \`pack-leader run close --run ${r.id} --force\` to forget them, then prune again` });
+    return false;
+  });
   const ids = new Set(doomed.map((r) => r.id));
   const removed: Record<string, number> = {};
-  if (!ids.size) return { runs: [], removed };
+  const extra = skipped.length ? { skipped } : {};
+  if (!ids.size) return { runs: [], removed, ...extra };
   const owned = (v: unknown): boolean => typeof v === "object" && v !== null && ids.has((v as { run_id?: unknown }).run_id as string);
   const bag = state as unknown as Record<string, unknown>;
   for (const key of Object.keys(bag)) {
@@ -70,7 +84,7 @@ export function pruneRuns(state: State, o: PruneOptions = {}): PruneResult {
     }
     if (n) removed[key] = n;
   }
-  return { runs: doomed.map((r) => ({ id: r.id, objective: r.objective, closed_at: r.closed_at ?? null })), removed };
+  return { runs: doomed.map((r) => ({ id: r.id, objective: r.objective, closed_at: r.closed_at ?? null })), removed, ...extra };
 }
 
 /** Delete the screen archives of pruned runs (their dispatch records, which point at them, are gone). */

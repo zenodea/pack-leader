@@ -55,10 +55,14 @@ export function modelFromArgs(kind: string, args: string[]): { model: string | n
   return { model, thinking };
 }
 
-export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: string; cwd: string; worktree?: WorktreeInfo | null }): string {
+/** `redispatch`: a new dispatch in a session that already had one, whose pane environment still names the old IDs. */
+export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: string; cwd: string; worktree?: WorktreeInfo | null; redispatch?: boolean }): string {
+  const channel = `An orchestrator agent coordinates several workers in parallel. It cannot see your screen; the only channel is the \`pack-leader\` CLI`;
   return [
     `[pack-leader dispatch] You are worker "${p.worker}" in run ${p.run.id}, on task ${p.task.id} ("${p.task.title}"), dispatch ${p.dispatchId}.`,
-    `An orchestrator agent coordinates several workers in parallel. It cannot see your screen; the only channel is the \`pack-leader\` CLI, which already knows your IDs from the environment.`,
+    p.redispatch
+      ? `${channel}. This is a new dispatch in your existing session and your pane's environment still names the previous one: pass --task ${p.task.id} --dispatch ${p.dispatchId} to every pack-leader command for it.`
+      : `${channel}, which already knows your IDs from the environment.`,
     ``,
     `Rules:`,
     `- Do only this task, in ${p.cwd}. Do not start or steer other agents.`,
@@ -132,6 +136,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   // The task: new from --spec, or an existing pending/ready one (or a failed one with --retry).
   const { task, dispatchId, text } = await update((state) => {
     if (state.workers[o.name] && state.runs[state.workers[o.name]!.run_id]?.status === "active") throw new Error(`worker "${o.name}" exists; release it first`);
+    refuseStartInFlight(state, o.name, o.taskId);
     if (wt) {
       const other = Object.values(state.workers).find((w) => w.name !== o.name && state.runs[w.run_id]?.status === "active" && (w.worktree?.path === wt.path || w.cwd === wt.path));
       if (other) throw new Error(`worker "${other.name}" already works in ${wt.path}; two workers never share a working tree`);
@@ -172,10 +177,12 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   const env = { PACK_ROLE: "worker", PACK_RUN_ID: o.run.id, PACK_WORKER: o.name, PACK_TASK_ID: task.id, PACK_DISPATCH_ID: dispatchId };
   let pane: { pane_id: string };
   let tabId: string | null = null;
+  let wtReady = false;
   try {
     if (wt) {
       // A hidden-tab worker's worktree opens as a herdr workspace and its tab goes there; a split stays next to the orchestrator.
       await materializeWorktree(wt, o.name, o.placement === "tab");
+      wtReady = true;
       await update((state) => {
         (state.worktrees ??= {})[wt.path] = { ...wt, worker: o.name, run_id: o.run.id, created_at: now() };
       });
@@ -185,18 +192,25 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       const workspace = wt?.workspace_id ?? o.run.orchestrator.workspace_id ?? (o.targetPane ?? o.run.orchestrator.pane_id)?.split(":")[0];
       if (!workspace) throw new Error("the run has no workspace; pass --target-pane");
       const t = await tabCreate({ workspace_id: workspace, label: `${o.name}`, cwd, env });
+      if (!t.root_pane?.pane_id) {
+        if (t.tab?.tab_id) await tabClose(t.tab.tab_id).catch(() => {});
+        throw new HerdrError("bad_result", "herdr did not return the new tab's pane");
+      }
       pane = t.root_pane;
-      tabId = t.tab.tab_id;
+      tabId = t.tab?.tab_id ?? null;
       log({ event: "tab.created", run: o.run.id, worker: o.name, tab: tabId, pane: pane.pane_id });
     } else {
       const target = o.targetPane ?? o.run.orchestrator.pane_id;
       if (!target) throw new Error("the run has no orchestrator pane; pass --target-pane");
       pane = await paneSplit({ target_pane_id: target, direction: o.direction, cwd, env, ratio: o.ratio });
+      if (!pane?.pane_id) throw new HerdrError("bad_result", "herdr did not return the new pane");
       log({ event: "pane.split", run: o.run.id, worker: o.name, pane: pane.pane_id });
     }
   } catch (err) {
     // No worktree or no pane, no dispatch: settle the record so it does not look in flight forever.
     await update((state) => settleDispatch(state, dispatchId, "failed")).catch(() => {});
+    // A checkout made for this worker alone is empty: take it away again rather than leave it orphaned.
+    if (wt && wtReady) (err as Error).message += `; ${await undoWorktree(wt, o.run.id, o.name)}`;
     throw err;
   }
 
@@ -221,6 +235,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     owns_tab: tabId !== null,
     retained: false,
     worktree: wt,
+    awaiting_prompt: true,
   };
   // Recorded before the agent starts, so a crash mid-start still leaves a trail.
   await update((state) => {
@@ -260,6 +275,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: `${o.name} is blocked on a dialog in pane ${pane.pane_id} and has not received its task. Read it with \`pack-leader worker read ${o.name}\`, answer it with \`herdr agent send-keys ${o.name} <keys>\` only if it is safe, then \`pack-leader worker resend ${o.name}\`.` };
   }
   // Right after start the name can lag the pane by a moment: address the pane, and retry briefly.
+  await baseline(o.name, pane.pane_id);
   try {
     await promptWithRetry(pane.pane_id, text);
   } catch (err) {
@@ -267,13 +283,13 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     log({ event: "worker.prompt_failed", run: o.run.id, worker: o.name, error: e.message });
     return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: `${o.name} started but did not receive its task (${e.code ?? "error"}: ${e.message}). Read it with \`pack-leader worker read ${o.name}\`, then \`pack-leader worker resend ${o.name}\`.` };
   }
-  await markDispatched(o.name, pane.pane_id);
+  await markPrompted(o.name);
   log({ event: "worker.started", run: o.run.id, worker: o.name, task: task.id, dispatch: dispatchId, pane: pane.pane_id });
   return { worker, task: { ...task, status: "dispatched", worker: o.name, dispatch_id: dispatchId }, pane_id: pane.pane_id };
 }
 
 /** Send a follow-up dispatch to a worker that already settled: same pane, new dispatch on a task. */
-export async function redispatch(run: Run, name: string, taskId: string | undefined, spec: string | undefined, title?: string): Promise<{ task: Task; dispatch_id: string }> {
+export async function redispatch(run: Run, name: string, taskId: string | undefined, spec: string | undefined, title?: string): Promise<{ task: Task; dispatch_id: string; warning?: string }> {
   const r = await update((state) => {
     const w = state.workers[name];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
@@ -305,8 +321,7 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
     const dispatchId = nextId(state, "d");
     // The pane's environment still names the first dispatch; the preamble carries the new IDs
     // and the worker commands accept them as flags.
-    const text = preamble({ worker: name, run, task, dispatchId, cwd: w.cwd, worktree: w.worktree }) +
-      `\n\nThis is a new dispatch in your existing session: pass --task ${task.id} --dispatch ${dispatchId} to every pack-leader command for it.`;
+    const text = preamble({ worker: name, run, task, dispatchId, cwd: w.cwd, worktree: w.worktree, redispatch: true });
     createDispatch(state, { id: dispatchId, task, worker: name, preamble: text, cwd: w.cwd });
     task.status = "dispatched";
     task.worker = name;
@@ -315,10 +330,19 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
     task.updated_at = now();
     w.task_id = task.id;
     w.dispatch_id = dispatchId;
+    w.awaiting_prompt = true;
     return { task, dispatchId, w, text };
   });
-  await agentPrompt(name, r.text);
-  await markDispatched(name, r.w.pane_id);
+  await baseline(name, r.w.pane_id);
+  try {
+    await agentPrompt(name, r.text);
+  } catch (err) {
+    // The dispatch is recorded and owed; say how to hand it over instead of leaving it dispatched with only an error.
+    const e = err as HerdrError;
+    log({ event: "worker.prompt_failed", run: run.id, worker: name, dispatch: r.dispatchId, error: e.message });
+    return { task: r.task, dispatch_id: r.dispatchId, warning: `${name} did not confirm receiving dispatch ${r.dispatchId} (${e.code ?? "error"}: ${e.message}); task ${r.task.id} stays dispatched. Read it with \`pack-leader worker read ${name}\`, then \`pack-leader worker resend ${name}\` if the dispatch is not on its screen.` };
+  }
+  await markPrompted(name);
   await labelPane(r.w.pane_id, r.task.title);
   log({ event: "worker.redispatched", run: run.id, worker: name, task: r.task.id, dispatch: r.dispatchId });
   return { task: r.task, dispatch_id: r.dispatchId };
@@ -337,7 +361,7 @@ export type ReleasedWorktree = { path: string; branch: string | null; kept: bool
  * With `force`, a still-dispatched task is marked failed first. A worker's worktree is
  * kept (the work lives there) unless `removeWorktree` and Pack Leader created it.
  */
-export type ReleaseResult = { closed_pane: string | null; closed_tab: string | null; archive_path: string | null; archive_error?: string; worktree?: ReleasedWorktree };
+export type ReleaseResult = { closed_pane: string | null; closed_tab: string | null; close_error?: string; archive_path: string | null; archive_error?: string; worktree?: ReleasedWorktree };
 
 export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean; removeWorktree?: boolean }): Promise<ReleaseResult> {
   const w = await update((state) => {
@@ -378,6 +402,7 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
   // A hidden worker's whole tab goes, and its pane with it; a split worker's pane alone.
   let closed_pane: string | null = null;
   let closed_tab: string | null = null;
+  let close_error: string | undefined;
   if (w.owns_pane && !w.retained && !opts.keepPane) {
     try {
       await getPane(w.pane_id);
@@ -389,12 +414,16 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
         await paneClose(w.pane_id);
         closed_pane = w.pane_id;
       }
-    } catch {}
+    } catch (err) {
+      // Already gone is fine; anything else leaves a tab or pane open that no record points at any more.
+      const code = (err as HerdrError).code;
+      if (code !== "pane_not_found" && code !== "tab_not_found") close_error = `${w.owns_tab && w.tab_id ? `tab ${w.tab_id}` : `pane ${w.pane_id}`} may still be open: ${(err as Error).message}`;
+    }
   } else {
     await labelPane(w.pane_id, null);
   }
-  log({ event: "worker.released", run: run.id, worker: name, closed_pane, closed_tab });
-  const released: ReleaseResult = { closed_pane, closed_tab, archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
+  log({ event: "worker.released", run: run.id, worker: name, closed_pane, closed_tab, ...(close_error ? { close_error } : {}) });
+  const released: ReleaseResult = { closed_pane, closed_tab, ...(close_error ? { close_error } : {}), archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
   if (!w.worktree) return released;
   const wt = w.worktree;
   let removed = false;
@@ -451,6 +480,49 @@ async function removeWorktree(wt: WorktreeInfo): Promise<void> {
   gitWorktreeRemove(wt);
 }
 
+/** A start failed after its worktree was made: remove a checkout Pack Leader created (never forced). Returns what happened, for the error. */
+async function undoWorktree(wt: WorktreeInfo, runId: string, worker: string): Promise<string> {
+  let removed = false;
+  let why = "";
+  if (wt.created_by_pack) {
+    try {
+      await removeWorktree(wt);
+      removed = true;
+    } catch (err) {
+      why = (err as Error).message;
+    }
+  }
+  await update((state) => {
+    const rec = state.worktrees?.[wt.path];
+    if (!rec) return;
+    rec.released_at ??= now();
+    if (removed) rec.removed = true;
+  }).catch(() => {});
+  log({ event: "worktree.start_failed", run: runId, worker, path: wt.path, removed });
+  if (removed) return `the worktree ${wt.path} made for it was removed (branch ${wt.branch} kept)`;
+  return wt.created_by_pack ? `the worktree ${wt.path} made for it is left in place (${why})` : `the worktree ${wt.path} is left as it was`;
+}
+
+/**
+ * A start that has recorded its dispatch but not yet its worker is in flight: a second
+ * start of the same name or task is refused until it lands. One killed in between stops
+ * counting after START_CLAIM_MS (its dispatch is settled as failed).
+ */
+export const START_CLAIM_MS = 5 * 60_000;
+
+function refuseStartInFlight(state: State, name: string, taskId: string | undefined): void {
+  const recorded = new Set(Object.values(state.workers).map((w) => w.dispatch_id));
+  for (const d of Object.values(state.dispatches ?? {})) {
+    if (d.settled_at || recorded.has(d.id) || state.runs[d.run_id]?.status !== "active") continue;
+    if (!(Date.now() - Date.parse(d.started_at) <= START_CLAIM_MS)) {
+      settleDispatch(state, d.id, "failed");
+      continue;
+    }
+    if (d.worker === name) throw new Error(`worker "${name}" is being started (dispatch ${d.id}); wait for that start to finish`);
+    if (taskId && d.task_id === taskId) throw new Error(`task ${taskId} is being started by worker "${d.worker}" (dispatch ${d.id}); wait for that start to finish`);
+  }
+}
+
 /**
  * A worker blocked right after start is usually Claude Code's folder-trust check. The
  * orchestrator picked the folder, so accept it and wait for the prompt. Returns true when
@@ -468,7 +540,8 @@ async function clearStartupDialog(paneId: string): Promise<boolean> {
   if (/Yes, I trust this folder/.test(screen)) {
     await agentSendKeys(paneId, ["down", "enter"]).catch(() => {});
     // Wait for the prompt only: `blocked` in the list would return at once, before the dialog is gone.
-    const st = await agentWait(paneId, ["idle", "done"], 30_000);
+    // A herdr error here must not escape: the caller has already recorded the dispatch. Re-check below instead.
+    const st = await agentWait(paneId, ["idle", "done"], 30_000).catch(() => "timeout" as const);
     if (st === "idle" || st === "done") return false;
   }
   a = await getAgent(paneId).catch(() => null);
@@ -486,14 +559,20 @@ export async function resendPreamble(run: Run, name: string): Promise<{ task: Ta
   if (a.agent_status === "blocked") throw new Error(`${name} is still blocked on a dialog in pane ${w.pane_id}`);
   // The same text as the first time: the dispatch record keeps it (worktree line included).
   const text = state.dispatches?.[w.dispatch_id]?.preamble ?? preamble({ worker: name, run, task, dispatchId: w.dispatch_id, cwd: w.cwd, worktree: w.worktree });
+  await baseline(name, w.pane_id);
   await promptWithRetry(w.pane_id, text);
-  await markDispatched(name, w.pane_id);
+  await markPrompted(name);
   log({ event: "worker.resent", run: run.id, worker: name, task: task.id });
   return { task, dispatch_id: w.dispatch_id };
 }
 
-/** Remember where herdr's state counter stood when the prompt went in, so a later idle can be told from this one. */
-async function markDispatched(name: string, paneId: string): Promise<void> {
+/**
+ * Remember where herdr's state counter stands just before the prompt goes in, so a
+ * later idle can be told from this one. Taken before, not after: an agent that is
+ * already working when the counter is read would move the baseline past its own
+ * working phase, and a quick idle without a report would go unnoticed.
+ */
+async function baseline(name: string, paneId: string): Promise<void> {
   let seq = 0;
   try {
     seq = (await getAgent(paneId)).state_change_seq ?? 0;
@@ -502,9 +581,18 @@ async function markDispatched(name: string, paneId: string): Promise<void> {
     const w = state.workers[name];
     if (!w) return;
     w.worked = false;
-    touch(w);
     w.seq_at_dispatch = seq;
     w.last_seq = seq;
+  });
+}
+
+/** The prompt went in: a sign of life, and followups may now be delivered. */
+async function markPrompted(name: string): Promise<void> {
+  await update((state) => {
+    const w = state.workers[name];
+    if (!w) return;
+    touch(w);
+    w.awaiting_prompt = false;
   });
 }
 

@@ -78,6 +78,8 @@ export type Worker = {
   stalled_since?: string | null;
   /** The git worktree the worker runs in (`worker start --worktree`). */
   worktree?: WorktreeInfo | null;
+  /** Its current dispatch has not been prompted yet (start or redispatch in progress, or the prompt failed): followups queue until it has. */
+  awaiting_prompt?: boolean;
 };
 
 /** What an attention message is about: herdr's agent state, or Pack Leader's own liveness findings. */

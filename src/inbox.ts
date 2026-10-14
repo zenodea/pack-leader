@@ -66,6 +66,20 @@ export function touch(w: Worker): void {
   w.stalled_since = null;
 }
 
+/**
+ * A followup or reply addressed to this worker's name is meant for it only when it
+ * is from the same run and was sent to this worker, not to an earlier one of the
+ * same name (released, or in another run): sent, or for a reply asked, since it started.
+ */
+export function meantFor(state: State, w: Pick<Worker, "run_id" | "started_at">, m: Message): boolean {
+  if (m.run_id !== w.run_id) return false;
+  const since = Date.parse(w.started_at);
+  if (Number.isNaN(since)) return true;
+  const sent = m.type === "reply" ? state.messages.find((a) => a.id === m.reply_to)?.ts ?? m.ts : m.ts;
+  const at = Date.parse(sent);
+  return Number.isNaN(at) || at >= since;
+}
+
 // ---- structured questions ------------------------------------------------------
 
 /** `--options a,b,c` as stored on an ask: trimmed, empty and duplicate entries dropped. */
@@ -214,7 +228,8 @@ export async function ask(ctx: WorkerContext, o: { body?: string; options?: stri
  */
 export async function inbox(ctx: WorkerContext): Promise<Message[]> {
   return update((state) => {
-    const mine = state.messages.filter((m) => m.run_id === ctx.run_id && m.to === ctx.worker && (m.type === "followup" || m.type === "reply") && !m.acked);
+    const w = state.workers[ctx.worker];
+    const mine = state.messages.filter((m) => m.run_id === ctx.run_id && m.to === ctx.worker && (m.type === "followup" || m.type === "reply") && !m.acked && (!w || meantFor(state, w, m)));
     for (const m of mine) {
       m.acked = true;
       m.delivered = true;
@@ -248,15 +263,16 @@ export async function reply(run: Run, askId: string, body: string, o: { free?: b
  * `from` is "orchestrator" or the sending worker's name.
  */
 export async function send(run: Run, worker: string, body: string, force: boolean, from = "orchestrator"): Promise<{ message: Message; delivered: boolean }> {
-  const msg = await update((state) => {
+  const { msg, waiting } = await update((state) => {
     const w = state.workers[worker];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${worker}" in run ${run.id}`);
-    return message(state, { run_id: run.id, type: "followup", from, to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false });
+    return { msg: message(state, { run_id: run.id, type: "followup", from, to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false }), waiting: Boolean(w.awaiting_prompt) };
   });
+  // A worker that has not been handed its dispatch yet gets the followup after it (queued), even with --now.
   let ready = false;
   try {
     const a = await getAgent(worker);
-    ready = force || a.agent_status === "idle" || a.agent_status === "done";
+    ready = !waiting && (force || a.agent_status === "idle" || a.agent_status === "done");
   } catch {}
   // A concurrent sync() may deliver the queued message first; claim() decides who prompts.
   const delivered = ready ? await deliver(msg.id, worker, body, from) : false;
@@ -264,7 +280,8 @@ export async function send(run: Run, worker: string, body: string, force: boolea
   return { message: { ...msg, delivered, acked: delivered }, delivered };
 }
 
-export type Recipient = { worker: string; message_id: string; delivered: boolean };
+/** `error`: the recipient was released between expanding the group and sending to it; nothing was sent to it. */
+export type Recipient = { worker: string; message_id: string | null; delivered: boolean; error?: string };
 export type SendResult = { address: string; recipients: Recipient[]; message?: Message; delivered?: boolean };
 
 const GROUP_HELP = "@all (dispatched workers), @idle (idle or done), @<kind> (e.g. @claude)";
@@ -315,7 +332,14 @@ export async function sendTo(run: Run, address: string, body: string, force: boo
   const recipients: Recipient[] = [];
   let last: { message: Message; delivered: boolean } | undefined;
   for (const name of names) {
-    last = await send(run, name, body, force);
+    try {
+      last = await send(run, name, body, force);
+    } catch (err) {
+      // The group was expanded from a snapshot: one recipient gone since then must not cost the rest their message.
+      if (!address.startsWith("@")) throw err;
+      recipients.push({ worker: name, message_id: null, delivered: false, error: (err as Error).message });
+      continue;
+    }
     recipients.push({ worker: name, message_id: last.message.id, delivered: last.delivered });
   }
   // A plain name keeps the old single-message shape alongside the recipient list.
@@ -420,6 +444,8 @@ export function herdrWarning(run: Run | undefined): string | undefined {
  * run records `herdr_unreachable_since`.
  */
 export async function sync(): Promise<Message[]> {
+  // A worker recorded after this moment may be missing from the snapshot below without being gone.
+  const snapAt = Date.now();
   const agents = await listAgents().catch(() => null);
   const panes = await listPanes().catch(() => null);
   if (!agents || !panes) {
@@ -439,6 +465,7 @@ export async function sync(): Promise<Message[]> {
     for (const w of Object.values(state.workers)) {
       const run = state.runs[w.run_id];
       if (!run || run.status !== "active") continue;
+      if (Date.parse(w.started_at) > snapAt) continue;
       const a = byPane.get(w.pane_id);
       const t = Date.now();
 
@@ -516,8 +543,9 @@ export async function sync(): Promise<Message[]> {
         out.push(message(state, { run_id: w.run_id, type: "attention", from: w.name, to: "orchestrator", task_id: w.task_id, dispatch_id: w.dispatch_id, body, status: "stalled" }));
       }
 
-      if (a && (status === "idle" || status === "done")) {
-        for (const m of state.messages) if (m.to === w.name && m.type === "followup" && !m.delivered && !m.acked) toDeliver.push({ worker: w.name, body: m.body, id: m.id, from: m.from });
+      // Not before the worker has its dispatch: a followup must not overtake the preamble.
+      if (a && (status === "idle" || status === "done") && !w.awaiting_prompt) {
+        for (const m of state.messages) if (m.to === w.name && m.type === "followup" && !m.delivered && !m.acked && meantFor(state, w, m)) toDeliver.push({ worker: w.name, body: m.body, id: m.id, from: m.from });
       }
     }
     return out;
