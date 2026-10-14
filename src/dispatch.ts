@@ -12,7 +12,7 @@ export const archiveDir = (runId: string) => join(stateDir, "archive", runId);
  * Record a dispatch where its id was minted. A dispatch of a task that failed
  * before is a retry of that task's last dispatch.
  */
-export function createDispatch(state: State, d: { id: string; task: Task; worker: string; preamble: string; cwd: string }): Dispatch {
+export function createDispatch(state: State, d: { id: string; task: Task; worker: string; preamble: string; cwd: string; worktreePath?: string }): Dispatch {
   const prev = d.task.status === "failed" && d.task.dispatch_id && d.task.dispatch_id !== d.id ? d.task.dispatch_id : undefined;
   const rec: Dispatch = {
     id: d.id,
@@ -22,6 +22,7 @@ export function createDispatch(state: State, d: { id: string; task: Task; worker
     attempt: d.task.attempts + 1,
     preamble: d.preamble,
     cwd: d.cwd,
+    ...(d.worktreePath ? { worktree_path: d.worktreePath } : {}),
     started_at: now(),
     ...(prev ? { retry_of: prev } : {}),
   };

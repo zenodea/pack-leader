@@ -9,7 +9,7 @@
 //                            [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
 //   pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
 //   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
-//   pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree]
+//   pack-leader worker release NAME [--force] [--keep-pane] [--keep-worktree]
 //   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 //   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
 //   pack-leader reply ASK_ID --body "..." [--free]
@@ -20,12 +20,13 @@
 //   pack-leader note "text" | pack-leader send WORKER "text" [--now] | pack-leader heartbeat "note" | pack-leader inbox
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
+import { validateCommandArgs } from "./command-args.ts";
 import { fg, bold, dim } from "./ansi.ts";
-import { agentFocus, agentRead, getPane, renamePane, notify, paneFocus, tabGet, tabRename } from "./herdr.ts";
+import { HerdrError, agentFocus, agentRead, getPane, renamePane, notify, paneFocus, tabGet, tabRename } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { ack, ask, check, checkTypes, done, heartbeat, herdrWarning, inbox, note, reply, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
+import { ack, ask, check, checkTypes, done, envMs, heartbeat, herdrWarning, inbox, note, reply, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
 import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Message, type Run, type State, type Task, type TaskStatus, unacked, update } from "./state.ts";
 import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
@@ -86,6 +87,7 @@ function requireHerdr(): void {
 async function main(): Promise<void> {
   const [command = "help", ...argv] = process.argv.slice(2);
   const args = parseArgs(argv);
+  validateCommandArgs(command, args);
   const fromAction = Boolean(process.env.HERDR_PLUGIN_ID) && !process.env.PACK_ROLE;
 
   switch (command) {
@@ -269,6 +271,7 @@ async function main(): Promise<void> {
           model: str(args, "model") ?? defaults.model ?? undefined,
           thinking: str(args, "thinking") ?? defaults.thinking ?? undefined,
           noDefaultArgs: has(args, "no-default-args"),
+          noBar: has(args, "no-bar"),
           timeoutMs: num(args, "timeout", 45_000),
           worktree: str(args, "worktree"),
           base: str(args, "base"),
@@ -338,7 +341,7 @@ async function main(): Promise<void> {
       }
       if (sub === "release") {
         const run = currentRun(args);
-        out({ released: name, ...(await releaseWorker(run, name, { force: has(args, "force"), keepPane: has(args, "keep-pane"), removeWorktree: has(args, "remove-worktree") })) });
+        out({ released: name, ...(await releaseWorker(run, name, { force: has(args, "force"), keepPane: has(args, "keep-pane"), removeWorktree: has(args, "remove-worktree"), keepWorktree: has(args, "keep-worktree") })) });
         return;
       }
       if (sub === "resend") {
@@ -395,8 +398,17 @@ async function main(): Promise<void> {
         if (!n && !has(args, "wait")) acked = { acked: 0, ack_warning: "nothing to ack with those ids" };
         if (unknown.length) acked = { ...acked, acked: n, ack_unknown: unknown, ack_warning: `no message ${unknown.join(", ")} in run ${run.id}` };
       }
-      const r = await check(run, { wait: has(args, "wait"), timeoutMs: num(args, "timeout", 540_000), types });
-      out({ ...acked, ...r });
+      // A short wait buys nothing: `check --wait` returns the moment a message arrives, and every
+      // return costs the orchestrator a full model call. Timeouts under the floor are raised to it.
+      let timeoutMs = num(args, "timeout", 540_000);
+      let raised: Record<string, unknown> = {};
+      const floor = envMs("PACK_MIN_WAIT_MS", 300_000);
+      if (has(args, "wait") && floor > 0 && timeoutMs < floor) {
+        raised = { timeout_raised_from_ms: timeoutMs, timeout_ms: floor, hint: `a wait shorter than ${Math.round(floor / 60_000)} min was raised to it: check --wait returns as soon as a message arrives, so a short timeout only costs you another call` };
+        timeoutMs = floor;
+      }
+      const r = await check(run, { wait: has(args, "wait"), timeoutMs, types });
+      out({ ...acked, ...r, ...raised });
       return;
     }
     case "reply": {
@@ -410,23 +422,32 @@ async function main(): Promise<void> {
       return;
     }
     case "send": {
+      if (!process.env.PACK_WORKER) {
+        const workerOnlyFlags = ["worker", "task", "dispatch"].filter((flag) => has(args, flag));
+        if (workerOnlyFlags.length) throw new Error(`${workerOnlyFlags.map((flag) => `--${flag}`).join(", ")} require worker mode (PACK_WORKER)`);
+      }
       const [name, ...words] = args.positional;
       const body = str(args, "body") ?? words.join(" ");
       if (!name || !body) throw new Error("usage: pack-leader send NAME|@all|@idle|@KIND \"text\" [--now]");
       // From a worker pane: one worker of the same run, by name. From the orchestrator: a name or a group address.
       if (process.env.PACK_WORKER) {
-        const ctx = workerContext({});
+        const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
         out(await workerSend(ctx, name, body, has(args, "now")));
       } else out(await sendTo(currentRun(args), name, body, has(args, "now")));
       return;
     }
     case "status": {
-      await sync().catch(() => {});
+      await sync();
       const state = load();
       let run: Run | null = null;
       try {
         run = currentRun(args, state, true);
-      } catch {}
+      } catch (err) {
+        // Only implicit selection misses get the fleet overview. Explicit ids and
+        // unexpected state/selection failures must remain visible to scripts.
+        if (str(args, "run") || process.env.PACK_RUN_ID) throw err;
+        if (!(err instanceof Error) || !/^(no active run:|several active runs \()/.test(err.message)) throw err;
+      }
       // Closed runs are counted, and listed only with --all.
       const all = has(args, "all");
       const closed = Object.values(state.runs).filter((r) => r.status === "closed");
@@ -498,12 +519,13 @@ async function main(): Promise<void> {
       }
       if (sub === "set") {
         const kind = str(args, "kind") ?? config.kind ?? DEFAULT_KIND;
-        const current = config.kinds[kind] ?? {};
+        const current = Object.hasOwn(config.kinds, kind) ? config.kinds[kind]! : {};
         const next = {
+          ...current,
           model: has(args, "clear-model") ? null : str(args, "model") ?? current.model ?? null,
           thinking: has(args, "clear-thinking") ? null : str(args, "thinking") ?? current.thinking ?? null,
         };
-        config.kinds[kind] = next;
+        Object.defineProperty(config.kinds, kind, { value: next, enumerable: true, writable: true, configurable: true });
         if (has(args, "default") || has(args, "kind")) config.kind = kind;
         saveConfig(config);
         out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, [kind]: next });
@@ -526,6 +548,15 @@ async function main(): Promise<void> {
     case "sidebar": {
       const { runSidebar } = await import("./sidebar.ts");
       await runSidebar();
+      return;
+    }
+    case "leader": {
+      // herdr action (or a human in a worker pane): back to the orchestrator of the run this pane belongs to.
+      requireHerdr();
+      const run = currentRun(args);
+      if (!run.orchestrator.pane_id) throw new Error(`run ${run.id} has no orchestrator pane`);
+      await paneFocus(run.orchestrator.pane_id);
+      out({ run: run.id, focused: run.orchestrator.pane_id });
       return;
     }
     case "sidebar-open": {
@@ -702,7 +733,7 @@ Orchestrator (the agent you talk to)
   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--model M] [--thinking L] [--cwd D]
                     [--placement tab|split] [--direction right|down]
                     [--worktree new|PATH [--base REF] [--branch B]] [--title T] [--target-pane P] [--ratio R]
-                    [--no-default-args] [--timeout MS] [-- agent args]
+                    [--no-default-args] [--no-bar] [--timeout MS] [-- agent args]
                                                 hidden tab by default; split puts it next to you, on the right
                                                 unless --direction (an error with --placement tab). --worktree new: its own
                                                 checkout at <repo>-wt/NAME (or $PACK_WORKTREE_DIR/NAME) on pack/RUN/NAME
@@ -711,14 +742,15 @@ Orchestrator (the agent you talk to)
   pack-leader worker list | show NAME            rows carry liveness, attention and next_action (argv to run)
   pack-leader worker read NAME [--lines N] [--dispatch ID]   its screen; after release, the archived one
   pack-leader worker focus NAME | stop NAME | retain NAME
-  pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree]
-                                                archive the screen, close its tab or pane; the worktree is kept
-                                                unless --remove-worktree (only one pack-leader created, never forced)
+  pack-leader worker release NAME [--force] [--keep-pane] [--keep-worktree]
+                                                archive the screen, close its tab or pane; a worktree pack-leader created
+                                                goes with its workspace (never forced; the branch stays) unless --keep-worktree
   pack-leader dispatch list [--task ID] [--worker NAME]   every hand-over in the run
   pack-leader dispatch show ID [--preamble]      one record; --preamble prints the exact text sent
  Messaging
   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
-                                                --wait: a JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
+                                                --wait: returns on the first message; a timeout under PACK_MIN_WAIT_MS (5 min)
+                                                is raised to it. A JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
   pack-leader reply ASK_ID --body "..." [--free]     an ask with options takes one (or a unique prefix); --free for free text
   pack-leader send NAME|@all|@idle|@KIND "text" | --body "..." [--now]   @all: dispatched workers; @idle: idle or done; @KIND: by kind
 Worker (inside a pane pack-leader started; IDs come from the environment)
@@ -728,22 +760,30 @@ Worker (inside a pane pack-leader started; IDs come from the environment)
   pack-leader send WORKER "text" | --body "..." [--now]   a follow-up to another worker of the same run
   pack-leader heartbeat "note" | --body "..." | pack-leader inbox
   pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]
-                                                done/ask/note/heartbeat/inbox: override the IDs from the environment
+                                                done/ask/note/heartbeat/send/inbox: override the IDs from the environment; orchestrator send accepts --run only
 Either
   pack-leader config [show]                            default harness and per-harness model and thinking level for new workers
   pack-leader config pick                              choose them from searchable lists (needs a terminal)
-  pack-leader config set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking]
+  pack-leader config set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
   pack-leader skill [--install]                        the guide; or install it into Claude Code, Codex and pi
   pack-leader sidebar                                  the pack, live (run by herdr in a pane)
+  pack-leader leader [--run ID]                        focus this pane's orchestrator (from a worker pane or the sidebar)
   pack-leader help                                     this list
 Plugin root: ${pluginRoot}
 `;
 }
 
+/** Keep CLI failures machine-readable without exposing arbitrary thrown-object details. */
+export function cliErrorPayload(err: unknown): { error: string; code?: string } {
+  const error = err instanceof Error ? err.message : typeof err === "string" ? err : "unknown error";
+  const code = err instanceof HerdrError && typeof err.code === "string" ? err.code : undefined;
+  return { error, ...(code === undefined ? {} : { code }) };
+}
+
 // Only as a command: tests (and later src/workers.ts, for workspaceOf) import this file.
 if (import.meta.main) {
   main().catch((err) => {
-    process.stderr.write(JSON.stringify({ error: (err as Error).message }) + "\n");
+    process.stderr.write(JSON.stringify(cliErrorPayload(err)) + "\n");
     process.exit(1);
   });
 }

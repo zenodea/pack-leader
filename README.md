@@ -28,8 +28,8 @@ tabs and agents.
 │                                         │ │ ↳ tests green      │ │
 │      workers run in hidden tabs:        │ └────────────────────┘ │
 │      api   docs                         │ ┌────────────────────┐ │
-│      Enter in the sidebar opens one,    │ │ ● docs claude      │ │
-│      `o` brings you back                │ │ runtime 2m · idle  │ │
+│      Enter (or a second click) in the   │ │ ● docs claude      │ │
+│      sidebar opens one, `o` comes back  │ │ runtime 2m · idle  │ │
 │                                         │ └────────────────────┘ │
 └─────────────────────────────────────────┴────────────────────────┘
 ```
@@ -50,8 +50,9 @@ prompts, allow it in Claude Code's settings (`~/.claude/settings.json`):
 { "permissions": { "allow": ["Bash(pack-leader:*)"] } }
 ```
 
-Workers get that rule automatically. Optionally bind the sidebar to a key in
-herdr's `config.toml`:
+Workers get that rule automatically. Optionally bind the sidebar, and a key
+that brings you back to the orchestrator from any worker's tab, in herdr's
+`config.toml`:
 
 ```toml
 [[keys.command]]
@@ -59,7 +60,17 @@ key = "prefix+alt+w"
 type = "plugin_action"
 command = "pack-leader.sidebar"
 description = "Pack Leader: the pack"
+
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "pack-leader.focus-leader"
+description = "Pack Leader: back to the leader"
 ```
+
+The sidebar outlines the selected worker in herdr's accent colour (`[ui]
+accent` in that file) and shows that box's task and last message in full; the
+others stay one line each.
 
 ## Use
 
@@ -90,7 +101,7 @@ full guide the agents follow ([docs/guide.md](docs/guide.md)).
 
 | | |
 |---|---|
-| **One view** | Orchestrator plus sidebar. Workers live in hidden tabs; Enter opens one, `o` comes back. `--placement split` puts a worker next to you instead. |
+| **One view** | Orchestrator plus sidebar, its goal pinned above a scrolling list of workers. Workers live in hidden tabs; a click selects one and Enter or a second click opens it, `o` or the back-to-the-leader key comes back. `--placement split` puts a worker next to you instead. |
 | **Isolation** | `--worktree new` gives a worker its own git worktree and herdr workspace, on branch `pack/<run>/<worker>`. |
 | **Supervision** | Each sync judges every worker: `live`, `unverifiable` (agent gone, pane open), `exited`, `stalled`. Anything that needs you becomes an `attention` message with the exact next command to run. |
 | **Nothing lost** | Dispatch records keep the exact preamble sent. Releasing a worker archives its screen, so `worker read` works after the tab is gone. The state file is written atomically under a pid-aware lock. |

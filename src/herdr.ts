@@ -148,6 +148,18 @@ export async function tabCreate(p: { workspace_id: string; label: string; cwd?: 
 }
 export const tabClose = (tab_id: string) => herdr("tab.close", { tab_id });
 
+/** One of this plugin's `[[panes]]` entries, split from `target_pane_id` (unfocused). */
+export async function pluginPaneOpen(p: { entrypoint: string; target_pane_id: string; direction: "right" | "down"; env?: Record<string, string> }): Promise<PaneInfo> {
+  const res = await herdr("plugin.pane.open", { plugin_id: process.env.HERDR_PLUGIN_ID ?? "pack-leader", placement: "split", focus: false, ...p });
+  const pane = res?.pane ?? res?.plugin_pane?.pane;
+  if (!pane?.pane_id) throw new HerdrError("bad_result", "herdr did not return the plugin pane");
+  return pane;
+}
+/** Swap two panes' places in the layout; ids stay with their panes. */
+export const paneSwap = (source_pane_id: string, target_pane_id: string) => herdr("pane.swap", { source_pane_id, target_pane_id });
+/** The share of its split that the first (top or left) pane of `pane_id`'s split takes. herdr clamps to its minimum sizes. */
+export const setSplitRatio = (pane_id: string, ratio: number) => herdr("layout.set_split_ratio", { pane_id, path: [], ratio });
+
 /** herdr's worktree API: the checkout opens as a workspace of its own (unfocused), with a shell tab. */
 export type WorktreeOpened = { workspace: { workspace_id: string }; tab: TabInfo; root_pane: PaneInfo; already_open?: boolean };
 export const worktreeCreate = (p: { cwd: string; path: string; branch: string; base: string; label: string }): Promise<WorktreeOpened> => herdr("worktree.create", { ...p, focus: false }, { timeoutMs: 60_000 });

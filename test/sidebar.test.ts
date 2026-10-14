@@ -15,7 +15,9 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = join(dir, "no-herdr.sock");
 
 const { emptyState } = await import("../src/state.ts");
-const { keyName, lastMessageFor, scrollFor, statusOf } = await import("../src/sidebar.ts");
+const { boundRunFor, boxAt, boxLines, clickOn, goalLines, keyName, lastMessageFor, scrollFor, splitMouse, statusOf, SELECTED_MESSAGE_LINES } = await import("../src/sidebar.ts");
+const { bold, width } = await import("../src/ansi.ts");
+const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -95,4 +97,120 @@ test("lastMessageFor: with the worker's dispatch, the previous dispatch's report
   assert.equal(lastMessageFor(s, "r1", "bob", "d2")?.body, "started d2");
   s.messages.push(msg({ from: "amy", body: "someone else" }), msg({ run_id: "r2", body: "other run" }));
   assert.equal(lastMessageFor(s, "r1", "bob", "d2")?.body, "started d2");
+});
+
+const task = { id: "t1", run_id: "r1", title: "Review the credentials flow and every caller of the token store in the app", spec: "", status: "dispatched" as const, depends_on: [], worker: "bob", dispatch_id: "d2", attempts: 1, created_at: "t", updated_at: "t", outcome: null };
+const long = "The token store keeps revoked tokens after a detach failure, and pending revocations are lost when the app restarts before the queue drains";
+
+test("boxLines: an unselected box cuts every line to the width; the selected one wraps the objective and message in full", () => {
+  const w = worker({ started_at: new Date().toISOString() });
+  const last = msg({ type: "note", body: long });
+  const compact = boxLines(w, task, last, "working", 30);
+  assert.equal(compact.length, 6, "border, agent, runtime, objective, note, border");
+  for (const l of compact) assert.equal(width(l), 30);
+  assert.match(plain(compact[3]!), /…/);
+  assert.match(plain(compact[4]!), /^│ note: .*…/);
+
+  const full = boxLines(w, task, last, "working", 30, true);
+  for (const l of full) assert.equal(width(l), 30);
+  assert.ok(full.length > compact.length);
+  const text = full.map((l) => plain(l).replace(/^│ | │$/g, "").trim()).join(" ");
+  assert.ok(text.includes(task.title), "whole title");
+  assert.ok(text.includes("note: " + long), "whole note");
+  assert.ok(!text.includes("…"));
+});
+
+test("boxLines: the selected box draws its border and name in the accent; without a theme it uses cyan; unselected stays dim", () => {
+  const w = worker({ started_at: new Date().toISOString() });
+  const themed = boxLines(w, task, null, "idle", 30, true, { accent: "#88c0d0" });
+  assert.ok(themed[0]!.startsWith("\x1b[38;2;136;192;208m┌"), "accent border");
+  assert.ok(themed[1]!.includes("\x1b[38;2;136;192;208m\x1b[1mbob"), "accent name");
+  for (const l of themed) assert.ok(!l.includes("48;2"), "no background");
+
+  const bare = boxLines(w, task, null, "idle", 30, true);
+  assert.ok(bare[0]!.startsWith("\x1b[36m┌"));
+  const idle = boxLines(w, task, null, "idle", 30, false, { accent: "#88c0d0" });
+  assert.ok(idle[0]!.startsWith("\x1b[2m┌"), "unselected: dim border, no accent");
+});
+
+test("boxLines: the selected box's message stops at SELECTED_MESSAGE_LINES with a pointer to r", () => {
+  const w = worker({ started_at: new Date().toISOString() });
+  const last = msg({ type: "note", body: Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ") });
+  const full = boxLines(w, { ...task, title: "short" }, last, "working", 24, true);
+  const notes = full.slice(4, -1);
+  assert.equal(notes.length, SELECTED_MESSAGE_LINES);
+  assert.match(plain(notes.at(-1)!), /… r shows the rest/);
+});
+
+test("boxLines: a selected ask shows the whole question and all its options", () => {
+  const w = worker({ started_at: new Date().toISOString() });
+  const last = msg({ type: "ask", body: "Which database should the migration target for the new tenants table?", options: ["postgres", "sqlite", "keep the current one"] });
+  const text = boxLines(w, task, last, "working", 28, true).map(plain).join(" ");
+  assert.ok(text.includes("tenants table?"));
+  assert.ok(text.includes("keep the current one]"));
+  const compact = boxLines(w, task, last, "working", 28).map(plain).join(" ");
+  assert.ok(compact.includes("…"));
+});
+
+test("splitMouse: SGR reports come out as events, everything else stays for the key parser", () => {
+  const { keys, mouse } = splitMouse("j\x1b[<0;5;7M\x1b[<0;5;7m\x1b[<64;1;2Mk");
+  assert.equal(keys, "jk");
+  assert.deepEqual(mouse, [
+    { button: 0, x: 5, y: 7, press: true },
+    { button: 0, x: 5, y: 7, press: false },
+    { button: 64, x: 1, y: 2, press: true },
+  ]);
+  assert.deepEqual(splitMouse("\x1b[A"), { keys: "\x1b[A", mouse: [] });
+});
+
+test("boxAt: a row maps through the scroll to the box spanning that line; gaps, the footer and off-screen rows are none", () => {
+  const boxes = [{ start: 2, end: 8 }, { start: 9, end: 15 }];
+  assert.equal(boxAt(boxes, 0, 3, 20), 0);
+  assert.equal(boxAt(boxes, 0, 8, 20), 0, "bottom border");
+  assert.equal(boxAt(boxes, 0, 9, 20), -1, "gap between boxes");
+  assert.equal(boxAt(boxes, 0, 10, 20), 1);
+  assert.equal(boxAt(boxes, 5, 1, 20), 0, "scrolled: row 1 is line 5");
+  assert.equal(boxAt(boxes, 5, 5, 20), 1);
+  assert.equal(boxAt(boxes, 0, 12, 10), -1, "below the drawn rows");
+  assert.equal(boxAt(boxes, 0, 0, 10), -1);
+  assert.equal(boxAt([], 0, 1, 10), -1);
+});
+
+test("boxLines: a selected box with a long model name puts the harness on its own line; unselected it is cut", () => {
+  const w = worker({ started_at: new Date().toISOString(), model: "openai/gpt-6.1-sol", thinking: "high" });
+  const sel = boxLines(w, task, null, "working", 28, true).map(plain);
+  assert.match(sel[1]!, /^│ ◐ bob\s+│$/);
+  const harness = sel.slice(2, 5).map((l) => l.replace(/^│ | │$/g, "").trim()).join(" ");
+  assert.equal(harness, "claude openai/gpt-6.1-sol high", "wrapped onto the following lines, nothing cut");
+  const compact = boxLines(w, task, null, "working", 28).map(plain);
+  assert.match(compact[1]!, /^│ ◐ bob claude openai\/gpt…\s*│$/);
+});
+
+test("goalLines: one paragraph, Goal: in bold on the first line, no hanging indent, wrapped to the width", () => {
+  const g = goalLines("Review all changes on the branch for issue 129 and triage the outstanding comments", 30);
+  assert.ok(g.length > 1);
+  assert.ok(g[0]!.trimStart().startsWith(bold("Goal:") + " Review"));
+  for (const l of g) {
+    assert.ok(width(l) <= 30);
+    const pad = /^ */.exec(plain(l))![0].length;
+    assert.equal(pad, Math.floor((30 - width(l.trimStart())) / 2), "centred");
+  }
+  assert.equal(plain(g.map((l) => l.trim()).join(" ")), "Goal: Review all changes on the branch for issue 129 and triage the outstanding comments");
+  assert.equal(plain(goalLines("line one\n\n  line two", 40).join("|")).trim(), "Goal: line one line two", "newlines flatten");
+});
+
+test("clickOn: a click selects the box, a click on the selected box opens it, a miss does nothing", () => {
+  assert.deepEqual(clickOn(2, 0), { sel: 2, open: false });
+  assert.deepEqual(clickOn(2, 2), { sel: 2, open: true });
+  assert.deepEqual(clickOn(-1, 1), { sel: 1, open: false });
+});
+
+test("boundRunFor: only an active run binds a sidebar pane; a closed run that recorded the same (reused) pane id does not", () => {
+  const state = emptyState();
+  const run = (id: string, status: "active" | "closed", sidebar: string | null) => ({ id, objective: id, status, created_at: "t", orchestrator: { pane_id: "w5:p1", workspace_id: "w5", tab_id: null, cwd: "/" }, sidebar_pane_id: sidebar });
+  state.runs.old = run("old", "closed", "w5:p7");
+  assert.equal(boundRunFor(state, "w5:p7"), undefined);
+  state.runs.cur = run("cur", "active", "w5:p7");
+  assert.equal(boundRunFor(state, "w5:p7")?.id, "cur");
+  assert.equal(boundRunFor(state, null), undefined);
 });

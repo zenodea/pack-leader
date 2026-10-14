@@ -122,7 +122,8 @@ test("F1: sync delivers only this run's followups sent to this incarnation of th
     throw new Error(`unexpected ${method}`);
   };
   await sync();
-  assert.deepEqual(prompts(), ["[Pack Leader follow-up from the orchestrator] for this bob"]);
+  assert.match(prompts()[0]!, /^\[Pack Leader follow-up from the orchestrator\] for this bob\n\[Pack Leader message id: new\]$/);
+  assert.equal(prompts().length, 1);
   const after = load().messages;
   assert.equal(after.find((m) => m.id === "old")!.delivered, false);
   assert.equal(after.find((m) => m.id === "other")!.delivered, false);

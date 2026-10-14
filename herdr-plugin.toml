@@ -21,6 +21,13 @@ id = "sidebar"
 title = "Pack Leader: show the pack"
 command = ["node", "src/cli.ts", "sidebar-open"]
 
+# prefix+<your key>: back to the orchestrator of the run the focused pane belongs to
+# (a worker's pane, the sidebar, or the orchestrator itself).
+[[actions]]
+id = "focus-leader"
+title = "Pack Leader: back to the leader"
+command = ["node", "src/cli.ts", "leader"]
+
 # Installs the `pack-leader` skill into Claude Code and puts `pack-leader` on PATH.
 [[actions]]
 id = "install-skill"
@@ -38,6 +45,13 @@ id = "sidebar"
 title = "Pack"
 placement = "split"
 command = ["sh", "-c", "exec node --no-warnings \"$HERDR_PLUGIN_ROOT/src/cli.ts\" sidebar"]
+
+# The two-row bar above a worker's pane: a click (or Enter) there goes back to the orchestrator.
+[[panes]]
+id = "bar"
+title = "Pack Info"
+placement = "split"
+command = ["sh", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/bin/leader-bar\""]
 
 # A worker's pane going away settles its dispatch as exited.
 [[events]]

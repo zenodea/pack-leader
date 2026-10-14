@@ -14,8 +14,8 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { done, heartbeat, inbox, send, sync } = await import("../src/inbox.ts");
+const { emptyState, load, save, update } = await import("../src/state.ts");
+const { ask, done, heartbeat, inbox, send, sync } = await import("../src/inbox.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };
@@ -61,6 +61,22 @@ function base(): State {
 const msg = (id: string, type: Message["type"], acked: boolean, extra: Partial<Message> = {}): Message =>
   ({ id, run_id: "r1", ts: "t", type, from: type === "followup" || type === "reply" ? "orchestrator" : "bob", to: type === "followup" || type === "reply" ? "bob" : "orchestrator", task_id: null, dispatch_id: null, body: id, acked, ...extra });
 const ctx = { run_id: "r1", worker: "bob", task_id: null, dispatch_id: null };
+
+function redispatchedState(): State {
+  const s = base();
+  const started = new Date(Date.now() - 60_000).toISOString();
+  const d2Started = new Date(Date.now() - 10_000).toISOString();
+  s.workers.bob!.started_at = started;
+  s.workers.bob!.task_id = "t2";
+  s.workers.bob!.dispatch_id = "d2";
+  s.tasks.t1 = { id: "t1", run_id: "r1", title: "old", spec: "old", status: "succeeded", depends_on: [], worker: "bob", dispatch_id: "d1", attempts: 1, created_at: started, updated_at: started, outcome: { summary: "done", files_modified: [], report_path: null } };
+  s.tasks.t2 = { id: "t2", run_id: "r1", title: "current", spec: "current", status: "succeeded", depends_on: [], worker: "bob", dispatch_id: "d2", attempts: 1, created_at: d2Started, updated_at: d2Started, outcome: { summary: "done", files_modified: [], report_path: null } };
+  s.dispatches = {
+    d1: { id: "d1", run_id: "r1", task_id: "t1", worker: "bob", attempt: 1, preamble: "old", cwd: "/", started_at: started, outcome: "succeeded" },
+    d2: { id: "d2", run_id: "r1", task_id: "t2", worker: "bob", attempt: 1, preamble: "current", cwd: "/", started_at: d2Started, outcome: "succeeded" },
+  };
+  return s;
+}
 
 test("pruning drops acked heartbeats first and never an unacked message", async () => {
   const s = base();
@@ -118,6 +134,114 @@ test("inbox returns unread followups and late replies, and acks them", async () 
   assert.deepEqual(await inbox(ctx), []);
 });
 
+test("inbox only consumes messages bound to the current dispatch", async () => {
+  const s = redispatchedState();
+  const beforeCurrent = new Date(Date.now() - 20_000).toISOString();
+  const current = new Date().toISOString();
+  s.messages.push(
+    msg("old-f", "followup", false, { ts: beforeCurrent, task_id: "t1", dispatch_id: "d1" }),
+    msg("old-ask", "ask", true, { ts: beforeCurrent, from: "bob", to: "orchestrator", task_id: "t1", dispatch_id: "d1" }),
+    msg("old-r", "reply", false, { ts: current, reply_to: "old-ask", task_id: "t1", dispatch_id: "d1" }),
+    msg("current-f", "followup", false, { ts: current, task_id: "t2", dispatch_id: "d2" }),
+    msg("current-ask", "ask", true, { ts: current, from: "bob", to: "orchestrator", task_id: "t2", dispatch_id: "d2" }),
+    msg("current-r", "reply", false, { ts: current, reply_to: "current-ask", task_id: "t2", dispatch_id: "d2" }),
+  );
+  save(s);
+
+  const got = await inbox({ run_id: "r1", worker: "bob", task_id: "t2", dispatch_id: "d2" });
+  assert.deepEqual(got.map((m) => m.id), ["current-f", "current-r"]);
+  const after = load().messages;
+  assert.equal(after.find((m) => m.id === "old-f")!.acked, false);
+  assert.equal(after.find((m) => m.id === "old-r")!.acked, false);
+  assert.ok(after.filter((m) => m.id === "current-f" || m.id === "current-r").every((m) => m.acked && m.delivered));
+});
+
+test("sync does not deliver a prior dispatch's queued followup to its successor", async () => {
+  const s = redispatchedState();
+  const beforeCurrent = new Date(Date.now() - 20_000).toISOString();
+  const current = new Date().toISOString();
+  s.messages.push(
+    msg("old-f", "followup", false, { ts: beforeCurrent, task_id: "t1", dispatch_id: "d1", delivered: false }),
+    msg("current-f", "followup", false, { ts: current, task_id: "t2", dispatch_id: "d2", delivered: false }),
+  );
+  save(s);
+  handler = (method) => {
+    if (method === "agent.list") return { agents: [{ pane_id: "w1:p2", agent_status: "idle", state_change_seq: 1 }] };
+    if (method === "pane.list") return { panes: [{ pane_id: "w1:p2" }] };
+    if (method === "agent.prompt") return {};
+    throw new Error(`unexpected ${method}`);
+  };
+
+  await sync();
+  assert.equal(prompts().length, 1);
+  assert.match(prompts()[0]!.params.text, /current-f/);
+  const after = load().messages;
+  assert.equal(after.find((m) => m.id === "old-f")!.acked, false);
+  assert.equal(after.find((m) => m.id === "old-f")!.delivered, false);
+  assert.equal(after.find((m) => m.id === "current-f")!.acked, true);
+  assert.equal(after.find((m) => m.id === "current-f")!.delivered, true);
+});
+
+test("an in-progress old-dispatch delivery is not finalized after redispatch", async () => {
+  const s = redispatchedState();
+  s.workers.bob!.task_id = "t1";
+  s.workers.bob!.dispatch_id = "d1";
+  s.tasks.t1!.status = "dispatched";
+  s.tasks.t1!.outcome = null;
+  s.dispatches!.d1!.outcome = undefined;
+  save(s);
+
+  let promptArrived!: () => void;
+  const arrived = new Promise<void>((resolve) => { promptArrived = resolve; });
+  let acceptPrompt!: () => void;
+  handler = (method) => {
+    if (method === "agent.get") return { agent: { pane_id: "w1:p2", agent_status: "idle", state_change_seq: 1 } };
+    if (method === "agent.prompt") {
+      promptArrived();
+      return new Promise<void>((resolve) => { acceptPrompt = resolve; });
+    }
+    throw new Error(`unexpected ${method}`);
+  };
+
+  const sending = send(load().runs.r1!, "bob", "old-dispatch instruction", false);
+  await arrived;
+  const queued = load().messages.find((m) => m.type === "followup")!;
+  assert.equal(queued.task_id, "t1");
+  assert.equal(queued.dispatch_id, "d1");
+  assert.ok(queued.delivery_claim);
+
+  await update((state) => {
+    state.workers.bob!.task_id = "t2";
+    state.workers.bob!.dispatch_id = "d2";
+  });
+  acceptPrompt();
+
+  assert.equal((await sending).delivered, false);
+  const after = load().messages.find((m) => m.id === queued.id)!;
+  assert.equal(after.acked, false);
+  assert.equal(after.delivered, false);
+  assert.equal(after.delivery_claim, undefined);
+});
+
+test("a replied historical ask remains collectable through its old context", async () => {
+  const s = redispatchedState();
+  const askedAt = new Date(Date.now() - 20_000).toISOString();
+  s.messages.push(
+    msg("old-ask", "ask", true, { ts: askedAt, from: "bob", to: "orchestrator", task_id: "t1", dispatch_id: "d1" }),
+    msg("old-reply", "reply", false, { ts: new Date().toISOString(), reply_to: "old-ask", task_id: "t1", dispatch_id: "d1" }),
+  );
+  save(s);
+  const lastSeen = load().workers.bob!.last_seen;
+
+  const result = await ask({ run_id: "r1", worker: "bob", task_id: "t1", dispatch_id: "d1" }, { resumeId: "old-ask", timeoutMs: 0 });
+  assert.equal(result.result, "reply");
+  assert.equal(result.reply?.id, "old-reply");
+  assert.equal(load().messages.find((m) => m.id === "old-reply")!.acked, true);
+  assert.equal(load().workers.bob!.task_id, "t2");
+  assert.equal(load().workers.bob!.dispatch_id, "d2");
+  assert.equal(load().workers.bob!.last_seen, lastSeen, "historical collection does not refresh the successor");
+});
+
 test("send claims the followup inside the lock before prompting", async () => {
   save(base());
   let seenAtPrompt: Message | undefined;
@@ -125,7 +249,7 @@ test("send claims the followup inside the lock before prompting", async () => {
     if (method === "agent.get") return { agent: { pane_id: "w1:p2", agent_status: "idle", state_change_seq: 1 } };
     if (method === "agent.prompt") {
       seenAtPrompt = load().messages.find((m) => m.type === "followup");
-      assert.match(params.text, /\[Pack Leader follow-up from the orchestrator\] hello/);
+      assert.match(params.text, /\[Pack Leader follow-up from the orchestrator\] hello\n\[Pack Leader message id: m\w+\]$/);
       return {};
     }
     throw new Error(`unexpected ${method}`);
@@ -134,8 +258,9 @@ test("send claims the followup inside the lock before prompting", async () => {
   assert.equal(r.delivered, true);
   assert.equal(r.message.delivered, true);
   assert.equal(r.message.acked, true);
-  assert.equal(seenAtPrompt?.delivered, true, "claimed before the prompt went out");
-  assert.equal(seenAtPrompt?.acked, true);
+  assert.equal(seenAtPrompt?.delivered, false, "an in-flight claim is not final delivery");
+  assert.equal(seenAtPrompt?.acked, false, "an in-flight claim is not an acknowledgment");
+  assert.equal(seenAtPrompt?.delivery_claim?.pid, process.pid, "claim is owned by the sending process");
   const stored = load().messages.find((m) => m.id === r.message.id)!;
   assert.equal(stored.delivered, true);
   assert.equal(stored.acked, true);
@@ -153,6 +278,7 @@ test("send reverts the claim when the prompt fails, leaving it queued", async ()
   const stored = load().messages.find((m) => m.id === r.message.id)!;
   assert.equal(stored.delivered, false);
   assert.equal(stored.acked, false);
+  assert.equal(stored.delivery_claim, undefined);
   // Still queued: the worker's inbox picks it up.
   assert.deepEqual((await inbox(ctx)).map((m) => m.id), [r.message.id]);
 });
@@ -189,6 +315,7 @@ test("concurrent syncs deliver a queued followup exactly once; a claimed one is 
   const stored = load().messages.find((m) => m.id === "f1")!;
   assert.equal(stored.delivered, true);
   assert.equal(stored.acked, true);
+  assert.equal(stored.delivery_claim, undefined);
 
   await sync();
   assert.equal(prompts().length, 1, "already delivered: not prompted again");

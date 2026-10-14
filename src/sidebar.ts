@@ -2,11 +2,13 @@
 // events and the state file; keys move between boxes, Enter jumps to a worker.
 import { watch, type FSWatcher } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
-import { bold, dim, fg, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
+import { PassThrough } from "node:stream";
+import { bold, dim, fg, fgRgb, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
 import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "./herdr.ts";
 import { ensureDir, stateDir } from "./paths.ts";
 import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, unacked, type Worker } from "./state.ts";
 import { formatOptions, sync } from "./inbox.ts";
+import { loadTheme, noTheme, type Theme } from "./theme.ts";
 
 type Live = Map<string, { status: AgentStatus; title: string | null; agent: string | null }>;
 
@@ -53,32 +55,104 @@ function wrap(s: string, w: number, max: number): string[] {
   return lines;
 }
 
+/** The selected box shows its last message in full, up to this many lines; `r` peeks at the raw screen for the rest. */
+export const SELECTED_MESSAGE_LINES = 12;
+
 /**
  * One worker's box, borders included: agent, runtime and status, objective,
  * then the last message. An unanswered ask shows its question (up to two
  * lines) and its options as `[a | b | c]`, in yellow; a reply shows its answer;
  * a note shows `note: ...`. The status glyph and word cover liveness
  * (unverifiable, stalled) as well as herdr's agent states.
- * At most 8 lines, each exactly `cols` cells wide.
+ * Every line is exactly `cols` cells wide. An unselected box cuts each line to the
+ * width (at most 8 lines); the selected box wraps its objective and message in full
+ * (message capped at SELECTED_MESSAGE_LINES) and draws its border and name in the theme's accent.
  */
-export function boxLines(w: Worker, t: Task | null, last: Message | null, st: string, cols: number, selected = false): string[] {
+export function boxLines(w: Worker, t: Task | null, last: Message | null, st: string, cols: number, selected = false, theme: Theme = noTheme): string[] {
   const inner = Math.max(1, cols - 4);
-  const agent = [glyph[st] ?? "?", bold(w.name), dim(w.kind), w.model ? dim(w.model) : "", w.thinking ? dim(w.thinking) : ""].filter(Boolean).join(" ");
+  const accent = theme.accent ? fgRgb(theme.accent) : fg.cyan;
+  const name = selected ? accent(bold(w.name)) : bold(w.name);
+  const harness = [dim(w.kind), w.model ? dim(w.model) : "", w.thinking ? dim(w.thinking) : ""].filter(Boolean).join(" ");
+  const agentLine = `${glyph[st] ?? "?"} ${name} ${harness}`;
+  // Selected, a long model name moves the harness to a line of its own instead of being cut.
+  const agent = selected && width(agentLine) > inner ? [`${glyph[st] ?? "?"} ${name}`, ...wrapAll(harness, inner - 2).map((l) => "  " + l)] : [agentLine];
   const runtime = `${dim("runtime")} ${elapsed(w.started_at)} ${dim("·")} ${alarming.has(st) ? fg.red(word[st]!) : word[st] ?? st}`;
-  const objective = t ? `${t.status === "dispatched" ? "" : dim(t.status + ": ")}${t.title}` : dim("no task");
-  const note: string[] = [];
+  // A prefixed line: `prefix` styled, `plain` its unstyled text, so a wrapped first line can carry it.
+  const prefixed = (prefix: string, plain: string, body: string, style: (l: string) => string = (l) => l, max = 1): string[] => {
+    if (!selected) return wrap(plain + body, inner, max).map((l, i) => style(i === 0 && l.startsWith(plain) ? prefix + l.slice(plain.length) : l));
+    const lines = wrapAll(plain + body, inner).map((l, i) => style(i === 0 && l.startsWith(plain) ? prefix + l.slice(plain.length) : l));
+    return lines;
+  };
+  const objective = t ? (t.status === "dispatched" ? prefixed("", "", t.title) : prefixed(dim(t.status + ": "), t.status + ": ", t.title)) : [dim("no task")];
+  let note: string[] = [];
   if (last?.type === "ask") {
-    note.push(...wrap(`asks: ${oneLine(last.body)}`, inner, 2).map((l) => fg.yellow(l)));
-    if (last.options?.length) note.push(fg.yellow(truncate(`[${formatOptions(last.options)}]`, inner, "")));
-  } else if (last?.type === "reply") note.push(`${fg.cyan("answer: ")}${oneLine(last.answer ?? last.body)}`);
-  else if (last?.type === "note") note.push(`${fg.yellow("note: ")}${oneLine(last.body)}`);
-  else if (last) note.push(`${last.type === "done" ? (last.outcome === "failed" ? fg.red("failed: ") : fg.green("done: ")) : dim("↳ ")}${oneLine(last.body)}`);
-  const border = selected ? fg.cyan : dim;
+    note.push(...prefixed("", "", `asks: ${oneLine(last.body)}`, fg.yellow, 2));
+    if (last.options?.length) {
+      const opts = `[${formatOptions(last.options)}]`;
+      note.push(...(selected ? wrapAll(opts, inner).map((l) => fg.yellow(l)) : [fg.yellow(truncate(opts, inner, ""))]));
+    }
+  } else if (last?.type === "reply") note = prefixed(fg.cyan("answer: "), "answer: ", oneLine(last.answer ?? last.body));
+  else if (last?.type === "note") note = prefixed(fg.yellow("note: "), "note: ", oneLine(last.body));
+  else if (last) {
+    const [styled, plain] = last.type === "done" ? (last.outcome === "failed" ? [fg.red("failed: "), "failed: "] : [fg.green("done: "), "done: "]) : [dim("↳ "), "↳ "];
+    note = prefixed(styled, plain, oneLine(last.body));
+  }
+  if (note.length > SELECTED_MESSAGE_LINES) note = [...note.slice(0, SELECTED_MESSAGE_LINES - 1), dim("… r shows the rest")];
+  const border = selected ? accent : dim;
   return [
     border("┌" + "─".repeat(inner + 2) + "┐"),
-    ...[agent, runtime, objective, ...note].map((l) => border("│ ") + pad(truncate(l, inner), inner) + border(" │")),
+    ...[...agent, runtime, ...objective, ...note].map((l) => border("│ ") + pad(truncate(l, inner), inner) + border(" │")),
     border("└" + "─".repeat(inner + 2) + "┘"),
   ];
+}
+
+/**
+ * The active run this sidebar pane was opened for, if any. Only active runs count: herdr
+ * reuses pane ids across restarts, so a closed run's recorded sidebar pane can be this one.
+ */
+export function boundRunFor(state: State, pane: string | null): Run | undefined {
+  return pane ? activeRuns(state).find((r) => r.sidebar_pane_id === pane) : undefined;
+}
+
+/** Each line centred in `cols` by leading spaces. */
+export function centred(lines: string[], cols: number): string[] {
+  return lines.map((l) => " ".repeat(Math.max(0, Math.floor((cols - width(l)) / 2))) + l);
+}
+
+/** The run's goal as one paragraph, `Goal:` in bold, wrapped to the width and each line centred. */
+export function goalLines(objective: string, cols: number): string[] {
+  const label = "Goal:";
+  const w = Math.max(8, cols);
+  // A word wider than the pane (a branch name, a path) is split so no line gets cut.
+  const text = oneLine(objective).split(" ").flatMap((word) => (width(word) <= w ? [word] : [...word.match(new RegExp(`.{1,${w}}`, "g")) ?? [word]])).join(" ");
+  return centred(wrapAll(`${label} ${text}`, w), w).map((l) => (l.trimStart().startsWith(label) ? l.replace(label, bold(label)) : l));
+}
+
+/** What a click on box `i` does: select it, or open it when it is the selected one already (two clicks open). */
+export function clickOn(i: number, sel: number): { sel: number; open: boolean } {
+  if (i < 0) return { sel, open: false };
+  return { sel: i, open: i === sel };
+}
+
+/** A mouse report the terminal sent: SGR-encoded button, 1-based cell, press (`M`) or release (`m`). */
+export type MouseEvent = { button: number; x: number; y: number; press: boolean };
+const MOUSE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
+
+/** Mouse reports out of a raw stdin chunk, and what is left for the key parser. */
+export function splitMouse(chunk: string): { keys: string; mouse: MouseEvent[] } {
+  const mouse: MouseEvent[] = [];
+  const keys = chunk.replace(MOUSE, (_m, b, x, y, k) => {
+    mouse.push({ button: Number(b), x: Number(x), y: Number(y), press: k === "M" });
+    return "";
+  });
+  return { keys, mouse };
+}
+
+/** The box (index into the drawn boxes) under terminal row `row` (1-based), given the lines each box spans and the scroll; -1 for none. */
+export function boxAt(boxes: { start: number; end: number }[], scroll: number, row: number, avail: number): number {
+  if (row < 1 || row > avail) return -1;
+  const line = scroll + row - 1;
+  return boxes.findIndex((b) => line >= b.start && line < b.end);
 }
 
 /**
@@ -125,6 +199,14 @@ export async function runSidebar(): Promise<void> {
   let scroll = 0;
   let message: string | null = null;
   let drawTimer: NodeJS.Timeout | null = null;
+  const theme = loadTheme();
+  // Set once mouse reporting is on, so quit() turns it off again.
+  let mouse = "";
+  // What the last draw put where, for clicks: each box's line span, the scroll and the rows the boxes had.
+  let boxSpans: { start: number; end: number }[] = [];
+  let drawnScroll = 0;
+  let drawnHeader = 0;
+  let drawnAvail = 0;
 
   const refreshLive = async () => {
     try {
@@ -139,7 +221,7 @@ export async function runSidebar(): Promise<void> {
 
   const pane = process.env.HERDR_PANE_ID ?? null;
   const workspace = pane && /^([A-Za-z0-9_-]+):[A-Za-z0-9_-]+$/.exec(pane)?.[1];
-  const boundRun = (): Run | undefined => (pane ? Object.values(state.runs).find((r) => r.sidebar_pane_id === pane) : undefined);
+  const boundRun = (): Run | undefined => boundRunFor(state, pane);
   const mine = (): Run[] => {
     const bound = boundRun();
     if (bound) return bound.status === "active" ? [bound] : [];
@@ -155,30 +237,40 @@ export async function runSidebar(): Promise<void> {
 
   const draw = () => {
     const cols = out.columns || 30;
-    const lines: string[] = [];
     const runs = mine();
-    if (!runs.length) lines.push(dim("no active run — pack-leader run create"));
+    // The header stays put: the goal of the selected box's run (the first run before any box is
+    // selected), and its unread count. Everything under it scrolls.
+    const header: string[] = [];
+    const lines: string[] = [];
+    if (!runs.length) header.push(dim("no active run — pack-leader run create"));
     let i = 0;
-    // Lines of the selected box; the first box of a run brings its goal line along.
     let selStart = 0;
     let selEnd = 0;
+    let selRun: Run | null = null;
+    const spans: { start: number; end: number }[] = [];
     for (const run of runs) {
-      const box = unacked(state, run.id).length;
-      if (lines.length) lines.push("");
-      const runStart = lines.length;
-      for (const [i, l] of wrapAll(run.objective, Math.max(8, cols - 5)).entries()) lines.push(i ? `     ${l}` : `${dim("goal")} ${l}`);
-      if (box) lines.push(fg.yellow(`  ${box} unread for the orchestrator`));
       const ws = runWorkers(state, run.id);
+      if (!selRun && (ws.length === 0 ? run === runs[0] : i <= sel && sel < i + ws.length)) selRun = run;
+      if (lines.length) lines.push("");
+      if (runs.length > 1) lines.push(dim(truncate(`── ${run.id} · ${oneLine(run.objective)}`, cols)));
       if (!ws.length) lines.push(dim("  no workers yet"));
-      ws.forEach((w, n) => {
+      ws.forEach((w) => {
         const t = w.task_id ? state.tasks[w.task_id] ?? null : null;
-        if (i === sel) selStart = n === 0 ? runStart : lines.length;
-        lines.push(...boxLines(w, t, lastMessageFor(state, run.id, w.name, w.dispatch_id), statusOf(w, liveKnown ? live : null), cols, i === sel));
+        const start = lines.length;
+        if (i === sel) selStart = start;
+        lines.push(...boxLines(w, t, lastMessageFor(state, run.id, w.name, w.dispatch_id), statusOf(w, liveKnown ? live : null), cols, i === sel, theme));
+        spans.push({ start, end: lines.length });
         if (i === sel) selEnd = lines.length;
         i++;
       });
       const pending = runTasks(state, run.id).filter((t) => t.status === "pending");
       if (pending.length) lines.push(dim(`  ${pending.length} pending task${pending.length === 1 ? "" : "s"}`));
+    }
+    selRun ??= runs[0] ?? null;
+    if (selRun) {
+      header.push(...goalLines(selRun.objective, cols));
+      const box = unacked(state, selRun.id).length;
+      if (box) header.push(...centred(wrapAll(`${box} unread for the orchestrator`, Math.max(8, cols)), cols).map((l) => fg.yellow(l)));
     }
     // The preview and a message stay pinned above the footer; the boxes scroll.
     const tail: string[] = [];
@@ -187,13 +279,20 @@ export async function runSidebar(): Promise<void> {
       for (const l of preview) tail.push(truncate(l, cols));
     }
     if (message) tail.push("", fg.yellow(truncate(message, cols)));
-    const footer = [(connected ? "" : fg.red("offline · ")) + (help ? dim("j/k move · enter open worker · o back · r peek · R refresh · q quit") : "")];
+    const footer = [(connected ? "" : fg.red("offline · ")) + (help ? dim("j/k or wheel move · click selects, click again opens · enter opens · o back · r peek · R refresh · q quit") : "")];
 
     const rowsAvail = out.rows || 24;
     const pinned = tail.slice(-Math.floor(rowsAvail / 2));
-    const avail = Math.max(1, rowsAvail - footer.length - 1 - pinned.length);
+    // A tall goal keeps at most a third of the pane; the list always gets the rest. A rule with a
+    // blank line on each side separates the pinned goal from the pack.
+    const head = [...header.slice(0, Math.max(1, Math.floor(rowsAvail / 3))), ...(runs.length ? ["", dim("─".repeat(cols)), ""] : [])];
+    const avail = Math.max(1, rowsAvail - footer.length - 1 - pinned.length - head.length);
     scroll = scrollFor(scroll, selStart, selEnd, avail, lines.length);
-    const body = [...lines.slice(scroll, scroll + avail), ...pinned];
+    boxSpans = spans;
+    drawnScroll = scroll;
+    drawnHeader = head.length;
+    drawnAvail = Math.min(avail, lines.length - scroll);
+    const body = [...head, ...lines.slice(scroll, scroll + avail), ...pinned];
     let buf = screen.home;
     for (let r = 0; r < rowsAvail; r++) {
       const line = r < body.length ? body[r]! : r === rowsAvail - 1 ? footer[0]! : "";
@@ -256,7 +355,7 @@ export async function runSidebar(): Promise<void> {
     clearInterval(clock);
     stop();
     watcher?.close();
-    out.write(screen.showCursor + screen.main);
+    out.write(mouse + screen.showCursor + screen.main);
     process.exit(0);
   };
   const finished = () => {
@@ -271,6 +370,11 @@ export async function runSidebar(): Promise<void> {
     quit();
   };
   out.write(screen.alt + screen.hideCursor + screen.clear);
+  // Clicks and the wheel, only when there is a keyboard to take them away from.
+  if (process.stdin.isTTY) {
+    mouse = screen.mouseOff;
+    out.write(screen.mouseOn);
+  }
   await refreshLive();
   draw();
   process.on("SIGTERM", quit);
@@ -278,11 +382,37 @@ export async function runSidebar(): Promise<void> {
   out.on("resize", schedule);
 
   if (!process.stdin.isTTY) return new Promise(() => {});
-  emitKeypressEvents(process.stdin);
+  const openSelected = () => {
+    // The worker lives in its own tab: this switches to it. herdr's tab keys (or `o` here) come back.
+    const cur = rows()[sel];
+    if (cur) void agentFocus(cur.worker.name).catch((e) => ((message = e.message), schedule()));
+  };
+  const move = (by: number) => {
+    const n = rows().length;
+    sel = n ? (sel + by + n) % n : 0;
+    schedule();
+  };
+  // Mouse reports are cut out of the raw input before readline sees it, or it would read them as keys.
+  const keys = new PassThrough();
+  emitKeypressEvents(keys);
   process.stdin.setRawMode(true);
   process.stdin.resume();
-  process.stdin.on("keypress", (_s: string, key: { name?: string; ctrl?: boolean; shift?: boolean; sequence?: string }) => {
-    const n = rows().length;
+  process.stdin.on("data", (chunk: Buffer | string) => {
+    const { keys: rest, mouse: events } = splitMouse(chunk.toString());
+    for (const m of events) {
+      if (m.button === 64) move(-1);
+      else if (m.button === 65) move(1);
+      else if (m.press && m.button === 0) {
+        const c = clickOn(boxAt(boxSpans, drawnScroll, m.y - drawnHeader, drawnAvail), sel);
+        if (c.sel === sel && !c.open) continue;
+        sel = c.sel;
+        schedule();
+        if (c.open) openSelected();
+      }
+    }
+    if (rest) keys.write(rest);
+  });
+  keys.on("keypress", (_s: string, key: { name?: string; ctrl?: boolean; shift?: boolean; sequence?: string }) => {
     const cur = rows()[sel];
     if (key.ctrl && key.name === "c") return quit();
     switch (keyName(key)) {
@@ -290,17 +420,13 @@ export async function runSidebar(): Promise<void> {
         return quit();
       case "j":
       case "down":
-        sel = n ? (sel + 1) % n : 0;
-        break;
+        return move(1);
       case "k":
       case "up":
-        sel = n ? (sel - 1 + n) % n : 0;
-        break;
+        return move(-1);
       case "return":
       case "enter":
-        // The worker lives in its own tab: this switches to it. herdr's tab keys (or `o` here) come back.
-        if (cur) void agentFocus(cur.worker.name).catch((e) => ((message = e.message), schedule()));
-        return;
+        return openSelected();
       case "o":
         if (cur?.run.orchestrator.pane_id) void paneFocus(cur.run.orchestrator.pane_id).catch((e) => ((message = e.message), schedule()));
         return;

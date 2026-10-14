@@ -1,12 +1,26 @@
 // A run's end of life: closing it (workers, tasks, sidebar) and, later,
 // pruning closed runs and everything that belongs to them out of the state.
 import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { getPane, renamePane, logHerdrError, paneClose, tabRename } from "./herdr.ts";
-import { activeRuns, log, now, runWorkers, type Run, type State, update } from "./state.ts";
+import { activeRuns, acquire, log, now, release, runWorkers, type Run, type State, update } from "./state.ts";
 import { archiveDir, settleDispatch } from "./dispatch.ts";
-import { type ReleaseResult, releaseWorker } from "./workers.ts";
+import { stateDir } from "./paths.ts";
+import { START_CLAIM_MS, type ReleaseResult, releaseWorker } from "./workers.ts";
 
 const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+const RUN_START_FENCE_TIMEOUT_MS = 120_000;
+const runStartFencePath = (runId: string) => join(stateDir, "run-start-fences", `${encodeURIComponent(runId)}.lock`);
+
+async function withRunStartFence<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+  const path = runStartFencePath(runId);
+  await acquire(path, RUN_START_FENCE_TIMEOUT_MS);
+  try {
+    return await fn();
+  } finally {
+    release(path);
+  }
+}
 
 /** "90s", "15m", "12h", "2d", "1w" in milliseconds. */
 export function parseDuration(s: string): number {
@@ -117,14 +131,21 @@ export type CloseResult = {
  * unless another active run shows the same one.
  */
 export async function closeRun(runId: string, o: { release?: boolean; force?: boolean } = {}): Promise<CloseResult> {
-  const { run, workers, failed } = await update((state) => {
+  const { run, workers, failed } = await withRunStartFence(runId, () => update((state) => {
     const run = state.runs[runId];
     if (!run) throw new Error(`no run ${runId}`);
     if (run.status === "closed" && !o.force) throw new Error(`run ${runId} is already closed; pass --force to close it again`);
     const workers = runWorkers(state, runId);
     const busy = workers.filter((w) => w.task_id && state.tasks[w.task_id]?.status === "dispatched");
-    if (busy.length && !o.release && !o.force) {
-      throw new Error(`workers still dispatched in run ${runId}: ${busy.map((w) => w.name).join(", ")}; pass --release to release them, or --force to close anyway`);
+    const registered = new Set(workers.map((w) => w.dispatch_id).filter((id): id is string => Boolean(id)));
+    const starting = Object.values(state.dispatches ?? {}).filter((d) => d.run_id === runId && !d.settled_at && !registered.has(d.id));
+    const activeStarts = starting.filter((d) => {
+      const started = Date.parse(d.started_at);
+      return Number.isFinite(started) && Date.now() - started <= START_CLAIM_MS;
+    });
+    if (!o.release && !o.force) {
+      if (busy.length) throw new Error(`workers still dispatched in run ${runId}: ${busy.map((w) => w.name).join(", ")}; pass --release to release them, or --force to close anyway`);
+      if (activeStarts.length) throw new Error(`workers still starting in run ${runId}: ${activeStarts.map((d) => d.worker).join(", ")}; pass --release to release them, or --force to close anyway`);
     }
     const failed: string[] = [];
     for (const t of Object.values(state.tasks)) {
@@ -135,6 +156,19 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
       settleDispatch(state, t.dispatch_id, "failed");
       failed.push(t.id);
     }
+    // An accepted start has an unsettled dispatch but no registered worker/task commit yet.
+    // Revoke it with the same terminal task outcome; the resumed start will fail its authority check.
+    for (const d of starting) {
+      const t = state.tasks[d.task_id];
+      if (!t || t.run_id !== runId || (t.status !== "pending" && t.status !== "failed")) continue;
+      t.status = "failed";
+      t.worker = d.worker;
+      t.dispatch_id = d.id;
+      t.attempts += 1;
+      t.updated_at = now();
+      t.outcome = { summary: "run closed", files_modified: [], report_path: null };
+      if (!failed.includes(t.id)) failed.push(t.id);
+    }
     // Nothing of a closed run is still in flight: any dispatch left open is failed with it.
     for (const d of Object.values(state.dispatches ?? {})) if (d.run_id === runId) settleDispatch(state, d.id, "failed");
     // Nor still owed to a worker: followups and replies nobody collected are dropped with the run.
@@ -144,7 +178,7 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
     // sync() only clears this on active runs; a closed run keeps no stale herdr warning.
     delete run.herdr_unreachable_since;
     return { run: { ...run }, workers, failed };
-  });
+  }));
 
   const released: CloseResult["released"] = [];
   if (o.release) {
@@ -164,7 +198,7 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
     for (const w of runWorkers(state, runId)) {
       forgotten.push({ worker: w.name, pane_id: w.pane_id, tab_id: w.tab_id ?? null });
       const wt = w.worktree ? state.worktrees?.[w.worktree.path] : undefined;
-      if (wt) wt.released_at ??= now();
+      if (wt && wt.worker === w.name && wt.run_id === w.run_id && wt.dispatch_id === w.worktree_dispatch_id) wt.released_at ??= now();
       delete state.workers[w.name];
     }
     const r = state.runs[runId];

@@ -1,12 +1,16 @@
 // Starting a worker: a sibling pane next to the orchestrator, an agent in it,
 // and the task handed over as the first prompt with a preamble that tells the
 // worker how to report back. Also stopping and releasing one.
-import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, logHerdrError, paneClose, paneSplit, promptLanded, tabClose, tabCreate, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "./herdr.ts";
+import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, logHerdrError, paneClose, paneSplit, paneSwap, pluginPaneOpen, promptLanded, setSplitRatio, tabClose, tabCreate, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "./herdr.ts";
+import { basename } from "node:path";
+import { loadTheme } from "./theme.ts";
 import { dropUndelivered, envMs, EXITED_SUMMARY, touch } from "./inbox.ts";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { stateDir } from "./paths.ts";
-import { load, log, nextId, now, ready, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
+import { acquire, load, log, nextId, now, ready, release, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
 import { archiveScreen, createDispatch, settleDispatch, taskDispatchIds } from "./dispatch.ts";
-import { gitWorktreeAdd, gitWorktreeRemove, isUnknownMethod, planWorktree, type WorktreeInfo } from "./worktree.ts";
+import { gitWorktreeAdd, gitWorktreeRemove, isUnknownMethod, planWorktree, worktreeIdentityPath, type WorktreeInfo } from "./worktree.ts";
 
 export const DEFAULT_KIND = "claude";
 
@@ -114,7 +118,31 @@ export type StartOptions = {
   /** For `--worktree new`: the commit to branch from (default HEAD at cwd) and the branch name (default pack/<run>/<worker>). */
   base?: string;
   branch?: string;
+  /** No "back to leader" bar above the worker's pane. */
+  noBar?: boolean;
 };
+
+/**
+ * The two-row "back to leader" bar above a worker's pane: a plugin pane split from it,
+ * swapped on top and shrunk to herdr's minimum. Best effort: a herdr without plugin panes,
+ * or any failure, means no bar and a logged event, never a failed start.
+ */
+async function openLeaderBar(run: Run, name: string, paneId: string, info: { where: string; whereLabel: "Branch" | "Dir"; task: string }): Promise<string | null> {
+  try {
+    const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+    const env: Record<string, string> = { PACK_RUN_ID: run.id, PACK_WORKER: name, PACK_OBJECTIVE: oneLine(run.objective), PACK_WHERE: info.where, PACK_WHERE_LABEL: info.whereLabel, PACK_TASK: oneLine(info.task) };
+    const accent = loadTheme().accent;
+    if (accent) env.PACK_ACCENT = accent;
+    const bar = await pluginPaneOpen({ entrypoint: "bar", target_pane_id: paneId, direction: "down", env });
+    await paneSwap(bar.pane_id, paneId);
+    await setSplitRatio(bar.pane_id, 0.05);
+    log({ event: "bar.opened", run: run.id, worker: name, pane: bar.pane_id });
+    return bar.pane_id;
+  } catch (err) {
+    logHerdrError("bar.open", err, { run: run.id, worker: name, pane: paneId });
+    return null;
+  }
+}
 
 export type StartResult = {
   worker: Worker;
@@ -138,11 +166,15 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
 
   const cwd = wt ? wt.path : baseCwd;
   // The task: new from --spec, or an existing pending/ready one (or a failed one with --retry).
-  const { task, dispatchId, text } = await update((state) => {
+  const admit = () => update((state) => {
+    if (state.runs[o.run.id]?.status !== "active") throw new Error(`run ${o.run.id} is closed or no longer exists`);
     if (state.workers[o.name] && state.runs[state.workers[o.name]!.run_id]?.status === "active") throw new Error(`worker "${o.name}" exists; release it first`);
-    refuseStartInFlight(state, o.name, o.taskId);
+    refuseStartInFlight(state, o.name, o.taskId, wt?.path);
     if (wt) {
-      const other = Object.values(state.workers).find((w) => w.name !== o.name && state.runs[w.run_id]?.status === "active" && (w.worktree?.path === wt.path || w.cwd === wt.path));
+      const other = Object.values(state.workers).find((w) =>
+        w.name !== o.name && state.runs[w.run_id]?.status === "active" &&
+        [w.worktree?.path, w.cwd].some((path) => path && worktreeIdentityPath(path) === wt.path),
+      );
       if (other) throw new Error(`worker "${other.name}" already works in ${wt.path}; two workers never share a working tree`);
     }
     let task: Task;
@@ -174,23 +206,39 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     }
     const dispatchId = nextId(state, "d");
     const text = preamble({ worker: o.name, run: o.run, task, dispatchId, cwd, worktree: wt });
-    createDispatch(state, { id: dispatchId, task, worker: o.name, preamble: text, cwd });
+    createDispatch(state, { id: dispatchId, task, worker: o.name, preamble: text, cwd, worktreePath: wt?.path });
+    if (wt) (state.worktrees ??= {})[wt.path] = { ...wt, worker: o.name, run_id: o.run.id, dispatch_id: dispatchId, created_at: now() };
     return { task, dispatchId, text };
   });
+  const admitted = wt
+    ? await withWorktreeFence(wt.path, async () => {
+      const fresh = planWorktree({ spec: o.worktree!, cwd: baseCwd, runId: o.run.id, worker: o.name, base: o.base, branch: o.branch });
+      if (fresh.path !== wt.path || fresh.repo !== wt.repo || fresh.branch !== wt.branch || fresh.base !== wt.base || fresh.created_by_pack !== wt.created_by_pack) {
+        throw new Error(`checkout ${wt.path} changed before admission; retry the start`);
+      }
+      return admit();
+    })
+    : await admit();
+  const { task, dispatchId, text } = admitted;
 
   // The state dir goes along, so a worker whose pane would otherwise fall back to the XDG default reads the orchestrator's file.
   const env = { PACK_ROLE: "worker", PACK_RUN_ID: o.run.id, PACK_WORKER: o.name, PACK_TASK_ID: task.id, PACK_DISPATCH_ID: dispatchId, HERDR_PLUGIN_STATE_DIR: stateDir };
-  let pane: { pane_id: string };
+  let pane!: { pane_id: string };
+  let paneCreated = false;
   let tabId: string | null = null;
   let wtReady = false;
+  let shellTab: string | null = null;
   try {
     if (wt) {
       // A hidden-tab worker's worktree opens as a herdr workspace and its tab goes there; a split stays next to the orchestrator.
-      await materializeWorktree(wt, o.name, o.placement === "tab");
+      shellTab = (await materializeWorktree(wt, o.name, o.placement === "tab")).shellTab;
       wtReady = true;
-      await update((state) => {
-        (state.worktrees ??= {})[wt.path] = { ...wt, worker: o.name, run_id: o.run.id, created_at: now() };
-      });
+      await withWorktreeFence(wt.path, () => update((state) => {
+        assertStartAuthority(state, { runId: o.run.id, name: o.name, taskId: task.id, dispatchId });
+        const rec = state.worktrees?.[wt.path];
+        if (!rec || rec.dispatch_id !== dispatchId) throw startRevoked(o.run.id, dispatchId);
+        Object.assign(rec, wt, { worker: o.name, run_id: o.run.id, dispatch_id: dispatchId });
+      }));
       log({ event: "worktree.ready", run: o.run.id, worker: o.name, path: wt.path, branch: wt.branch, created: wt.created_by_pack, workspace: wt.workspace_id ?? null });
     }
     if (o.placement === "tab") {
@@ -202,30 +250,35 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
         throw new HerdrError("bad_result", "herdr did not return the new tab's pane");
       }
       pane = t.root_pane;
+      paneCreated = true;
       tabId = t.tab?.tab_id ?? null;
       log({ event: "tab.created", run: o.run.id, worker: o.name, tab: tabId, pane: pane.pane_id });
+      // One tab per worker: the shell tab herdr gave the worktree workspace goes, so the workspace is just the worker.
+      if (shellTab && shellTab !== tabId) {
+        await tabClose(shellTab).catch((err) => logHerdrError("worktree.shell_tab.close", err, { worker: o.name, tab: shellTab }));
+        log({ event: "worktree.shell_tab_closed", run: o.run.id, worker: o.name, tab: shellTab });
+      }
     } else {
       const target = o.targetPane ?? o.run.orchestrator.pane_id;
       if (!target) throw new Error("the run has no orchestrator pane; pass --target-pane");
       pane = await paneSplit({ target_pane_id: target, direction: o.direction, cwd, env, ratio: o.ratio });
       if (!pane?.pane_id) throw new HerdrError("bad_result", "herdr did not return the new pane");
+      paneCreated = true;
       log({ event: "pane.split", run: o.run.id, worker: o.name, pane: pane.pane_id });
     }
   } catch (err) {
     // No worktree or no pane, no dispatch: settle the record so it does not look in flight forever (and frees the name),
     // and take back a task made by this --spec start alone. A --task start never touched its task.
-    const dropped = await update((state) => {
-      settleDispatch(state, dispatchId, "failed");
-      if (o.taskId || !state.tasks[task.id] || !taskDispatchIds(state, task.id).every((d) => d === dispatchId)) return false;
-      delete state.tasks[task.id];
-      return true;
-    }).catch(() => false);
-    if (dropped) (err as Error).message += `; task ${task.id} was not kept`;
+    const rollback = await rollbackStartClaim(o, task.id, dispatchId).catch(() => ({ dropped: false, revoked: true }));
+    if (rollback.dropped) (err as Error).message += `; task ${task.id} was not kept`;
+    if (rollback.revoked && paneCreated) await closeStartPane(pane.pane_id, tabId, o.run.id, o.name);
     // A checkout made for this worker alone is empty: take it away again rather than leave it orphaned.
-    if (wt && wtReady) (err as Error).message += `; ${await undoWorktree(wt, o.run.id, o.name)}`;
+    if (wt && wtReady) (err as Error).message += `; ${await undoWorktree(wt, o.run.id, o.name, dispatchId)}`;
+    if (rollback.revoked) (err as Error).message += `; start was revoked because run ${o.run.id} closed or its dispatch was settled`;
     throw err;
   }
 
+  const barPane = o.noBar ? null : await openLeaderBar(o.run, o.name, pane.pane_id, { where: wt?.branch ?? basename(cwd), whereLabel: wt?.branch ? "Branch" : "Dir", task: task.title });
   const extraArgs = [...o.extraArgs, ...modelArgs(o.kind, o.model, o.thinking)];
   const asked = modelFromArgs(o.kind, extraArgs);
   const worker: Worker = {
@@ -247,35 +300,71 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     owns_tab: tabId !== null,
     retained: false,
     worktree: wt,
+    ...(wt ? { worktree_dispatch_id: dispatchId } : {}),
     awaiting_prompt: true,
+    bar_pane_id: barPane,
   };
-  // Recorded before the agent starts, so a crash mid-start still leaves a trail.
-  await update((state) => {
-    state.workers[worker.name] = worker;
-    const t = state.tasks[task.id]!;
-    t.status = "dispatched";
-    t.worker = worker.name;
-    t.dispatch_id = dispatchId;
-    t.attempts += 1;
-    t.updated_at = now();
-  });
+  // Commit the pane and task only while this run still owns the unsettled dispatch.
+  // A close that won while tab.create/pane.split was outstanding revokes this start.
+  try {
+    await update((state) => {
+      assertStartAuthority(state, { runId: o.run.id, name: o.name, taskId: task.id, dispatchId });
+      state.workers[worker.name] = worker;
+      const t = state.tasks[task.id]!;
+      t.status = "dispatched";
+      t.worker = worker.name;
+      t.dispatch_id = dispatchId;
+      t.attempts += 1;
+      t.updated_at = now();
+    });
+  } catch (err) {
+    const rollback = await rollbackStartClaim(o, task.id, dispatchId).catch(() => ({ dropped: false, revoked: true }));
+    if (paneCreated) await closeStartPane(pane.pane_id, tabId, o.run.id, o.name, barPane);
+    if (wt && wtReady) await undoWorktree(wt, o.run.id, o.name, dispatchId);
+    if (rollback.revoked) throw startRevoked(o.run.id, dispatchId);
+    throw err;
+  }
 
+  const cleanupRevokedStart = async () => {
+    await closeStartPane(pane.pane_id, tabId, o.run.id, o.name, barPane);
+    if (wt && wtReady) await undoWorktree(wt, o.run.id, o.name, dispatchId);
+  };
+  const assertCurrentStart = async () => {
+    try {
+      await requireStartAuthority(o.run.id, o.name, task.id, dispatchId);
+    } catch (err) {
+      if (err instanceof StartRevokedError) await cleanupRevokedStart();
+      throw err;
+    }
+  };
   const args = [...(o.noDefaultArgs ? [] : defaultAgentArgs(o.kind)), ...extraArgs];
   let warning: string | undefined;
   try {
+    await assertCurrentStart();
     await startWhenShellReady({ name: o.name, kind: o.kind, pane_id: pane.pane_id, args, timeout_ms: o.timeoutMs });
+    await assertCurrentStart();
   } catch (err) {
+    if (err instanceof StartRevokedError) throw err;
     const e = err as HerdrError;
     warning = `agent did not come up (${e.code ?? "error"}: ${e.message}); pane ${pane.pane_id} is left for inspection`;
-    await update((state) => {
-      const t = state.tasks[task.id]!;
-      t.status = "failed";
-      t.updated_at = now();
-      t.outcome = { summary: `start failed: ${e.message}`, files_modified: [], report_path: null };
-      settleDispatch(state, dispatchId, "failed");
-      const w = state.workers[worker.name];
-      if (w) w.last_status = "exited";
-    });
+    try {
+      await update((state) => {
+        assertStartAuthority(state, { runId: o.run.id, name: o.name, taskId: task.id, dispatchId, registered: true });
+        const t = state.tasks[task.id]!;
+        t.status = "failed";
+        t.updated_at = now();
+        t.outcome = { summary: `start failed: ${e.message}`, files_modified: [], report_path: null };
+        settleDispatch(state, dispatchId, "failed");
+        const w = state.workers[worker.name];
+        if (w) w.last_status = "exited";
+      });
+    } catch (commitError) {
+      if (commitError instanceof StartRevokedError) {
+        await closeStartPane(pane.pane_id, tabId, o.run.id, o.name, barPane);
+        if (wt && wtReady) await undoWorktree(wt, o.run.id, o.name, dispatchId);
+      }
+      throw commitError;
+    }
     log({ event: "worker.start_failed", run: o.run.id, worker: o.name, error: e.message });
     return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning };
   }
@@ -283,21 +372,36 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   // Claude Code asks whether to trust a folder it has not seen: the orchestrator chose this cwd, so say yes.
   const blocked = await clearStartupDialog(pane.pane_id);
   if (blocked) {
+    await assertCurrentStart();
     log({ event: "worker.blocked_at_start", run: o.run.id, worker: o.name, pane: pane.pane_id });
     return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: `${o.name} is blocked on a dialog in pane ${pane.pane_id} and has not received its task. Read it with \`pack-leader worker read ${o.name}\`, answer it with \`herdr agent send-keys ${o.name} <keys>\` only if it is safe, then \`pack-leader worker resend ${o.name}\`.` };
   }
   // Right after start the name can lag the pane by a moment: address the pane, and retry briefly.
   const seq = await baseline(o.name, pane.pane_id);
-  try {
-    await promptWithRetry(pane.pane_id, text, seq);
-  } catch (err) {
-    const e = err as HerdrError;
-    log({ event: "worker.prompt_failed", run: o.run.id, worker: o.name, error: e.message });
-    return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: `${o.name} started but did not receive its task (${e.code ?? "error"}: ${e.message}). Read it with \`pack-leader worker read ${o.name}\`, then \`pack-leader worker resend ${o.name}\`.` };
-  }
-  await markPrompted(o.name);
-  log({ event: "worker.started", run: o.run.id, worker: o.name, task: task.id, dispatch: dispatchId, pane: pane.pane_id });
-  return { worker, task: { ...task, status: "dispatched", worker: o.name, dispatch_id: dispatchId }, pane_id: pane.pane_id };
+  let promptWarning: string | undefined;
+  let promptedCurrentAttempt = false;
+  await withRunStartFence(o.run.id, async () => {
+    // Serialize the final authority check + herdr handoff against run close. If close wins,
+    // this check fails; if this wins, close cannot commit until the prompt has settled.
+    await assertCurrentStart();
+    try {
+      await promptWithRetry(pane.pane_id, text, seq);
+    } catch (err) {
+      if (err instanceof StartRevokedError) {
+        await cleanupRevokedStart();
+        throw err;
+      }
+      const e = err as HerdrError;
+      await assertCurrentStart();
+      log({ event: "worker.prompt_failed", run: o.run.id, worker: o.name, error: e.message });
+      promptWarning = `${o.name} started but did not receive its task (${e.code ?? "error"}: ${e.message}). Read it with \`pack-leader worker read ${o.name}\`, then \`pack-leader worker resend ${o.name}\`.`;
+      return;
+    }
+    promptedCurrentAttempt = await markPrompted(o.name, { runId: o.run.id, taskId: task.id, dispatchId });
+  });
+  if (promptWarning) return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: promptWarning };
+  if (promptedCurrentAttempt) log({ event: "worker.started", run: o.run.id, worker: o.name, task: task.id, dispatch: dispatchId, pane: pane.pane_id });
+  return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id };
 }
 
 /** How long `worker prompt` waits for a worker that is still finishing its last turn before it hands over the next dispatch. */
@@ -389,10 +493,12 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
     const what = r.before ? `task ${r.task.id} is ${restored ?? r.before.status} again` : `task ${r.task.id} was not kept`;
     throw new Error(`${name} did not receive dispatch ${r.dispatchId} (${e.code ?? "error"}: ${e.message}); it was rolled back and ${what}. Check it with \`pack-leader worker read ${name}\`, then run \`pack-leader worker prompt ${name}\` again`);
   }
-  await markPrompted(name);
-  await labelPane(r.w.pane_id, r.task.title);
-  log({ event: "worker.redispatched", run: run.id, worker: name, task: r.task.id, dispatch: r.dispatchId });
-  return { task: r.task, dispatch_id: r.dispatchId };
+  const promptedCurrentAttempt = await markPrompted(name, { runId: run.id, taskId: r.task.id, dispatchId: r.dispatchId });
+  if (promptedCurrentAttempt) {
+    await labelPane(r.w.pane_id, r.task.title);
+    log({ event: "worker.redispatched", run: run.id, worker: name, task: r.task.id, dispatch: r.dispatchId });
+  }
+  return { task: load().tasks[r.task.id] ?? r.task, dispatch_id: r.dispatchId };
 }
 
 /** Interrupt what the worker is doing (escape twice), without closing anything. */
@@ -405,12 +511,14 @@ export type ReleasedWorktree = { path: string; branch: string | null; kept: bool
 
 /**
  * Post-settlement cleanup: forget the worker and close the pane Pack Leader created.
- * With `force`, a still-dispatched task is marked failed first. A worker's worktree is
- * kept (the work lives there) unless `removeWorktree` and Pack Leader created it.
+ * With `force`, a still-dispatched task is marked failed first. A worktree Pack Leader
+ * created is removed with its workspace (the branch stays) unless `keepWorktree`, the
+ * pane stays open, or it has uncommitted changes; it is never forced. `removeWorktree`
+ * insists: then a pane that stays open is an error rather than a kept worktree.
  */
 export type ReleaseResult = { closed_pane: string | null; closed_tab: string | null; close_error?: string; archive_path: string | null; archive_error?: string; worktree?: ReleasedWorktree };
 
-export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean; removeWorktree?: boolean }): Promise<ReleaseResult> {
+export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean; removeWorktree?: boolean; keepWorktree?: boolean }): Promise<ReleaseResult> {
   const w = await update((state) => {
     const w = state.workers[name];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
@@ -427,7 +535,7 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
     dropUndelivered(state, w);
     delete state.workers[name];
     const rec = w.worktree ? state.worktrees?.[w.worktree.path] : undefined;
-    if (rec) rec.released_at = now();
+    if (rec && rec.worker === w.name && rec.run_id === w.run_id && rec.dispatch_id === w.worktree_dispatch_id) rec.released_at = now();
     return w;
   });
   // Save the screen before the tab goes, so the transcript survives. Never fails the release.
@@ -453,6 +561,8 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
   let closed_tab: string | null = null;
   let close_error: string | undefined;
   if (w.owns_pane && !w.retained && !opts.keepPane) {
+    // The bar above it goes first (a tab close would take it too; a split worker's would stay).
+    if (w.bar_pane_id) await paneClose(w.bar_pane_id).catch((err) => logHerdrError("bar.close", err, { worker: name, pane: w.bar_pane_id }));
     try {
       await getPane(w.pane_id);
       if (w.owns_tab && w.tab_id) {
@@ -478,21 +588,19 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
   const wt = w.worktree;
   let removed = false;
   let note: string | undefined;
-  if (opts.removeWorktree) {
-    if (!wt.created_by_pack) note = "not created by pack-leader, so it was left in place";
-    else {
-      try {
-        await removeWorktree(wt);
-        removed = true;
-        await update((state) => {
-          const rec = state.worktrees?.[wt.path];
-          if (rec) rec.removed = true;
-        });
-        log({ event: "worktree.removed", run: run.id, worker: name, path: wt.path });
-      } catch (err) {
-        note = `not removed: ${(err as Error).message}. Commit or clean it, or remove it yourself with \`git worktree remove --force ${wt.path}\``;
-      }
-    }
+  const paneStays = Boolean(opts.keepPane || w.retained);
+  if (opts.keepWorktree) note = "kept (--keep-worktree)";
+  else if (!wt.created_by_pack) note = "not created by pack-leader, so it was left in place";
+  else if (paneStays) note = "kept: its pane stays open";
+  else {
+    const cleanup = await cleanupOwnedWorktree(wt, run.id, name, w.worktree_dispatch_id ?? w.dispatch_id ?? undefined);
+    removed = cleanup.removed;
+    if (removed) log({ event: "worktree.removed", run: run.id, worker: name, dispatch: w.worktree_dispatch_id ?? w.dispatch_id, path: wt.path });
+    else if (cleanup.note && cleanup.note !== "not created by pack-leader, so it was left in place") {
+      note = cleanup.note.includes("ownership changed")
+        ? cleanup.note
+        : `not removed: ${cleanup.note}. Commit or clean it, or remove it yourself with \`git worktree remove --force ${wt.path}\``;
+    } else note = cleanup.note;
   }
   return { ...released, worktree: { path: wt.path, branch: wt.branch, kept: !removed, removed, ...(note ? { note } : {}) } };
 }
@@ -502,19 +610,22 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
  * worktree API does it and the checkout shows up as a workspace, recorded on `wt`;
  * a herdr without that API falls back to `git worktree add`.
  */
-async function materializeWorktree(wt: WorktreeInfo, label: string, viaHerdr: boolean): Promise<void> {
+async function materializeWorktree(wt: WorktreeInfo, label: string, viaHerdr: boolean): Promise<{ shellTab: string | null }> {
   if (viaHerdr) {
     try {
       const r = wt.created_by_pack
         ? await worktreeCreate({ cwd: wt.repo, path: wt.path, branch: wt.branch!, base: wt.base, label })
         : await worktreeOpen({ cwd: wt.repo, path: wt.path, label });
       wt.workspace_id = r.workspace.workspace_id;
-      return;
+      // herdr opens the workspace with a shell tab of its own; the worker gets a tab next to it,
+      // and the shell tab is closed again unless the workspace was already the user's.
+      return { shellTab: r.already_open ? null : r.tab?.tab_id ?? null };
     } catch (err) {
       if (!isUnknownMethod(err)) throw err;
     }
   }
   if (wt.created_by_pack) gitWorktreeAdd(wt);
+  return { shellTab: null };
 }
 
 /** herdr removes the checkout and its workspace together; without the workspace (or the API), git does it. Never forced. */
@@ -530,27 +641,58 @@ async function removeWorktree(wt: WorktreeInfo): Promise<void> {
   gitWorktreeRemove(wt);
 }
 
-/** A start failed after its worktree was made: remove a checkout Pack Leader created (never forced). Returns what happened, for the error. */
-async function undoWorktree(wt: WorktreeInfo, runId: string, worker: string): Promise<string> {
-  let removed = false;
-  let why = "";
-  if (wt.created_by_pack) {
-    try {
-      await removeWorktree(wt);
-      removed = true;
-    } catch (err) {
-      why = (err as Error).message;
+type WorktreeCleanupResult = { removed: boolean; note?: string };
+
+/** Check lease ownership and remove under the same checkout fence used by start admission. */
+async function cleanupOwnedWorktree(wt: WorktreeInfo, runId: string, worker: string, ownerDispatchId?: string): Promise<WorktreeCleanupResult> {
+  return withWorktreeFence(wt.path, async () => {
+    const owns = await update((state) => {
+      const rec = state.worktrees?.[wt.path];
+      const d = ownerDispatchId ? state.dispatches?.[ownerDispatchId] : undefined;
+      const recordMatches = Boolean(rec && rec.worker === worker && rec.run_id === runId && rec.dispatch_id === ownerDispatchId);
+      const dispatchMatches = Boolean(d && d.run_id === runId && d.worker === worker && d.worktree_path && worktreeIdentityPath(d.worktree_path) === wt.path);
+      const otherWorker = Object.values(state.workers).some((w) =>
+        [w.worktree?.path, w.cwd].some((path) => path && worktreeIdentityPath(path) === wt.path) &&
+        (w.name !== worker || w.run_id !== runId || w.dispatch_id !== ownerDispatchId),
+      );
+      const otherClaim = Object.values(state.dispatches ?? {}).some((candidate) =>
+        candidate.id !== ownerDispatchId && !candidate.settled_at && candidate.worktree_path && worktreeIdentityPath(candidate.worktree_path) === wt.path,
+      );
+      return recordMatches && dispatchMatches && !otherWorker && !otherClaim;
+    });
+    if (!owns) return { removed: false, note: "checkout ownership changed; left in place" };
+
+    let removed = false;
+    let note: string | undefined;
+    if (!wt.created_by_pack) {
+      note = "not created by pack-leader, so it was left in place";
+    } else {
+      try {
+        await removeWorktree(wt);
+        removed = true;
+      } catch (err) {
+        note = (err as Error).message;
+      }
     }
-  }
-  await update((state) => {
-    const rec = state.worktrees?.[wt.path];
-    if (!rec) return;
-    rec.released_at ??= now();
-    if (removed) rec.removed = true;
-  }).catch(() => {});
-  log({ event: "worktree.start_failed", run: runId, worker, path: wt.path, removed });
-  if (removed) return `the worktree ${wt.path} made for it was removed (branch ${wt.branch} kept)`;
-  return wt.created_by_pack ? `the worktree ${wt.path} made for it is left in place (${why})` : `the worktree ${wt.path} is left as it was`;
+    await update((state) => {
+      const rec = state.worktrees?.[wt.path];
+      if (!rec || rec.worker !== worker || rec.run_id !== runId || rec.dispatch_id !== ownerDispatchId) return;
+      rec.released_at ??= now();
+      if (removed) rec.removed = true;
+    }).catch(() => {});
+    return { removed, ...(note ? { note } : {}) };
+  });
+}
+
+/** A start failed after its worktree was made: remove only its owned checkout, never forced. */
+async function undoWorktree(wt: WorktreeInfo, runId: string, worker: string, dispatchId: string): Promise<string> {
+  const result = await cleanupOwnedWorktree(wt, runId, worker, dispatchId);
+  log({ event: "worktree.start_failed", run: runId, worker, dispatch: dispatchId, path: wt.path, removed: result.removed, ...(result.note ? { note: result.note } : {}) });
+  if (result.removed) return `the worktree ${wt.path} made for it was removed (branch ${wt.branch} kept)`;
+  if (result.note?.includes("ownership changed")) return `the worktree ${wt.path} is left in place (${result.note})`;
+  return wt.created_by_pack
+    ? `the worktree ${wt.path} made for it is left in place (${result.note ?? "not removed"})`
+    : `the worktree ${wt.path} is left as it was`;
 }
 
 /**
@@ -560,7 +702,90 @@ async function undoWorktree(wt: WorktreeInfo, runId: string, worker: string): Pr
  */
 export const START_CLAIM_MS = 5 * 60_000;
 
-function refuseStartInFlight(state: State, name: string, taskId: string | undefined): void {
+const WORKTREE_FENCE_TIMEOUT_MS = 120_000;
+const worktreeFencePath = (path: string) => join(stateDir, "worktree-fences", `${createHash("sha256").update(worktreeIdentityPath(path)).digest("hex")}.lock`);
+
+/** Serialize checkout admission/reuse against ownership revalidation and physical removal. */
+async function withWorktreeFence<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const lock = worktreeFencePath(path);
+  await acquire(lock, WORKTREE_FENCE_TIMEOUT_MS);
+  try {
+    return await fn();
+  } finally {
+    release(lock);
+  }
+}
+
+type StartAuthority = { runId: string; name: string; taskId: string; dispatchId: string; registered?: boolean };
+
+class StartRevokedError extends Error {
+  constructor(runId: string, dispatchId: string) {
+    super(`start ${dispatchId} was revoked because run ${runId} closed or its dispatch was settled`);
+    this.name = "StartRevokedError";
+  }
+}
+
+function startRevoked(runId: string, dispatchId: string): StartRevokedError {
+  return new StartRevokedError(runId, dispatchId);
+}
+
+function assertStartAuthority(state: State, a: StartAuthority): void {
+  const d = state.dispatches?.[a.dispatchId];
+  const t = state.tasks[a.taskId];
+  const w = state.workers[a.name];
+  if (
+    state.runs[a.runId]?.status !== "active" ||
+    !d || d.run_id !== a.runId || d.task_id !== a.taskId || d.worker !== a.name || d.settled_at ||
+    !t || t.run_id !== a.runId ||
+    (a.registered
+      ? !w || w.run_id !== a.runId || w.task_id !== a.taskId || w.dispatch_id !== a.dispatchId || t.status !== "dispatched" || t.dispatch_id !== a.dispatchId
+      : Boolean(w?.run_id === a.runId && w.dispatch_id === a.dispatchId))
+  ) throw startRevoked(a.runId, a.dispatchId);
+}
+
+async function requireStartAuthority(runId: string, name: string, taskId: string, dispatchId: string, registered = true): Promise<void> {
+  await update((state) => assertStartAuthority(state, { runId, name, taskId, dispatchId, registered }));
+}
+
+const RUN_START_FENCE_TIMEOUT_MS = 120_000;
+const runStartFencePath = (runId: string) => join(stateDir, "run-start-fences", `${encodeURIComponent(runId)}.lock`);
+
+async function withRunStartFence<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+  const path = runStartFencePath(runId);
+  await acquire(path, RUN_START_FENCE_TIMEOUT_MS);
+  try {
+    return await fn();
+  } finally {
+    release(path);
+  }
+}
+
+async function rollbackStartClaim(o: StartOptions, taskId: string, dispatchId: string): Promise<{ dropped: boolean; revoked: boolean }> {
+  return update((state) => {
+    const d = state.dispatches?.[dispatchId];
+    const revoked = state.runs[o.run.id]?.status !== "active" || !d || d.run_id !== o.run.id || d.task_id !== taskId || d.worker !== o.name || Boolean(d.settled_at);
+    if (!revoked) settleDispatch(state, dispatchId, "failed");
+    const t = state.tasks[taskId];
+    if (revoked || o.taskId || !t || t.run_id !== o.run.id || t.status !== "pending" || t.worker || t.dispatch_id || !taskDispatchIds(state, taskId).every((id) => id === dispatchId)) {
+      return { dropped: false, revoked };
+    }
+    delete state.tasks[taskId];
+    return { dropped: true, revoked: false };
+  });
+}
+
+async function closeStartPane(paneId: string, tabId: string | null, runId: string, worker: string, barPaneId?: string | null): Promise<void> {
+  // A tab close takes its bar with it; a revoked split owns a separate bar pane.
+  if (!tabId && barPaneId) await paneClose(barPaneId).catch((err) => logHerdrError("start.revoke.bar.close", err, { run: runId, worker, pane: barPaneId }));
+  try {
+    if (tabId) await tabClose(tabId);
+    else await paneClose(paneId);
+  } catch (err) {
+    logHerdrError("start.revoke.close", err, { run: runId, worker, pane: paneId, tab: tabId });
+  }
+}
+
+function refuseStartInFlight(state: State, name: string, taskId: string | undefined, worktreePath?: string): void {
   const recorded = new Set(Object.values(state.workers).map((w) => w.dispatch_id));
   for (const d of Object.values(state.dispatches ?? {})) {
     if (d.settled_at || recorded.has(d.id) || state.runs[d.run_id]?.status !== "active") continue;
@@ -570,6 +795,9 @@ function refuseStartInFlight(state: State, name: string, taskId: string | undefi
     }
     if (d.worker === name) throw new Error(`worker "${name}" is being started (dispatch ${d.id}); wait for that start to finish`);
     if (taskId && d.task_id === taskId) throw new Error(`task ${taskId} is being started by worker "${d.worker}" (dispatch ${d.id}); wait for that start to finish`);
+    if (worktreePath && d.worktree_path && worktreeIdentityPath(d.worktree_path) === worktreePath) {
+      throw new Error(`checkout ${worktreePath} is being started by worker "${d.worker}" (dispatch ${d.id}); two workers never share a working tree`);
+    }
   }
 }
 
@@ -611,9 +839,9 @@ export async function resendPreamble(run: Run, name: string): Promise<{ task: Ta
   const text = state.dispatches?.[w.dispatch_id]?.preamble ?? preamble({ worker: name, run, task, dispatchId: w.dispatch_id, cwd: w.cwd, worktree: w.worktree });
   const seq = await baseline(name, w.pane_id);
   await promptWithRetry(w.pane_id, text, seq);
-  await markPrompted(name);
-  log({ event: "worker.resent", run: run.id, worker: name, task: task.id });
-  return { task, dispatch_id: w.dispatch_id };
+  const promptedCurrentAttempt = await markPrompted(name, { runId: run.id, taskId: task.id, dispatchId: w.dispatch_id });
+  if (promptedCurrentAttempt) log({ event: "worker.resent", run: run.id, worker: name, task: task.id });
+  return { task: load().tasks[task.id] ?? task, dispatch_id: w.dispatch_id };
 }
 
 /**
@@ -637,13 +865,20 @@ async function baseline(name: string, paneId: string): Promise<number> {
   return seq;
 }
 
-/** The prompt went in: a sign of life, and followups may now be delivered. */
-async function markPrompted(name: string): Promise<void> {
-  await update((state) => {
+/** Reconcile a prompt receipt only with the same current attempt; a terminal report is a valid receipt race. */
+async function markPrompted(name: string, authority: { runId: string; taskId: string; dispatchId: string }): Promise<boolean> {
+  return update((state) => {
     const w = state.workers[name];
-    if (!w) return;
+    const t = state.tasks[authority.taskId];
+    const d = state.dispatches?.[authority.dispatchId];
+    if (
+      !w || w.run_id !== authority.runId || w.task_id !== authority.taskId || w.dispatch_id !== authority.dispatchId ||
+      !t || t.run_id !== authority.runId || t.dispatch_id !== authority.dispatchId ||
+      !d || d.run_id !== authority.runId || d.task_id !== authority.taskId || d.worker !== name
+    ) return false;
     touch(w);
     w.awaiting_prompt = false;
+    return true;
   });
 }
 
@@ -721,7 +956,7 @@ export const workerSummary = (w: Worker, state: State) => ({
 
 /** The worker's unacked questions and alerts for the orchestrator, oldest first. */
 const openFor = (state: State, w: Worker) =>
-  state.messages.filter((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && !m.acked && (m.type === "ask" || m.type === "attention"));
+  state.messages.filter((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && m.task_id === w.task_id && m.dispatch_id === w.dispatch_id && !m.acked && (m.type === "ask" || m.type === "attention"));
 
 /**
  * What is waiting on the orchestrator for this worker: "ask", an attention
@@ -731,7 +966,7 @@ const openFor = (state: State, w: Worker) =>
 export function workerAttention(state: State, w: Worker): { categories: string[]; requires_action: boolean } {
   const open = openFor(state, w);
   const categories = [...new Set(open.map((m) => (m.type === "ask" ? "ask" : m.status ?? "attention")))];
-  const noted = state.messages.some((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && !m.acked && m.type === "note");
+  const noted = state.messages.some((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && m.task_id === w.task_id && m.dispatch_id === w.dispatch_id && !m.acked && m.type === "note");
   return { categories: noted ? [...categories, "note"] : categories, requires_action: open.length > 0 };
 }
 

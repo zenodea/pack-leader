@@ -154,9 +154,13 @@ test("--worktree new prefers herdr's worktree.create and puts the worker's tab i
   assert.equal(tab.params.workspace_id, "w9");
   assert.equal(tab.params.cwd, path);
   assert.equal(git(path, "rev-parse", "--abbrev-ref", "HEAD"), "feat/bob");
+  // One tab per worker: the shell tab herdr opened the workspace with is closed once the worker's tab exists.
+  const closed = calls.find((c) => c.method === "tab.close")!;
+  assert.equal(closed?.params.tab_id, "w9:t1");
+  assert.ok(calls.indexOf(tab) < calls.indexOf(closed), "the worker's tab exists before the shell tab goes");
 
-  // release --remove-worktree goes through herdr when it made the workspace.
-  const rel = await release("bob", { removeWorktree: true });
+  // release goes through herdr when it made the workspace.
+  const rel = await release("bob", {});
   assert.deepEqual(rel.worktree, { path, branch: "feat/bob", kept: false, removed: true });
   assert.ok(calls.some((c) => c.method === "worktree.remove" && c.params.workspace_id === "w9" && c.params.force === false));
   assert.ok(!existsSync(path));
@@ -211,11 +215,11 @@ test("a branch or path that is already taken is rejected up front", async () => 
   assert.deepEqual(load().tasks, {});
 });
 
-test("release keeps the worktree by default and remembers it; --remove-worktree removes a clean one it created", async () => {
+test("release removes a clean worktree it created by default; --keep-worktree keeps it and remembers it", async () => {
   await start("ivy", { worktree: "new" });
   const path = join(dir, `repo${n}-wt`, "ivy");
-  const kept = await release("ivy", {});
-  assert.deepEqual(kept.worktree, { path, branch: "pack/r1/ivy", kept: true, removed: false });
+  const kept = await release("ivy", { keepWorktree: true });
+  assert.deepEqual(kept.worktree, { path, branch: "pack/r1/ivy", kept: true, removed: false, note: "kept (--keep-worktree)" });
   assert.ok(existsSync(path));
   const rec = load().worktrees![path]!;
   assert.equal(rec.worker, "ivy");
@@ -225,27 +229,31 @@ test("release keeps the worktree by default and remembers it; --remove-worktree 
 
   await start("jack", { worktree: "new" });
   const jackPath = join(dir, `repo${n}-wt`, "jack");
-  const gone = await release("jack", { removeWorktree: true });
+  const gone = await release("jack", {});
   assert.deepEqual(gone.worktree, { path: jackPath, branch: "pack/r1/jack", kept: false, removed: true });
   assert.ok(!existsSync(jackPath));
   assert.equal(load().worktrees![jackPath]!.removed, true);
   assert.equal(git(repo, "rev-parse", "--verify", "pack/r1/jack"), base, "the branch survives the removal");
 });
 
-test("--remove-worktree never forces: a dirty worktree is kept and the release says why", async () => {
+test("release never forces: a dirty worktree is kept and the release says why", async () => {
   await start("kim", { worktree: "new" });
   const path = join(dir, `repo${n}-wt`, "kim");
   execFileSync("sh", ["-c", `echo wip > ${JSON.stringify(join(path, "wip.txt"))}`]);
-  const r = await release("kim", { removeWorktree: true });
+  const r = await release("kim", {});
   assert.equal(r.worktree!.removed, false);
   assert.match(r.worktree!.note!, /not removed: .*git worktree remove --force/);
   assert.ok(existsSync(join(path, "wip.txt")));
 });
 
-test("--remove-worktree is refused while the worker's pane stays open", async () => {
+test("a worktree is kept while the worker's pane stays open; an explicit --remove-worktree is refused then", async () => {
   await start("lea", { worktree: "new" });
   await assert.rejects(release("lea", { removeWorktree: true, keepPane: true }), /cannot go with --keep-pane/);
   assert.ok(load().workers.lea, "nothing released");
+  const r = await release("lea", { keepPane: true });
+  assert.equal(r.worktree!.removed, false);
+  assert.equal(r.worktree!.note, "kept: its pane stays open");
+  assert.ok(existsSync(join(dir, `repo${n}-wt`, "lea")));
 });
 
 test("the preamble names the worktree path and branch and says to commit there", async () => {

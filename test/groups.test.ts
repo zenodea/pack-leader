@@ -98,6 +98,10 @@ function live(status: Record<string, string>): Handler {
 }
 
 const followups = () => load().messages.filter((m) => m.type === "followup");
+const context = (name: string) => {
+  const w = load().workers[name]!;
+  return { run_id: w.run_id, worker: w.name, task_id: w.task_id, dispatch_id: w.dispatch_id };
+};
 
 test("@all expands only to workers with a dispatched task", async () => {
   save(base());
@@ -158,7 +162,7 @@ test("an address that expands to nobody is an error naming why", async () => {
 test("note surfaces in check by default and nudges the orchestrator once", async () => {
   save(base());
   handler = live({ "w1:p1": "idle" });
-  const m = await note({ run_id: "r1", worker: "api", task_id: null, dispatch_id: null }, "tests are slow; ~10 more minutes");
+  const m = await note(context("api"), "tests are slow; ~10 more minutes");
   assert.equal(m.type, "note");
   assert.equal(m.to, "orchestrator");
   assert.equal(m.acked, false);
@@ -183,17 +187,17 @@ test("note surfaces in check by default and nudges the orchestrator once", async
 test("a busy orchestrator is not nudged for a note", async () => {
   save(base());
   handler = live({ "w1:p1": "working" });
-  await note({ run_id: "r1", worker: "api", task_id: null, dispatch_id: null }, "found a bug in t2's area");
+  await note(context("api"), "found a bug in t2's area");
   assert.equal(prompts().length, 0);
 });
 
 test("worker-to-worker send is delivered with a from-worker prefix", async () => {
   save(base());
   handler = live({ "w1:p3": "idle" });
-  const r = await workerSend({ run_id: "r1", worker: "api", task_id: "t1", dispatch_id: "d-t1" }, "web", "the /users route is ready", false);
+  const r = await workerSend(context("api"), "web", "the /users route is ready", false);
   assert.deepEqual(r.recipients.map((x) => [x.worker, x.delivered]), [["web", true]]);
   assert.equal(prompts().length, 1);
-  assert.equal(prompts()[0]!.params.text, "[pack-leader follow-up from worker api] the /users route is ready");
+  assert.match(prompts()[0]!.params.text, /^\[pack-leader follow-up from worker api\] the \/users route is ready\n\[Pack Leader message id: m\w+\]$/);
   const stored = followups()[0]!;
   assert.equal(stored.from, "api");
   assert.equal(stored.to, "web");
@@ -203,24 +207,24 @@ test("worker-to-worker send is delivered with a from-worker prefix", async () =>
 test("a queued worker-to-worker followup keeps its prefix when sync delivers it, and inbox shows the sender", async () => {
   save(base());
   handler = live({ "w1:p3": "working" });
-  const r = await workerSend({ run_id: "r1", worker: "api", task_id: null, dispatch_id: null }, "web", "later", false);
+  const r = await workerSend(context("api"), "web", "later", false);
   assert.equal(r.recipients[0]!.delivered, false);
   handler = live({ "w1:p2": "working", "w1:p3": "idle", "w1:p4": "working" });
   await sync();
   assert.equal(prompts().length, 1);
-  assert.equal(prompts()[0]!.params.text, "[pack-leader follow-up from worker api] later");
+  assert.match(prompts()[0]!.params.text, /^\[pack-leader follow-up from worker api\] later\n\[Pack Leader message id: m\w+\]$/);
 
   save(base());
   handler = live({ "w1:p3": "working" });
-  await workerSend({ run_id: "r1", worker: "api", task_id: null, dispatch_id: null }, "web", "read me", false);
-  const got = await inbox({ run_id: "r1", worker: "web", task_id: null, dispatch_id: null });
+  await workerSend(context("api"), "web", "read me", false);
+  const got = await inbox(context("web"));
   assert.deepEqual(got.map((m) => [m.from, m.body]), [["api", "read me"]]);
 });
 
 test("worker sends reject other runs, self, and group addresses", async () => {
   save(base());
   handler = live({});
-  const api = { run_id: "r1", worker: "api", task_id: null, dispatch_id: null };
+  const api = context("api");
   await assert.rejects(workerSend(api, "other", "x", false), /worker "other" belongs to run r2, not your run r1/);
   await assert.rejects(workerSend(api, "api", "x", false), /cannot send to itself/);
   await assert.rejects(workerSend(api, "@all", "x", false), /for the orchestrator only/);
@@ -246,7 +250,7 @@ test("a note is a sign of life and shows in the worker row's attention without r
   s.workers.api!.stalled_since = "2026-01-01T00:20:00.000Z";
   save(s);
   handler = live({ "w1:p1": "working" });
-  await note({ run_id: "r1", worker: "api", task_id: null, dispatch_id: null }, "still on it");
+  await note(context("api"), "still on it");
   const w = load().workers.api!;
   assert.ok(Date.parse(w.last_seen) > Date.parse("2026-01-01T00:00:00.000Z"));
   assert.equal(w.stalled_since, null, "a note re-arms stall detection");
@@ -260,5 +264,5 @@ test("a worker cannot send within a closed run", async () => {
   s.runs.r1!.status = "closed";
   save(s);
   handler = live({});
-  await assert.rejects(workerSend({ run_id: "r1", worker: "api", task_id: "t1", dispatch_id: "d-t1" }, "web", "hi", false), /run r1 is closed/);
+  await assert.rejects(workerSend(context("api"), "web", "hi", false), /run r1 is closed/);
 });

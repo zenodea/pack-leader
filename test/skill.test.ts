@@ -135,6 +135,9 @@ test("the guide's Commands block lists exactly the commands and flags of `pack-l
   assert.deepEqual([...g.commands].sort(), [...h.commands].sort(), "commands");
 });
 
-test("the guide does not claim that unknown flags are errors", () => {
-  assert.doesNotMatch(guide(), /Unknown flags are errors/);
+test("the guide documents strict command flags, missing-value errors, and native passthrough", () => {
+  assert.match(guide(), /unknown options fail with a spelling suggestion/);
+  assert.match(guide(), /including `--keep` and `--timeout`/);
+  assert.match(guide(), /List-valued options may be repeated or comma-separated/);
+  assert.match(guide(), /`--` separator ends Pack Leader flag parsing/);
 });

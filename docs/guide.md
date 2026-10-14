@@ -69,7 +69,9 @@ its own), then `pack-leader worker resend <name>`.
 `run create` opens the Pack Leader sidebar next to you. Each worker starts in a
 hidden tab of its own; the sidebar shows it as a box (agent, runtime and
 state, objective, last message: a heartbeat, a `note`, a report, an open
-question with its options, or your answer) and Enter there opens its tab. Pass
+question with its options, or your answer) under the run's goal; a click
+selects a box, Enter or a second click opens its tab, and `o` (or the "Pack
+Leader: back to the leader" action) comes back. Pass
 `--placement split` only when the user wants to watch a worker next to you.
 Never open, focus, or close worker tabs yourself; `pack-leader worker focus <name>`
 shows one when the user asks.
@@ -77,6 +79,14 @@ shows one when the user asks.
 `pack-leader check --wait` blocks until the oldest unread message arrives, so give
 the shell tool a timeout at least as long (10 minutes is the usual ceiling).
 A `timeout` result is a checkpoint: look at `pack-leader status`, then wait again.
+
+Never poll. Every `check` that comes back costs you a full model call on your
+whole context, and a bare `check` or a short `--timeout` comes back with nothing
+new almost every time. `check --wait` returns the moment a message arrives, so a
+long timeout costs nothing: always `--wait --timeout 540000`. A `--wait` with a
+timeout under 5 minutes is raised to 5 minutes (`PACK_MIN_WAIT_MS`), and the
+result says so. The only reason to run `check` without `--wait` is to read a
+message you were just told about.
 While it waits, `check --wait` writes one JSON line to stderr every 15 s,
 `{"waiting":true,"elapsed_ms":n,"pending":n,"workers":{"api":"live"}}`
 (`pending` counts dispatched tasks still owing a report); stdout stays the single
@@ -202,10 +212,13 @@ is installed or copied into a new worktree; the preamble tells the worker its
 path and branch, to commit on that branch, and to install dependencies itself.
 Pack Leader refuses to start two workers in the same worktree.
 
-`pack-leader worker release` keeps the worktree (the work lives there) and
-prints its path and branch; `--remove-worktree` also removes it, only when
-Pack Leader created it and it has no uncommitted changes. The branch is never
-deleted. `worker list`, `worker show` and `status` show each worker's worktree.
+`pack-leader worker release` removes a worktree Pack Leader created, together
+with its workspace, and prints its path and branch; the branch is never
+deleted, so the work stays reachable. It is kept instead, and the release says
+so, with `--keep-worktree`, when it has uncommitted changes (never forced), when
+the pane stays open (`--keep-pane` or a retained worker), or when it was an
+existing checkout (`--worktree <path>`). `worker list`, `worker show` and
+`status` show each worker's worktree.
 
 ## Completion accounting
 
@@ -322,10 +335,10 @@ pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | sho
 # workers
 pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--cwd D] [--placement tab|split]
                          [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [--title T] [--target-pane P]
-                         [--ratio R] [--no-default-args] [--timeout MS] [-- agent args]
+                         [--ratio R] [--no-default-args] [--no-bar] [--timeout MS] [-- agent args]
 pack-leader worker prompt NAME --spec "..." [--title T] | --task ID | resend NAME
 pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
-pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree]
+pack-leader worker release NAME [--force] [--keep-pane] [--keep-worktree]
 pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 # messaging
 pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
@@ -337,16 +350,13 @@ pack-leader ask "question" | --body "..." [--options a,b,c] [--timeout MS] | ask
 pack-leader note "text" | --body "..." | send WORKER "text" | --body "..." [--now] | heartbeat "note" | --body "..." | inbox
 pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]
 # either
-pack-leader config [show] | pick | set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking]
-pack-leader skill [--install] | sidebar | help
+pack-leader config [show] | pick | set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
+pack-leader skill [--install] | sidebar | leader [--run ID] | help
 ```
 
-`pack-leader help` prints the same commands and flags, with a note on each. Flags are not checked: a misspelled or
-unknown flag is silently ignored, so copy flags from this list rather than
-guessing. A flag value that itself starts with `--` must be written
-`--flag=value` (`--spec=--x`), or it is read as the next flag. `--body` and
-`--summary` are free text and take the next word whatever it is
-(`reply m5 --body "--no"`).
+`pack-leader help` prints the same commands and flags, with a note on each. Flags are validated for the selected command before it can touch state, archives, herdr, or configuration: unknown options fail with a spelling suggestion when one is likely, and options that take a value (including `--keep` and `--timeout`) fail if the value is missing. Boolean switches reject `=value` forms rather than silently treating them as enabled. List-valued options may be repeated or comma-separated.
+
+A flag value that itself starts with `--` must be written `--flag=value` (`--spec=--x`), or it is read as the next flag. `--body` and `--summary` are free text and take the next word whatever it is (`reply m5 --body "--no"`). The `--` separator ends Pack Leader flag parsing; for example, `worker start ... -- --model x` passes those native agent arguments through unchanged.
 
 What the less obvious flags do:
 
@@ -357,13 +367,19 @@ What the less obvious flags do:
   directory and is stored as an absolute path.
 - `task update`: `--summary S` records an outcome summary; `--force` lets a
   succeeded task change status (otherwise refused).
+- `config set`: `--default` records the selected kind as the default (without
+  `--kind`, the current/default kind is selected). `--kind K` also selects that
+  kind as the default.
 - `worker start`: `--title T` (task title for `--spec`), `--target-pane P` and
   `--ratio R` (with `--placement split`), `--no-default-args` (no
-  `--allowedTools` for the agent), `--timeout MS` (agent start, default 45000).
+  `--allowedTools` for the agent), `--no-bar` (no "back to leader" bar above
+  the worker's pane), `--timeout MS` (agent start, default 45000).
   A split without `--direction` goes right; `--direction` with `--placement tab`
   is an error.
-- `WORKER-COMMAND` is `done`, `ask`, `heartbeat`, `note` or `inbox`: `--run`,
-  `--worker`, `--task`, `--dispatch` override the IDs from the environment;
-  `ask`, `heartbeat`, `note` and `send` also take the text as `--body "..."`.
-- Run by herdr, not by agents: `sidebar-open [--left] [--no-focus]` (the plugin
-  action) and `event pane.closed|pane.exited|tab.closed` (plugin events).
+- `WORKER-COMMAND` is `done`, `ask`, `heartbeat`, `note`, `send` or `inbox`:
+  `--run`, `--worker`, `--task`, `--dispatch` override the IDs from the environment
+  (orchestrator `send` accepts `--run` only); `ask`, `heartbeat`, `note` and
+  `send` also take the text as `--body "..."`.
+- Run by herdr, not by agents: `sidebar-open [--left] [--no-focus]` and `leader`
+  (plugin actions; `leader` focuses the orchestrator of the run the focused
+  pane belongs to) and `event pane.closed|pane.exited|tab.closed` (plugin events).

@@ -79,14 +79,27 @@ export type Worker = {
   stalled_since?: string | null;
   /** The git worktree the worker runs in (`worker start --worktree`). */
   worktree?: WorktreeInfo | null;
+  /** The initial dispatch that acquired the worktree lease; redispatches keep this lease. */
+  worktree_dispatch_id?: string | null;
   /** Its current dispatch has not been prompted yet (start or redispatch in progress, or the prompt failed): followups queue until it has. */
   awaiting_prompt?: boolean;
+  /** The "back to leader" bar pane above its pane, when one was opened; released with the worker. */
+  bar_pane_id?: string | null;
 };
 
 /** What an attention message is about: herdr's agent state, or Pack Leader's own liveness findings. */
 export type AttentionStatus = AgentStatus | "exited" | "unverifiable" | "stalled";
 
 export type Liveness = "live" | "unverifiable" | "exited";
+
+export type DeliveryClaim = {
+  /** Unique attempt token: late completion/failure may only settle its own claim. */
+  token: string;
+  pid: number;
+  host: string;
+  claimed_at: string;
+  lease_until: string;
+};
 
 export type Message = {
   id: string;
@@ -115,6 +128,8 @@ export type Message = {
   acked: boolean;
   /** A followup queued because the worker was busy; delivered by prompt later. */
   delivered?: boolean;
+  /** Durable in-progress prompt attempt; unlike delivered/acked, this is recoverable. */
+  delivery_claim?: DeliveryClaim;
   /** When sync re-nudged the orchestrator about it (once). */
   nudged_at?: string;
 };
@@ -134,6 +149,8 @@ export type Dispatch = {
   /** The prompt text the worker received. */
   preamble: string;
   cwd: string;
+  /** Canonical --worktree checkout reserved during initial start admission; absent on older records and ordinary --cwd starts. */
+  worktree_path?: string;
   started_at: string;
   settled_at?: string;
   outcome?: "succeeded" | "failed";
@@ -162,28 +179,39 @@ export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, worke
 export const now = () => new Date().toISOString();
 
 /**
- * A missing file is an empty state. A file that exists but cannot be parsed,
- * or has a version this build does not understand, is moved aside to
- * `<file>.corrupt-<ISO timestamp>` and logged as a `state.corrupt` event, so
- * the next writer starts from an empty state instead of overwriting the only
- * copy of whatever was there.
+ * Read and parse the current state without changing the file. Corrupt content
+ * is reported to a writer so it can quarantine that exact current file while
+ * holding the state lock; ordinary readers must never rename a pathname based
+ * on bytes they read before a writer replaced it.
  */
-export function load(file = stateFile, logTo = logFile): State {
+type StateRead = { state: State; corruption?: string };
+
+function readState(file: string): StateRead {
   let raw: string;
   try {
     raw = readFileSync(file, "utf8");
   } catch (err: any) {
-    if (err?.code === "ENOENT") return emptyState();
+    if (err?.code === "ENOENT") return { state: emptyState() };
     throw err;
   }
-  let reason: string;
   try {
     const s = JSON.parse(raw) as State;
-    if (s && typeof s === "object" && s.version === 1) return { ...emptyState(), ...s };
-    reason = `unsupported state version ${JSON.stringify(s?.version)}`;
+    if (s && typeof s === "object" && s.version === 1) return { state: { ...emptyState(), ...s } };
+    return { state: emptyState(), corruption: `unsupported state version ${JSON.stringify(s?.version)}` };
   } catch (err: any) {
-    reason = `parse error: ${err?.message ?? String(err)}`;
+    return { state: emptyState(), corruption: `parse error: ${err?.message ?? String(err)}` };
   }
+}
+
+/** Read without mutation; missing files are empty, while corruption is visible to callers with path diagnostics. */
+export function load(file = stateFile, _logTo = logFile): State {
+  const result = readState(file);
+  if (result.corruption) throw new Error(`state file ${file} is corrupt: ${result.corruption}`);
+  return result.state;
+}
+
+/** Quarantine corruption only after the caller has reread it while holding the writer lock. */
+function quarantine(file: string, reason: string, logTo: string): void {
   const base = `${file}.corrupt-${now().replace(/[:.]/g, "-")}`;
   let renamed_to = base;
   for (let n = 1; existsSync(renamed_to); n++) renamed_to = `${base}-${n}`;
@@ -193,6 +221,13 @@ export function load(file = stateFile, logTo = logFile): State {
     throw new Error(`state file ${file} is corrupt (${reason}) and could not be moved aside: ${err?.message ?? err}`);
   }
   log({ event: "state.corrupt", file, renamed_to, reason }, logTo);
+}
+
+/** Must be called only with `lockFor(file)` held; this is the recovery read used by writers. */
+function loadForUpdate(file: string, logTo: string): State {
+  const result = readState(file);
+  if (!result.corruption) return result.state;
+  quarantine(file, result.corruption, logTo);
   return emptyState();
 }
 
@@ -351,7 +386,7 @@ export async function update<T>(fn: (state: State) => Sync<T>, file = stateFile)
   const lock = lockFor(file);
   await acquire(lock);
   try {
-    const state = load(file, join(dirname(file), "events.jsonl"));
+    const state = loadForUpdate(file, join(dirname(file), "events.jsonl"));
     const out = fn(state) as T;
     if (out && typeof (out as any).then === "function") throw new Error("update() callback must be synchronous");
     save(state, file);
@@ -395,8 +430,8 @@ export const idSeq = (id: string): number => parseInt(id.slice(1), 36) || 0;
 
 /**
  * Which run a command means. In order: --run, PACK_RUN_ID, the run this pane
- * orchestrates, the run this pane works for, the only active run in this
- * workspace, the only active run at all. Only an explicit id can name a closed
+ * orchestrates, the run this pane works for, the run whose sidebar this pane is,
+ * the only active run in this workspace, the only active run at all. Only an explicit id can name a closed
  * run, and only for read-only commands, which pass `allowClosed`.
  */
 export function resolveRun(
@@ -417,6 +452,8 @@ export function resolveRun(
     if (mine) return mine;
     const w = Object.values(state.workers).find((w) => w.pane_id === opts.paneId && state.runs[w.run_id]?.status === "active");
     if (w) return state.runs[w.run_id]!;
+    const shown = active.find((r) => r.sidebar_pane_id === opts.paneId);
+    if (shown) return shown;
   }
   const inWs = opts.workspaceId ? active.filter((r) => r.orchestrator.workspace_id === opts.workspaceId) : [];
   if (inWs.length === 1) return inWs[0]!;

@@ -32,43 +32,55 @@ test("save/load round-trips and tolerates a missing file", () => {
   rmSync(dir, { recursive: true });
 });
 
-test("load: a corrupt or wrong-version state.json is moved aside, logged, and replaced by an empty state", () => {
+test("load: corruption reads are read-only; update quarantines corrupt and wrong-version bytes under lock", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pack-leader-"));
   const file = join(dir, "state.json");
   const logTo = join(dir, "events.jsonl");
-  const good = emptyState();
-  good.runs.r1 = run("r1", "w1:p1", "w1");
-  save(good, file);
+  const malformed = '{"version":1,"runs":{"r1":';
 
-  // Parse failure: the bad file is renamed, not overwritten, and the real data survives in it.
-  writeFileSync(file, '{"version":1,"runs":{"r1":');
-  assert.deepEqual(load(file, logTo), emptyState());
-  assert.equal(existsSync(file), false);
+  // Ordinary readers report path-specific corruption without renaming or logging the bad bytes.
+  writeFileSync(file, malformed);
+  assert.throws(() => load(file, logTo), (error: Error) =>
+    error.message.includes(file) && error.message.includes("parse error:"),
+  );
+  assert.equal(existsSync(file), true);
+  assert.equal(readFileSync(file, "utf8"), malformed);
+  assert.deepEqual(readdirSync(dir), ["state.json"]);
+
+  // The writer rereads under lock, quarantines the original bytes, then saves its edit.
+  await update((state) => { state.seq = 7; }, file);
+  assert.equal(load(file).seq, 7);
   let corrupt = readdirSync(dir).filter((n) => n.startsWith("state.json.corrupt-"));
   assert.equal(corrupt.length, 1);
-  assert.equal(readFileSync(join(dir, corrupt[0]!), "utf8"), '{"version":1,"runs":{"r1":');
-  const events = readFileSync(logTo, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(readFileSync(join(dir, corrupt[0]!), "utf8"), malformed);
+  let events = readFileSync(logTo, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   assert.equal(events.length, 1);
   assert.equal(events[0].event, "state.corrupt");
   assert.equal(events[0].file, file);
   assert.equal(events[0].renamed_to, join(dir, corrupt[0]!));
   assert.match(events[0].reason, /parse error/);
 
-  // The next writer persists an empty state, and the moved-aside copy is untouched.
-  save(load(file, logTo), file);
-  assert.deepEqual(load(file, logTo), emptyState());
-  assert.equal(readdirSync(dir).filter((n) => n.startsWith("state.json.corrupt-")).length, 1);
-
-  // Version mismatch is treated the same way.
-  writeFileSync(file, JSON.stringify({ version: 2, runs: {} }));
-  assert.deepEqual(load(file, logTo), emptyState());
+  // Version mismatch is also reported to readers, then preserved by recovery.
+  const wrongVersion = JSON.stringify({ version: 2, runs: {} });
+  writeFileSync(file, wrongVersion);
+  assert.throws(() => load(file, logTo), (error: Error) =>
+    error.message.includes(file) && error.message.includes("unsupported state version 2"),
+  );
+  assert.equal(readFileSync(file, "utf8"), wrongVersion);
+  await update((state) => { state.seq = 8; }, file);
+  assert.equal(load(file).seq, 8);
   corrupt = readdirSync(dir).filter((n) => n.startsWith("state.json.corrupt-"));
   assert.equal(corrupt.length, 2);
-  assert.match(readFileSync(logTo, "utf8").trim().split("\n").at(-1)!, /unsupported state version 2/);
+  assert.ok(corrupt.some((name) => readFileSync(join(dir, name), "utf8") === wrongVersion));
+  events = readFileSync(logTo, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(events.length, 2);
+  assert.match(events[1].reason, /unsupported state version 2/);
 
-  // A missing file is still silently empty: nothing moved, nothing logged.
+  // Missing files remain silently empty; reads create neither state nor log files.
+  rmSync(file);
   rmSync(logTo);
   assert.deepEqual(load(file, logTo), emptyState());
+  assert.equal(existsSync(file), false);
   assert.equal(existsSync(logTo), false);
   rmSync(dir, { recursive: true });
 });

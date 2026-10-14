@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Pack Leader: the two-row bar herdr shows above a worker's pane. A click on it, or Enter, o
+# or space while it has the keyboard, focuses the run's orchestrator. Pack Leader opens it
+# with PACK_RUN_ID, PACK_WORKER, PACK_OBJECTIVE, PACK_WHERE and PACK_WHERE_LABEL (Branch or
+# Dir), PACK_TASK and PACK_ACCENT in the environment; q closes it.
+set -u
+run="${PACK_RUN_ID:-}"
+worker="${PACK_WORKER:-}"
+objective="${PACK_OBJECTIVE:-}"
+where="${PACK_WHERE:-}"
+where_label="${PACK_WHERE_LABEL:-Where}"
+task="${PACK_TASK:-}"
+here="$(cd "$(dirname "$0")" && pwd)"
+pl="${HERDR_PLUGIN_ROOT:-$(dirname "$here")}/bin/pack-leader"
+
+accent() {
+  if [[ "${PACK_ACCENT:-}" =~ ^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$ ]]; then
+    printf '\033[38;2;%d;%d;%dm' "$((16#${BASH_REMATCH[1]}))" "$((16#${BASH_REMATCH[2]}))" "$((16#${BASH_REMATCH[3]}))"
+  else
+    printf '\033[36m'
+  fi
+}
+
+# `s` cut to `n` cells with an ellipsis (plain text only).
+cut() { local s=$1 n=$2; if (( n <= 0 )); then printf ''; elif (( ${#s} > n )); then printf '%s…' "${s:0:n-1}"; else printf '%s' "$s"; fi; }
+label() { printf '\033[1;2m%s\033[22m ' "$1"; }   # a bold, dim field name
+value() { printf '%s' "$1"; }
+quote() { printf '\033[3m%s\033[23m' "$1"; }       # free text (goal, task) in italics
+
+# Two columns: the button on the left, the run on the right.
+#   ◀ Back to leader    Leader  <goal, italic>
+#                       Worker  name   Branch  pack/…   Task  <title, italic>
+draw() {
+  local cols
+  cols=$(tput cols 2>/dev/null || echo 80)
+  local btn=" ◀ Back to leader"
+  local col=$(( ${#btn} + 4 ))           # ◀ may take two cells: one cell of slack
+  local width=$(( cols - col - 3 ))      # room for the info column (border slack included)
+  local indent
+  indent=$(printf '%*s' "$col" "")
+  printf '\033[H\033[2J'
+  printf '%s\033[1m%s\033[22m\033[39m' "$(accent)" "$btn"
+  printf '%*s' $(( col - ${#btn} )) ""
+  label "Leader"; quote "$(cut "$objective" $(( width - 7 )))"
+  printf '\033[2;1H%s' "$indent"
+  local used=0
+  if [[ -n "$worker" ]]; then label "Worker"; value "$worker"; printf '   '; used=$(( used + 7 + ${#worker} + 3 )); fi
+  if [[ -n "$where" ]]; then label "$where_label"; value "$where"; printf '   '; used=$(( used + ${#where_label} + 1 + ${#where} + 3 )); fi
+  if [[ -n "$task" ]]; then label "Task"; quote "$(cut "$task" $(( width - used - 5 )))"; fi
+  printf '\033[0m'
+}
+
+go() { "$pl" leader ${run:+--run "$run"} >/dev/null 2>&1; }
+cleanup() { printf '\033[?1006l\033[?1000l\033[?25h'; stty sane 2>/dev/null; }
+trap cleanup EXIT
+trap draw WINCH
+trap 'exit 0' HUP TERM INT
+
+stty -echo -icanon min 1 time 0 2>/dev/null
+printf '\033[?25l\033[?1000h\033[?1006h'
+draw
+
+seq=""
+while IFS= read -rsn1 c; do
+  if [[ -n "$seq" ]]; then
+    seq+="$c"
+    # A CSI sequence ends on a letter or ~; a left button press is \e[<0;x;yM.
+    if [[ "$c" =~ [A-Za-z~] ]]; then
+      [[ "$seq" =~ ^$'\033'\[\<0\;[0-9]+\;[0-9]+M$ ]] && go
+      seq=""
+    elif (( ${#seq} > 32 )); then
+      seq=""
+    fi
+    continue
+  fi
+  case "$c" in
+    $'\033') seq="$c" ;;
+    "" | $'\n' | $'\r' | o | " ") go ;;
+    q) exit 0 ;;
+  esac
+done

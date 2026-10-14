@@ -2,6 +2,7 @@
 // herdr's live agent states into attention messages the orchestrator must ack.
 import { watch, type FSWatcher } from "node:fs";
 import { basename, dirname } from "node:path";
+import { hostname } from "node:os";
 import { agentPrompt, getAgent, type HerdrError, listAgents, listPanes, logHerdrError, promptLanded, type AgentStatus, subscribe } from "./herdr.ts";
 import { stateFile } from "./paths.ts";
 import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load } from "./state.ts";
@@ -70,14 +71,29 @@ export const renudgeMs = () => envMs("PACK_RENUDGE_MS", 60_000);
 const RENUDGE_TYPES: readonly string[] = ["done", "ask", "note"];
 
 /**
+ * Whether a message was sent during this worker incarnation. Replies use the
+ * original ask's timestamp so an answer to an earlier incarnation stays old.
+ */
+function withinWorkerLifetime(state: State, w: Pick<Worker, "run_id" | "started_at">, m: Message): boolean {
+  if (m.run_id !== w.run_id) return false;
+  const since = Date.parse(w.started_at);
+  if (Number.isNaN(since)) return true;
+  const sent = m.type === "reply" ? state.messages.find((a) => a.id === m.reply_to)?.ts ?? m.ts : m.ts;
+  const at = Date.parse(sent);
+  return Number.isNaN(at) || at >= since;
+}
+
+/**
  * Followups and uncollected replies for a worker that is going away (release, run
- * close): acked, so no later sync or `inbox` hands them to a new worker of the name.
+ * close): ack every queued message for this incarnation, including messages from
+ * its already-superseded dispatches that can no longer be delivered anywhere.
  */
 export function dropUndelivered(state: State, w: Pick<Worker, "name" | "run_id" | "started_at">): number {
   let n = 0;
   for (const m of state.messages) {
-    if (m.to !== w.name || m.acked || (m.type !== "followup" && m.type !== "reply") || !meantFor(state, w, m)) continue;
+    if (m.to !== w.name || m.acked || (m.type !== "followup" && m.type !== "reply") || !withinWorkerLifetime(state, w, m)) continue;
     m.acked = true;
+    delete m.delivery_claim;
     n++;
   }
   return n;
@@ -132,17 +148,49 @@ export function touch(w: Worker): void {
 }
 
 /**
- * A followup or reply addressed to this worker's name is meant for it only when it
- * is from the same run and was sent to this worker, not to an earlier one of the
- * same name (released, or in another run): sent, or for a reply asked, since it started.
+ * Resolve and validate the authority carried by a worker command. Settled
+ * tasks remain authoritative until the worker is assigned another dispatch;
+ * that permits legitimate followup handling without letting an old preamble
+ * refresh the replacement attempt.
  */
-export function meantFor(state: State, w: Pick<Worker, "run_id" | "started_at">, m: Message): boolean {
-  if (m.run_id !== w.run_id) return false;
-  const since = Date.parse(w.started_at);
-  if (Number.isNaN(since)) return true;
-  const sent = m.type === "reply" ? state.messages.find((a) => a.id === m.reply_to)?.ts ?? m.ts : m.ts;
-  const at = Date.parse(sent);
-  return Number.isNaN(at) || at >= since;
+function requireCurrentWorker(state: State, ctx: WorkerContext): { run: Run; worker: Worker; task: State["tasks"][string] | null } {
+  const run = state.runs[ctx.run_id];
+  if (!run) throw new Error(`no run ${ctx.run_id}`);
+  if (run.status !== "active") throw new Error(`run ${run.id} is closed`);
+  const worker = state.workers[ctx.worker];
+  if (!worker || worker.run_id !== run.id) throw new Error(`worker "${ctx.worker}" is not registered in run ${run.id}`);
+  if (ctx.task_id !== worker.task_id || ctx.dispatch_id !== worker.dispatch_id) {
+    throw new Error(`stale worker context for "${ctx.worker}": supplied task ${ctx.task_id ?? "none"}/dispatch ${ctx.dispatch_id ?? "none"}, current task ${worker.task_id ?? "none"}/dispatch ${worker.dispatch_id ?? "none"}`);
+  }
+  if (worker.task_id === null && worker.dispatch_id === null) return { run, worker, task: null };
+  if (!worker.task_id || !worker.dispatch_id) throw new Error(`worker "${ctx.worker}" has an incomplete current task/dispatch binding`);
+  const task = state.tasks[worker.task_id];
+  if (!task || task.run_id !== run.id || task.worker !== worker.name || task.dispatch_id !== worker.dispatch_id) {
+    throw new Error(`worker "${ctx.worker}" has no current task binding for ${worker.task_id}/${worker.dispatch_id}`);
+  }
+  const dispatch = state.dispatches?.[worker.dispatch_id];
+  if (dispatch && (dispatch.run_id !== run.id || dispatch.worker !== worker.name || dispatch.task_id !== task.id)) {
+    throw new Error(`dispatch ${worker.dispatch_id} is not bound to worker "${ctx.worker}" and task ${task.id}`);
+  }
+  return { run, worker, task };
+}
+
+/**
+ * A followup or reply is for this worker only when both its run/incarnation and
+ * its recipient task/dispatch match. Fully bound messages require an exact pair,
+ * even after that dispatch settles. Legacy null-ID messages remain usable for
+ * workers with no task binding (the historical fixture/runtime case), but are
+ * not guessed to belong to a bound dispatch and cannot cross a redispatch.
+ */
+export function meantFor(state: State, w: Pick<Worker, "run_id" | "started_at" | "task_id" | "dispatch_id">, m: Message): boolean {
+  if (!withinWorkerLifetime(state, w, m)) return false;
+  const workerTask = w.task_id ?? null;
+  const workerDispatch = w.dispatch_id ?? null;
+  const messageTask = m.task_id ?? null;
+  const messageDispatch = m.dispatch_id ?? null;
+  if (workerTask === null && workerDispatch === null && messageTask === null && messageDispatch === null) return true;
+  if (!workerTask || !workerDispatch || !messageTask || !messageDispatch) return false;
+  return workerTask === messageTask && workerDispatch === messageDispatch;
 }
 
 // ---- structured questions ------------------------------------------------------
@@ -209,16 +257,15 @@ export async function done(ctx: WorkerContext, o: { outcome: "succeeded" | "fail
     return { msg, run };
   });
   log({ event: "worker.done", run: run.id, worker: ctx.worker, task: msg.task_id, outcome: o.outcome });
-  await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} reported ${o.outcome} on task ${msg.task_id}. Run \`pack-leader check\` and continue the run.`);
+  await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} reported ${o.outcome} on task ${msg.task_id}. Run \`pack-leader check --wait --timeout 540000\` and continue the run.`);
   return msg;
 }
 
 export async function heartbeat(ctx: WorkerContext, body: string): Promise<Message> {
   return update((state) => {
-    const w = state.workers[ctx.worker];
-    if (!w) throw new Error(`worker "${ctx.worker}" is not registered`);
-    touch(w);
-    return message(state, { run_id: ctx.run_id, type: "heartbeat", from: ctx.worker, to: "orchestrator", task_id: ctx.task_id ?? w.task_id, dispatch_id: ctx.dispatch_id ?? w.dispatch_id, body, acked: true });
+    const { run, worker } = requireCurrentWorker(state, ctx);
+    touch(worker);
+    return message(state, { run_id: run.id, type: "heartbeat", from: worker.name, to: "orchestrator", task_id: worker.task_id, dispatch_id: worker.dispatch_id, body, acked: true });
   });
 }
 
@@ -229,16 +276,13 @@ export async function heartbeat(ctx: WorkerContext, body: string): Promise<Messa
  */
 export async function note(ctx: WorkerContext, body: string): Promise<Message> {
   const { msg, run } = await update((state) => {
-    const run = state.runs[ctx.run_id];
-    if (!run) throw new Error(`no run ${ctx.run_id}`);
-    const w = state.workers[ctx.worker];
-    if (!w) throw new Error(`worker "${ctx.worker}" is not registered`);
-    touch(w);
-    const msg = message(state, { run_id: run.id, type: "note", from: ctx.worker, to: "orchestrator", task_id: ctx.task_id ?? w.task_id, dispatch_id: ctx.dispatch_id ?? w.dispatch_id, body });
+    const { run, worker } = requireCurrentWorker(state, ctx);
+    touch(worker);
+    const msg = message(state, { run_id: run.id, type: "note", from: worker.name, to: "orchestrator", task_id: worker.task_id, dispatch_id: worker.dispatch_id, body });
     return { msg, run };
   });
   log({ event: "worker.note", run: run.id, worker: ctx.worker, id: msg.id });
-  await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} left a note (${msg.id}); it is not waiting on you. Run \`pack-leader check\` and ack it with \`--ack ${msg.id}\`.`);
+  await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} left a note (${msg.id}); it is not waiting on you. Run \`pack-leader check --wait --timeout 540000\` and ack it with \`--ack ${msg.id}\`.`);
   return msg;
 }
 
@@ -250,30 +294,36 @@ export async function ask(ctx: WorkerContext, o: { body?: string; options?: stri
   if (!askId) {
     if (!o.body) throw new Error("pass the question, or --id to keep waiting on one");
     const r = await update((state) => {
-      const w = state.workers[ctx.worker];
-      if (!w) throw new Error(`worker "${ctx.worker}" is not registered`);
-      touch(w);
-      const msg = message(state, { run_id: ctx.run_id, type: "ask", from: ctx.worker, to: "orchestrator", task_id: ctx.task_id ?? w.task_id, dispatch_id: ctx.dispatch_id ?? w.dispatch_id, body: o.body!, ...(options.length ? { options } : {}) });
-      return { msg, run: state.runs[ctx.run_id]! };
+      const { run, worker } = requireCurrentWorker(state, ctx);
+      touch(worker);
+      const msg = message(state, { run_id: run.id, type: "ask", from: worker.name, to: "orchestrator", task_id: worker.task_id, dispatch_id: worker.dispatch_id, body: o.body!, ...(options.length ? { options } : {}) });
+      return { msg, run };
     });
     askId = r.msg.id;
     run = r.run;
     log({ event: "worker.ask", run: ctx.run_id, worker: ctx.worker, id: askId });
     const choices = options.length ? ` Options: ${formatOptions(options)} (answer with one, a unique prefix, or --free for free text).` : "";
-    await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} asks a question (${askId}).${choices} Run \`pack-leader check\` and answer it with \`${replyHint(r.msg)}\`.`);
+    await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} asks a question (${askId}).${choices} Run \`pack-leader check --wait --timeout 540000\` and answer it with \`${replyHint(r.msg)}\`.`);
   } else {
-    // Resuming: only this worker's own ask, and not one whose reply it already collected; the options are the stored ask's.
-    const s = load();
-    const a = s.messages.find((m) => m.id === askId);
-    if (!a || a.type !== "ask" || a.run_id !== ctx.run_id || a.from !== ctx.worker) throw new Error(`no ask ${askId} from worker "${ctx.worker}" in run ${ctx.run_id}; pass the id your \`pack-leader ask\` printed`);
-    const answered = s.messages.find((m) => m.type === "reply" && m.reply_to === askId);
-    if (answered?.acked) throw new Error(`ask ${askId} was already answered (reply ${answered.id}): ${answered.body}`);
-    options = a.options ?? [];
-    // Still waiting on it is a sign of life too.
-    await update((state) => {
-      const w = state.workers[ctx.worker];
-      if (w) touch(w);
-    }).catch(() => {});
+    // Resume under the writer lock. A replied historical ask may be collected
+    // by its original worker context, but must not touch a newer attempt.
+    const resumed = await update((state) => {
+      const a = state.messages.find((m) => m.id === askId);
+      if (!a || a.type !== "ask" || a.run_id !== ctx.run_id || a.from !== ctx.worker) throw new Error(`no ask ${askId} from worker "${ctx.worker}" in run ${ctx.run_id}; pass the id your \`pack-leader ask\` printed`);
+      const answered = state.messages.find((m) => m.type === "reply" && m.reply_to === askId);
+      if (answered?.acked) throw new Error(`ask ${askId} was already answered (reply ${answered.id}): ${answered.body}`);
+      let current = false;
+      try {
+        const { worker } = requireCurrentWorker(state, ctx);
+        current = a.task_id === ctx.task_id && a.dispatch_id === ctx.dispatch_id;
+        if (current && !answered) touch(worker);
+      } catch (err) {
+        if (!answered) throw err;
+      }
+      if (!current && !answered) throw new Error(`ask ${askId} belongs to a superseded worker dispatch and has no reply`);
+      return { ask: a, answered };
+    });
+    options = resumed.ask.options ?? [];
   }
   const withOptions = options.length ? { options } : {};
   const deadline = Date.now() + o.timeoutMs;
@@ -291,9 +341,16 @@ export async function ask(ctx: WorkerContext, o: { body?: string; options?: stri
         });
         return { result: "reply", ask_id: askId!, ...withOptions, reply };
       }
-      // Released (or the run closed) while waiting: nothing will answer, so stop instead of waiting out the timeout.
+      // A new dispatch supersedes this waiter just like a release does. The
+      // reply branch above intentionally comes first so an already-answered
+      // historical ask can still be collected without touching the new attempt.
       const w = state.workers[ctx.worker];
       if (!w || w.run_id !== ctx.run_id || Date.parse(w.started_at) > Date.parse(askedAt)) throw new Error(`worker "${ctx.worker}" was released while waiting on ask ${askId}; no answer will come`);
+      try {
+        requireCurrentWorker(state, ctx);
+      } catch (err) {
+        throw new Error(`worker "${ctx.worker}" no longer has authority for ask ${askId}: ${(err as Error).message}`);
+      }
       const left = deadline - Date.now();
       if (left < 0) return { result: "timeout", ask_id: askId!, ...withOptions };
       await changes.next(Math.min(ASK_TICK_MS, left + 1));
@@ -310,11 +367,17 @@ export async function ask(ctx: WorkerContext, o: { body?: string; options?: stri
  */
 export async function inbox(ctx: WorkerContext): Promise<Message[]> {
   return update((state) => {
-    const w = state.workers[ctx.worker];
-    const mine = state.messages.filter((m) => m.run_id === ctx.run_id && m.to === ctx.worker && (m.type === "followup" || m.type === "reply") && !m.acked && (!w || meantFor(state, w, m)));
-    for (const m of mine) {
+    const { run, worker } = requireCurrentWorker(state, ctx);
+    const mine: Message[] = [];
+    for (const m of state.messages) {
+      if (m.run_id !== run.id || m.to !== worker.name || (m.type !== "followup" && m.type !== "reply") || m.acked || !meantFor(state, worker, m)) continue;
+      // Do not race a live direct prompt. A dead/expired claim is just a queued
+      // message, and consuming it here is itself a final acknowledgment.
+      if (m.delivery_claim && deliveryClaimIsActive(m.delivery_claim)) continue;
+      delete m.delivery_claim;
       m.acked = true;
       m.delivered = true;
+      mine.push(m);
     }
     return mine;
   });
@@ -344,11 +407,18 @@ export async function reply(run: Run, askId: string, body: string, o: { free?: b
  * for input, otherwise queued for its next `pack-leader inbox` (or the next sync).
  * `from` is "orchestrator" or the sending worker's name.
  */
-export async function send(run: Run, worker: string, body: string, force: boolean, from = "orchestrator"): Promise<{ message: Message; delivered: boolean }> {
+export async function send(run: Run, worker: string, body: string, force: boolean, from = "orchestrator", senderContext?: WorkerContext): Promise<{ message: Message; delivered: boolean }> {
   const { msg, waiting } = await update((state) => {
+    const currentRun = state.runs[run.id];
+    if (!currentRun) throw new Error(`no run ${run.id}`);
+    if (currentRun.status !== "active") throw new Error(`run ${run.id} is closed`);
+    const sender = senderContext ? requireCurrentWorker(state, senderContext).worker : undefined;
     const w = state.workers[worker];
-    if (!w || w.run_id !== run.id) throw new Error(`no worker "${worker}" in run ${run.id}`);
-    return { msg: message(state, { run_id: run.id, type: "followup", from, to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false }), waiting: Boolean(w.awaiting_prompt) };
+    if (!w) throw new Error(`no worker "${worker}" in run ${run.id}`);
+    if (sender && w.run_id !== sender.run_id) throw new Error(`worker "${worker}" belongs to run ${w.run_id}, not your run ${sender.run_id}; workers can only message workers of their own run`);
+    if (w.run_id !== currentRun.id) throw new Error(`no worker "${worker}" in run ${run.id}`);
+    if (sender) touch(sender);
+    return { msg: message(state, { run_id: currentRun.id, type: "followup", from, to: worker, task_id: w.task_id, dispatch_id: w.dispatch_id, body, delivered: false }), waiting: Boolean(w.awaiting_prompt) };
   });
   // A worker that has not been handed its dispatch yet gets the followup after it (queued), even with --now.
   let ready = false;
@@ -438,61 +508,85 @@ export async function sendTo(run: Run, address: string, body: string, force: boo
 export async function workerSend(ctx: WorkerContext, to: string, body: string, force: boolean): Promise<SendResult> {
   if (to.startsWith("@")) throw new Error(`group addresses like ${to} are for the orchestrator only; a worker sends to one worker by name`);
   if (to === ctx.worker) throw new Error(`worker "${ctx.worker}" cannot send to itself`);
-  const state = load();
-  const run = state.runs[ctx.run_id];
+  const run = load().runs[ctx.run_id];
   if (!run) throw new Error(`no run ${ctx.run_id}`);
-  if (run.status === "closed") throw new Error(`run ${run.id} is closed`);
-  const me = state.workers[ctx.worker];
-  if (!me || me.run_id !== run.id) throw new Error(`worker "${ctx.worker}" is not registered in run ${run.id}`);
-  const target = state.workers[to];
-  if (!target) throw new Error(`no worker "${to}" in run ${run.id}`);
-  if (target.run_id !== run.id) throw new Error(`worker "${to}" belongs to run ${target.run_id}, not your run ${run.id}; workers can only message workers of their own run`);
-  const r = await send(run, to, body, force, ctx.worker);
-  // Sending is a sign of life from the sender.
-  await update((state) => {
-    const w = state.workers[ctx.worker];
-    if (w) touch(w);
-  }).catch(() => {});
+  const r = await send(run, to, body, force, ctx.worker, ctx);
   return { address: to, recipients: [{ worker: to, message_id: r.message.id, delivered: r.delivered }], message: r.message, delivered: r.delivered };
 }
 
-const followupPrompt = (body: string, from = "orchestrator") =>
-  from === "orchestrator" ? `[Pack Leader follow-up from the orchestrator] ${body}` : `[pack-leader follow-up from worker ${from}] ${body}`;
+const DELIVERY_CLAIM_LEASE_MS = 5 * 60_000;
+
+/** A dead local sender is recoverable immediately; remote/ambiguous owners expire by lease. */
+function deliveryClaimIsActive(claim: NonNullable<Message["delivery_claim"]>, at = Date.now()): boolean {
+  const leaseUntil = Date.parse(claim.lease_until);
+  if (!Number.isFinite(leaseUntil) || leaseUntil <= at) return false;
+  if (claim.host !== hostname()) return true;
+  if (!Number.isInteger(claim.pid) || claim.pid <= 0) return false;
+  try {
+    process.kill(claim.pid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === "EPERM";
+  }
+}
+
+const followupPrompt = (id: string, body: string, from = "orchestrator") =>
+  from === "orchestrator"
+    ? `[Pack Leader follow-up from the orchestrator] ${body}\n[Pack Leader message id: ${id}]`
+    : `[pack-leader follow-up from worker ${from}] ${body}\n[Pack Leader message id: ${id}]`;
 
 /**
- * Prompt a worker with a queued followup. The message is claimed (delivered +
- * acked) inside the lock before the prompt goes out, so a concurrent sync() or
- * send() cannot prompt it a second time; if the prompt fails, the claim is
- * reverted so a later pass retries it. True when this call delivered it.
+ * Prompt a queued followup under an owned, expiring claim. The claim fences
+ * concurrent send()/sync() calls but is not an acknowledgment: a dead sender
+ * can be reclaimed, and only successful delivery or inbox consumption settles
+ * the message. True when this call finalized delivery.
  * A worker released (or replaced by a new one of the name) since gets nothing.
  * `seqBefore`, the agent's state counter before the prompt, lets a timed-out
  * prompt that visibly landed count as delivered instead of being sent twice.
  */
 async function deliver(id: string, worker: string, body: string, from = "orchestrator", seqBefore?: number): Promise<boolean> {
-  const claimed = await update((state) => {
+  const token = await update((state) => {
     const m = state.messages.find((m) => m.id === id);
-    if (!m || m.delivered || m.acked) return false;
+    if (!m || m.delivered || m.acked) return null;
+    if (m.delivery_claim && deliveryClaimIsActive(m.delivery_claim)) return null;
     const w = state.workers[worker];
-    if (!w || !meantFor(state, w, m)) return false;
+    if (!w || !meantFor(state, w, m)) return null;
+    const token = nextId(state, "dc");
+    m.delivery_claim = {
+      token,
+      pid: process.pid,
+      host: hostname(),
+      claimed_at: now(),
+      lease_until: new Date(Date.now() + DELIVERY_CLAIM_LEASE_MS).toISOString(),
+    };
+    return token;
+  });
+  if (!token) return false;
+  const finalize = async () => update((state) => {
+    const m = state.messages.find((m) => m.id === id);
+    if (!m || m.delivery_claim?.token !== token) return false;
+    const w = state.workers[worker];
+    if (!w || !meantFor(state, w, m)) {
+      delete m.delivery_claim;
+      return false;
+    }
+    if (m.delivered) return true;
     m.delivered = true;
     m.acked = true;
+    delete m.delivery_claim;
     return true;
   });
-  if (!claimed) return false;
   try {
-    await agentPrompt(worker, followupPrompt(body, from));
-    return true;
+    await agentPrompt(worker, followupPrompt(id, body, from));
+    return await finalize();
   } catch (err) {
     if ((err as HerdrError).code === "timeout" && seqBefore !== undefined && (await promptLanded(worker, seqBefore))) {
       log({ event: "followup.timeout_landed", worker, id });
-      return true;
+      return await finalize();
     }
     await update((state) => {
       const m = state.messages.find((m) => m.id === id);
-      if (m) {
-        m.delivered = false;
-        m.acked = false;
-      }
+      if (m?.delivery_claim?.token === token) delete m.delivery_claim;
     }).catch(() => {});
     return false;
   }
@@ -638,7 +732,7 @@ export async function sync(): Promise<Message[]> {
       // Stalled: owes a report, no sign of life for PACK_STALL_MS. An open question is the orchestrator's move, not a stall.
       const limit = stallMs();
       const silentFor = t - Date.parse(w.last_seen);
-      const asking = state.messages.some((m) => m.type === "ask" && m.from === w.name && m.run_id === w.run_id && !m.acked);
+      const asking = state.messages.some((m) => m.type === "ask" && m.from === w.name && m.run_id === w.run_id && m.task_id === w.task_id && m.dispatch_id === w.dispatch_id && !m.acked);
       if (owes && limit > 0 && w.liveness === "live" && !w.stalled_since && !asking && silentFor > limit) {
         w.stalled_since = now();
         const body = `${w.name} has shown no sign of life for ${Math.round(silentFor / 60_000)} min (no heartbeat, question or herdr state change) while task ${task!.id} is open. Read its screen with \`pack-leader worker read ${w.name}\`.`;
@@ -650,6 +744,8 @@ export async function sync(): Promise<Message[]> {
         let first = true;
         for (const m of state.messages) {
           if (m.to !== w.name || m.type !== "followup" || m.delivered || m.acked || !meantFor(state, w, m)) continue;
+          if (m.delivery_claim && deliveryClaimIsActive(m.delivery_claim)) continue;
+          if (m.delivery_claim) delete m.delivery_claim;
           // Only the first prompt of the pass knows the agent's counter before it; later ones retry on a timeout, as before.
           toDeliver.push({ worker: w.name, body: m.body, id: m.id, from: m.from, ...(first ? { seq } : {}) });
           first = false;
@@ -669,7 +765,7 @@ export async function sync(): Promise<Message[]> {
       for (const m of stale) m.nudged_at = now();
       const oldest = stale[0]!;
       const what = stale.length === 1 ? `a ${oldest.type} from ${oldest.from} (${oldest.id})` : `${stale.length} messages, oldest a ${oldest.type} from ${oldest.from} (${oldest.id})`;
-      renudge.push({ run: r.id, pane, text: `Pack Leader: run ${r.id} has ${what} still unread. Run \`pack-leader check\` and continue the run.` });
+      renudge.push({ run: r.id, pane, text: `Pack Leader: run ${r.id} has ${what} still unread. Run \`pack-leader check --wait --timeout 540000\` and continue the run.` });
     }
     return out;
   });

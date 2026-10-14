@@ -4,6 +4,15 @@ export const reset = esc("0");
 export const bold = (s: string) => `${esc("1")}${s}${esc("22")}`;
 export const dim = (s: string) => `${esc("2")}${s}${esc("22")}`;
 export const inverse = (s: string) => `${esc("7")}${s}${esc("27")}`;
+/** 24-bit foreground from `#rrggbb`; closes with the default foreground like `fg.*`. */
+export const fgRgb = (hex: string) => {
+  const [r, g, b] = rgb(hex);
+  return (s: string) => `${esc(`38;2;${r};${g};${b}`)}${s}${esc("39")}`;
+};
+export function rgb(hex: string): [number, number, number] {
+  const h = hex.replace(/^#/, "");
+  return [parseInt(h.slice(0, 2), 16) || 0, parseInt(h.slice(2, 4), 16) || 0, parseInt(h.slice(4, 6), 16) || 0];
+}
 export const fg = {
   red: (s: string) => `${esc("31")}${s}${esc("39")}`,
   green: (s: string) => `${esc("32")}${s}${esc("39")}`,
@@ -23,6 +32,9 @@ export const screen = {
   home: "\x1b[H",
   clearLine: "\x1b[2K",
   at: (row: number, col: number) => `\x1b[${row};${col}H`,
+  /** Button press/release and wheel reports, SGR-encoded (`\x1b[<b;x;yM`). */
+  mouseOn: "\x1b[?1000h\x1b[?1006h",
+  mouseOff: "\x1b[?1006l\x1b[?1000l",
 };
 
 const escape = /\x1b\[[0-9;?]*[A-Za-z]/g;

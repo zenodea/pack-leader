@@ -22,8 +22,8 @@ export type WorktreeInfo = {
   workspace_id?: string | null;
 };
 
-/** A worktree in `state.worktrees`, keyed by path: who used it, and whether it is still on disk. */
-export type WorktreeRecord = WorktreeInfo & { worker: string; run_id: string; created_at: string; released_at?: string; removed?: boolean };
+/** A worktree in `state.worktrees`, keyed by path: which start attempt owns its lease and whether it is still on disk. */
+export type WorktreeRecord = WorktreeInfo & { worker: string; run_id: string; dispatch_id?: string; created_at: string; released_at?: string; removed?: boolean };
 
 function git(cwd: string, args: string[]): string {
   try {
@@ -44,6 +44,19 @@ const gitOk = (cwd: string, args: string[]): boolean => {
 };
 
 const real = (p: string) => (existsSync(p) ? realpathSync(p) : resolve(p));
+
+/** Canonical checkout identity for admission checks, including symlink aliases and not-yet-created paths. */
+export function worktreeIdentityPath(path: string): string {
+  let candidate = resolve(path);
+  const tail: string[] = [];
+  while (!existsSync(candidate)) {
+    const parent = dirname(candidate);
+    if (parent === candidate) break;
+    tail.unshift(basename(candidate));
+    candidate = parent;
+  }
+  return join(realpathSync(candidate), ...tail);
+}
 
 /** The top of the checkout containing `cwd`; a clear error when it is not in a git repository. */
 export function repoRoot(cwd: string): string {
@@ -105,7 +118,7 @@ export function planWorktree(o: { spec: string; cwd: string; runId: string; work
   if (real(top) !== real(path)) throw new Error(`--worktree ${o.spec}: ${path} is inside the checkout ${top}; pass its top directory`);
   const branch = git(path, ["branch", "--show-current"]) || null;
   const base = git(path, ["rev-parse", "HEAD"]);
-  return { path, branch, base, created_by_pack: false, repo: mainCheckout(path) };
+  return { path: real(path), branch, base, created_by_pack: false, repo: mainCheckout(path) };
 }
 
 /** `git worktree add -b <branch> <path> <base>`: the fallback when herdr has no worktree API. */
