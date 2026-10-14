@@ -1,8 +1,11 @@
 name: Landing page
 
 on:
-  # Publishing is explicit: select GitHub Actions in Settings → Pages, then run
-  # this workflow. Normal code pushes do not deploy or change site settings.
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:

@@ -1,4 +1,6 @@
-# Pack Leader <img src="site/assets/wolf.png" width="40" height="40" align="absmiddle" alt="A wolf in sheep’s clothing">
+<img src="site/assets/wolf.png" width="160" height="160" align="right" alt="A wolf in sheep’s clothing">
+
+### Pack Leader
 
 Pack Leader is an independent [herdr](https://github.com/herdrdev/herdr) plugin that lets your
 coding agent coordinate a team of **Claude Code, Codex or pi** workers. The
@@ -8,7 +10,7 @@ run in their own tabs or splits; a live sidebar keeps the whole run visible.
 Tasks, messages and dispatch history live outside the agents' context windows.
 Inspect assignments, current attempts and reports—even after a worker's tab closes.
 
-[Full guide](docs/guide.md) · [Command reference](docs/guide.md#commands) · [Website preview](site/README.md) · [Changelog](docs/CHANGELOG.md)
+[Full guide](docs/guide.md) · [Command reference](docs/guide.md#commands) · [Changelog](docs/CHANGELOG.md)
 
 <img src="site/assets/leader-tab.webp" width="760" alt="A herdr window with three panes: Pack Leader, the orchestrator; Observer, a second agent that answers questions about the run; and Pack, the sidebar showing parser done, validator working, and tests asking a question. The tab bar lists one tab per worker.">
 
@@ -194,4 +196,4 @@ Node runs the TypeScript directly; there is no build step.
 [MIT](LICENSE). The orchestration skill's supervision loop, task-spec contract
 and completion accounting were adapted from [Orca](https://github.com/stablyai/orca)
 (MIT), rewritten for herdr's panes, tabs and agents. The user-supplied mascot image
-is separate from the code licence; see [asset notes](site/assets/README.md).
+is separate from the code licence.

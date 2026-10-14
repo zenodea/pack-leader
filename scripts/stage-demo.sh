@@ -40,6 +40,16 @@ for w in parser validator tests; do
   eval "$w=\$pane"
 done
 
+# The real "back to leader" bar above the parser worker (bin/leader-bar), opened the way
+# workers.ts opens it: a plugin pane split below, swapped on top, shrunk to two rows.
+bar="$(h plugin pane open --plugin pack-leader --entrypoint bar --placement split --direction down \
+  --target-pane "$parser" --no-focus --env PACK_RUN_ID=r-7f3a --env PACK_WORKER=parser \
+  --env "PACK_OBJECTIVE=Ship CSV import" --env PACK_WHERE=pack/r-7f3a/parser --env PACK_WHERE_LABEL=Branch \
+  --env "PACK_TASK=Parse CSV input" --env "PACK_ACCENT=$(node --no-warnings -e 'import("'"$root"'/src/theme.ts").then((t) => console.log(t.loadTheme().accent ?? ""))')" \
+  | jq -r '.result.plugin_pane.pane.pane_id')"
+h pane swap --pane "$bar" --direction up >/dev/null
+h pane resize --pane "$bar" --direction up --amount 0.9 >/dev/null 2>&1 || true
+
 # Pane sizes: herdr reports rows per pane; columns are the layout width minus the border.
 size() {
   rows="$(h pane get "$1" | jq -r '.result.pane.scroll.viewport_rows')"
