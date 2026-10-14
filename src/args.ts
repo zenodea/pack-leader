@@ -2,9 +2,17 @@
 // everything after -- untouched. A value flag given twice accumulates its values
 // comma-joined (so `list()` splits them); a bare flag given twice stays `true`, and a
 // bare repeat never discards a value already given.
+//
+// A value that starts with `--` is read as the next flag, so pass it as
+// `--flag=--value`. The free-text flags below are the exception: they always take
+// the next token (unless it is the `--` separator), so `reply m5 --body "--no"`
+// and `done --summary "--dry-run was enough"` work as written.
 export type Args = { positional: string[]; flags: Map<string, string | true>; rest: string[] };
 
-export function parseArgs(argv: string[]): Args {
+/** Flags whose value is free text: they consume the next token even when it starts with `--`. */
+export const TEXT_FLAGS: ReadonlySet<string> = new Set(["body", "summary"]);
+
+export function parseArgs(argv: string[], textFlags: ReadonlySet<string> = TEXT_FLAGS): Args {
   const positional: string[] = [];
   const flags = new Map<string, string | true>();
   let rest: string[] = [];
@@ -22,7 +30,7 @@ export function parseArgs(argv: string[]): Args {
     if (a.startsWith("--")) {
       const eq = a.indexOf("=");
       if (eq !== -1) set(a.slice(2, eq), a.slice(eq + 1));
-      else if (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith("--")) set(a.slice(2), argv[++i]!);
+      else if (argv[i + 1] !== undefined && argv[i + 1] !== "--" && (textFlags.has(a.slice(2)) || !argv[i + 1]!.startsWith("--"))) set(a.slice(2), argv[++i]!);
       else set(a.slice(2), true);
     } else positional.push(a);
   }

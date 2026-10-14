@@ -30,6 +30,8 @@ import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispa
 import { closeRun, parseDuration, pruneRuns, removeArchives } from "./runs.ts";
 import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
 import { guide, installSkill } from "./skill.ts";
+import { configFile, defaultsFor, loadConfig, saveConfig } from "./config.ts";
+import { choose } from "./choose.ts";
 
 const out = (v: unknown) => process.stdout.write(JSON.stringify(v, null, 2) + "\n");
 
@@ -209,10 +211,13 @@ async function main(): Promise<void> {
         const placement = str(args, "placement") ?? (has(args, "direction") ? "split" : "tab");
         if (placement !== "tab" && placement !== "split") throw new Error("--placement must be tab or split");
         if (has(args, "worktree") && !str(args, "worktree")) throw new Error("--worktree takes new or a path");
+        const config = loadConfig();
+        const kind = str(args, "kind") ?? config.kind ?? DEFAULT_KIND;
+        const defaults = defaultsFor(config, kind);
         const r = await startWorker({
           run,
           name,
-          kind: str(args, "kind") ?? DEFAULT_KIND,
+          kind,
           spec: str(args, "spec"),
           title: str(args, "title"),
           taskId: str(args, "task"),
@@ -223,8 +228,8 @@ async function main(): Promise<void> {
           targetPane: str(args, "target-pane"),
           ratio: str(args, "ratio") ? num(args, "ratio", 0.5) : undefined,
           extraArgs: args.rest,
-          model: str(args, "model"),
-          thinking: str(args, "thinking"),
+          model: str(args, "model") ?? defaults.model ?? undefined,
+          thinking: str(args, "thinking") ?? defaults.thinking ?? undefined,
           noDefaultArgs: has(args, "no-default-args"),
           timeoutMs: num(args, "timeout", 45_000),
           worktree: str(args, "worktree"),
@@ -441,6 +446,39 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "config": {
+      const [sub = "show"] = args.positional;
+      const config = loadConfig();
+      if (sub === "show") {
+        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds });
+        return;
+      }
+      if (sub === "set") {
+        const kind = str(args, "kind") ?? config.kind ?? DEFAULT_KIND;
+        const current = config.kinds[kind] ?? {};
+        const next = {
+          model: has(args, "clear-model") ? null : str(args, "model") ?? current.model ?? null,
+          thinking: has(args, "clear-thinking") ? null : str(args, "thinking") ?? current.thinking ?? null,
+        };
+        config.kinds[kind] = next;
+        if (has(args, "default") || has(args, "kind")) config.kind = kind;
+        saveConfig(config);
+        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, [kind]: next });
+        return;
+      }
+      if (sub === "pick") {
+        const picked = await choose();
+        if (!picked) {
+          process.stderr.write("cancelled\n");
+          return;
+        }
+        if (fromAction) await notify("Pack Leader", `workers: ${picked.kind}${picked.model ? ` · ${picked.model}` : ""}${picked.thinking ? ` · ${picked.thinking}` : ""}`);
+        out({ file: configFile, ...picked });
+        return;
+      }
+      throw new Error(`unknown: pack-leader config ${sub}`);
+    }
+
     // ---- herdr-driven --------------------------------------------------------
     case "sidebar": {
       const { runSidebar } = await import("./sidebar.ts");
@@ -597,6 +635,9 @@ Worker (inside a pane pack-leader started; IDs come from the environment)
   pack-leader send WORKER "text" [--now]               a follow-up to another worker of the same run
   pack-leader heartbeat "note" | pack-leader inbox
 Either
+  pack-leader config [show]                            default harness and per-harness model and thinking level for new workers
+  pack-leader config pick                              choose them from searchable lists (needs a terminal)
+  pack-leader config set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking]
   pack-leader skill [--install]                        the guide; or install it into Claude Code, Codex and pi
   pack-leader sidebar                                  the pack, live (run by herdr in a pane)
   pack-leader help                                     this list

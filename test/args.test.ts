@@ -79,3 +79,25 @@ test("num on a bare flag falls back", () => {
   assert.equal(num(parseArgs(["--timeout", "--wait"]), "timeout", 7), 7);
   assert.equal(num(parseArgs([]), "timeout", 7), 7);
 });
+
+test("parseArgs: a value starting with -- needs --flag=value, except for the free-text flags --body and --summary", () => {
+  // A plain value flag reads a following --token as the next flag; the = form is the escape.
+  const a = parseArgs(["--spec", "--dry-run"]);
+  assert.equal(a.flags.get("spec"), true);
+  assert.equal(has(a, "dry-run"), true);
+  assert.equal(str(parseArgs(["--spec=--dry-run"]), "spec"), "--dry-run");
+  assert.equal(str(parseArgs(["--body=--no"]), "body"), "--no");
+  // --body and --summary take the next token whatever it is (reply/send/ask/heartbeat/note --body, done --summary).
+  const r = parseArgs(["reply", "m5", "--body", "--no", "--free"]);
+  assert.deepEqual(r.positional, ["reply", "m5"]);
+  assert.equal(str(r, "body"), "--no");
+  assert.equal(has(r, "free"), true);
+  assert.equal(str(parseArgs(["done", "--outcome", "succeeded", "--summary", "--dry-run was enough"]), "summary"), "--dry-run was enough");
+  // At the end, or before the -- separator, it is still bare.
+  assert.equal(parseArgs(["note", "--body"]).flags.get("body"), true);
+  const sep = parseArgs(["--body", "--", "x"]);
+  assert.equal(sep.flags.get("body"), true);
+  assert.deepEqual(sep.rest, ["x"]);
+  // An explicit set replaces the default.
+  assert.equal(str(parseArgs(["--spec", "--x"], new Set(["spec"])), "spec"), "--x");
+});

@@ -306,6 +306,7 @@ pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,
 pack-leader ask "question" [--options a,b,c] [--timeout MS] | ask --id ID
 pack-leader note "text" | send WORKER "text" [--now] | heartbeat "note" | inbox
 # either
+pack-leader config [show] | pick | set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking]
 pack-leader skill [--install] | sidebar | help
 ```
 

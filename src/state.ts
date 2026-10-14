@@ -1,9 +1,10 @@
 // The state that outlives any agent's context: runs, tasks, workers and
 // messages, in one JSON file written atomically under a directory lock. Every
 // pack-leader command is a short-lived process, so the file is the only shared memory.
-import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync, appendFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { ensureDir, lockDir, logFile, stateDir, stateFile } from "./paths.ts";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { hostname } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { ensureDir, lockDir, logFile, stateDirDivergence, stateFile } from "./paths.ts";
 import type { AgentStatus } from "./herdr.ts";
 import type { WorktreeInfo, WorktreeRecord } from "./worktree.ts";
 
@@ -193,55 +194,173 @@ export function load(file = stateFile, logTo = logFile): State {
   return emptyState();
 }
 
+/** A tmp file older than this belongs to a writer that died between write and rename. */
+const TMP_ORPHAN_MS = 60_000;
+
+/**
+ * Write `<file>.<pid>.tmp`, fsync it, rename it over `file`, fsync the directory:
+ * a crash leaves either the old file or the new one, never an empty one. Tmp files
+ * a dead writer left behind (older than a minute) are swept on the way.
+ */
 export function save(state: State, file = stateFile): void {
-  ensureDir(stateDir);
+  const dir = ensureDir(dirname(file));
+  sweepTmp(file);
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, JSON.stringify(state, null, 2));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, file);
+  try {
+    const dfd = openSync(dir, "r");
+    try {
+      fsyncSync(dfd);
+    } finally {
+      closeSync(dfd);
+    }
+  } catch {} // some filesystems refuse fsync on a directory; the rename itself is done
+}
+
+function sweepTmp(file: string): void {
+  const prefix = `${basename(file)}.`;
+  try {
+    for (const name of readdirSync(dirname(file))) {
+      if (!name.startsWith(prefix) || !/^\d+\.tmp$/.test(name.slice(prefix.length))) continue;
+      const p = join(dirname(file), name);
+      try {
+        if (Date.now() - statSync(p).mtimeMs > TMP_ORPHAN_MS) rmSync(p, { force: true });
+      } catch {}
+    }
+  } catch {}
 }
 
 const LOCK_TIMEOUT_MS = 5000;
+/** A lock without a readable owner (an older build, or a holder that died before writing it) is stale after this. */
 const LOCK_STALE_MS = 30_000;
+/** A lock whose owner pid is still alive is only taken over after this, in case the pid was reused. */
+const LOCK_ABANDONED_MS = 10 * 60_000;
 
-async function acquire(dir = lockDir): Promise<void> {
-  ensureDir(stateDir);
+/** The lock dir that guards `file`: `state.lock` next to `state.json`. */
+export const lockFor = (file: string): string => `${file.replace(/\.json$/, "")}.lock`;
+
+type LockOwner = { pid: number; host: string };
+
+function lockOwner(dir: string): LockOwner | null {
+  try {
+    const o = JSON.parse(readFileSync(join(dir, "owner"), "utf8"));
+    return typeof o?.pid === "number" && typeof o?.host === "string" ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === "EPERM";
+  }
+}
+
+/**
+ * Whether a held lock can be taken over: its owner (pid on this host) is dead, or it
+ * has no owner and is older than LOCK_STALE_MS, or it is older than LOCK_ABANDONED_MS
+ * whatever its owner says. A live holder on this host is never swept before that,
+ * however long it holds the lock.
+ */
+export function lockIsStale(dir: string, at = Date.now()): boolean {
+  let age: number;
+  try {
+    age = at - statSync(dir).mtimeMs;
+  } catch {
+    return false; // gone: the next mkdir will tell
+  }
+  if (age > LOCK_ABANDONED_MS) return true;
+  const owner = lockOwner(dir);
+  if (owner && owner.host === hostname()) return !alive(owner.pid);
+  return age > LOCK_STALE_MS;
+}
+
+/**
+ * Take the lock: mkdir is the atomic step, then the owner (pid, host) is written
+ * inside so others can tell a dead holder from a slow one. A stale lock is renamed
+ * aside before it is removed, so two sweepers cannot both remove one dir and then
+ * delete a lock a third process just took.
+ */
+export async function acquire(dir = lockDir, timeoutMs = LOCK_TIMEOUT_MS): Promise<void> {
+  ensureDir(dirname(dir));
   const start = Date.now();
   for (;;) {
     try {
       mkdirSync(dir);
+      try {
+        writeFileSync(join(dir, "owner"), JSON.stringify({ pid: process.pid, host: hostname() } satisfies LockOwner), { mode: 0o600 });
+      } catch {}
       return;
     } catch (err: any) {
       if (err?.code !== "EEXIST") throw err;
-      try {
-        if (Date.now() - statSync(dir).mtimeMs > LOCK_STALE_MS) {
-          rmdirSync(dir);
-          continue;
-        }
-      } catch {}
-      if (Date.now() - start > LOCK_TIMEOUT_MS) throw new Error("pack-leader state is locked by another command; try again");
+      if (lockIsStale(dir)) {
+        const aside = `${dir}.stale-${process.pid}-${Math.random().toString(36).slice(2)}`;
+        try {
+          renameSync(dir, aside);
+          // Another sweeper may have beaten us and a new holder taken the lock in between: give a live lock back.
+          if (!lockIsStale(aside)) renameSync(aside, dir);
+          else {
+            rmSync(aside, { recursive: true, force: true });
+            log({ event: "state.lock_swept", lock: dir }, join(dirname(dir), "events.jsonl"));
+          }
+        } catch {}
+        continue;
+      }
+      if (Date.now() - start > timeoutMs) throw new Error("pack-leader state is locked by another command; try again");
       await new Promise((r) => setTimeout(r, 25 + Math.random() * 50));
     }
   }
 }
 
-function release(dir = lockDir): void {
+/** Drop the lock, but only one this process holds (a sweeper may have taken it over). */
+export function release(dir = lockDir): void {
+  const owner = lockOwner(dir);
+  if (owner && (owner.pid !== process.pid || owner.host !== hostname())) return;
   try {
-    rmdirSync(dir);
+    rmSync(dir, { recursive: true, force: true });
   } catch {}
 }
 
-/** Read-modify-write under the lock. `fn` returns the value for the caller. */
-export async function update<T>(fn: (state: State) => T | Promise<T>, file = stateFile): Promise<T> {
-  await acquire();
+let divergenceLogged = false;
+
+/**
+ * Read-modify-write under the lock. `fn` returns the value for the caller and must
+ * be synchronous: the lock is held only for load, `fn` and save, so nothing slow
+ * (a herdr call, a wait) ever runs under it. Do async work before or after, and
+ * call update() again if it has to write. A callback that returns a promise
+ * throws, and nothing is saved.
+ */
+export async function update<T>(fn: (state: State) => Sync<T>, file = stateFile): Promise<T> {
+  if (file === stateFile && !divergenceLogged) {
+    divergenceLogged = true;
+    const d = stateDirDivergence();
+    if (d) log({ event: "state.dir_divergent", ...d, using: d.env_dir });
+  }
+  const lock = lockFor(file);
+  await acquire(lock);
   try {
-    const state = load(file);
-    const out = await fn(state);
+    const state = load(file, join(dirname(file), "events.jsonl"));
+    const out = fn(state) as T;
+    if (out && typeof (out as any).then === "function") throw new Error("update() callback must be synchronous");
     save(state, file);
     return out;
   } finally {
-    release();
+    release(lock);
   }
 }
+
+/** Refuses a promise-returning callback at compile time. */
+type Sync<T> = T extends PromiseLike<unknown> ? never : T;
 
 export function nextId(state: State, prefix: string): string {
   state.seq += 1;
@@ -249,10 +368,13 @@ export function nextId(state: State, prefix: string): string {
 }
 
 /** An append-only trail of what happened, for the sidebar's log and for debugging. */
-export function log(entry: Record<string, unknown>, file = logFile): void {
+/** Past this size events.jsonl is rotated to events.jsonl.1 (replacing the previous one). */
+export const LOG_MAX_BYTES = 2_000_000;
+
+export function log(entry: Record<string, unknown>, file = logFile, maxBytes = LOG_MAX_BYTES): void {
   try {
     ensureDir(dirname(file));
-    if (existsSync(file) && statSync(file).size > 2_000_000) writeFileSync(file, "");
+    if (existsSync(file) && statSync(file).size > maxBytes) renameSync(file, `${file}.1`);
     appendFileSync(file, JSON.stringify({ t: now(), ...entry }) + "\n", { mode: 0o600 });
   } catch {}
 }

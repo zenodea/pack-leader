@@ -1,6 +1,6 @@
 // Where Pack Leader keeps things. herdr hands plugin commands their dirs; panes and
 // agents don't get those variables, so the same locations are worked out by hand.
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,8 +21,35 @@ export const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
 
 /** User settings (none yet). */
 export const configDir = process.env.HERDR_PLUGIN_CONFIG_DIR || join(herdrHome, "plugins", "config", "pack-leader");
+/** Where the state lives when herdr does not say: `$XDG_STATE_HOME/herdr/plugins/pack-leader`. */
+export function defaultStateDir(env: NodeJS.ProcessEnv = process.env, h = home): string {
+  return join(env.XDG_STATE_HOME || join(h, ".local", "state"), "herdr", "plugins", "pack-leader");
+}
+
+/**
+ * `HERDR_PLUGIN_STATE_DIR` always wins over the XDG default: herdr hands it to plugin
+ * commands, and tests use it to isolate. Panes and agents do not get it, so a herdr
+ * that points it somewhere else splits the state in two; see `stateDirDivergence`.
+ */
+export function resolveStateDir(env: NodeJS.ProcessEnv = process.env, h = home): string {
+  return env.HERDR_PLUGIN_STATE_DIR || defaultStateDir(env, h);
+}
+
+/**
+ * Set when `HERDR_PLUGIN_STATE_DIR` names a different dir than the XDG default and the
+ * default holds a state.json too: commands run without the variable (from panes) then
+ * read and write the other file. `update()` logs it once per process as `state.dir_divergent`.
+ */
+export function stateDirDivergence(env: NodeJS.ProcessEnv = process.env, h = home): { env_dir: string; default_dir: string } | null {
+  const envDir = env.HERDR_PLUGIN_STATE_DIR;
+  if (!envDir) return null;
+  const def = defaultStateDir(env, h);
+  if (resolve(envDir) === resolve(def) || !existsSync(join(def, "state.json"))) return null;
+  return { env_dir: resolve(envDir), default_dir: def };
+}
+
 /** Runs, tasks, workers, messages: the state that outlives any agent's context. */
-export const stateDir = process.env.HERDR_PLUGIN_STATE_DIR || join(herdrState, "plugins", "pack-leader");
+export const stateDir = resolveStateDir();
 export const stateFile = join(stateDir, "state.json");
 export const lockDir = join(stateDir, "state.lock");
 export const logFile = join(stateDir, "events.jsonl");
