@@ -155,6 +155,8 @@ export const worktreeOpen = (p: { cwd: string; path: string; label: string }): P
 /** Removes the checkout and closes its workspace; refuses a dirty checkout (dirty_worktree_requires_force). Keeps the branch. */
 export const worktreeRemove = (workspace_id: string) => herdr("worktree.remove", { workspace_id, force: false }, { timeoutMs: 60_000 });
 export const tabFocus = (tab_id: string) => herdr("tab.focus", { tab_id });
+export const tabGet = async (tab_id: string): Promise<{ tab_id: string; label: string | null }> => (await herdr("tab.get", { tab_id })).tab;
+export const tabRename = (tab_id: string, label: string) => herdr("tab.rename", { tab_id, label });
 
 export const agentSendKeys = (target: string, keys: string[]) => herdr("agent.send_keys", { target, keys });
 export async function agentWait(target: string, until: AgentStatus[], timeoutMs: number): Promise<AgentStatus | "timeout"> {

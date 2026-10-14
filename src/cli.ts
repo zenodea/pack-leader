@@ -21,7 +21,7 @@
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
-import { agentFocus, agentRead, getPane, renamePane, notify, paneFocus } from "./herdr.ts";
+import { agentFocus, agentRead, getPane, renamePane, notify, paneFocus, tabGet, tabRename } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
@@ -125,10 +125,16 @@ async function main(): Promise<void> {
         let warning: string | undefined;
         try {
           log({ event: "run.created", run: run.id, pane: h.paneId });
-          if (h.paneId) await renamePane(h.paneId, "leader");
+          if (h.paneId) await renamePane(h.paneId, "Pack Leader");
+          if (h.tabId) {
+            const before = await tabGet(h.tabId).then((t) => t.label ?? null).catch(() => null);
+            await update((s) => void (s.runs[run.id] && (s.runs[run.id]!.orchestrator.tab_label = before)));
+            await tabRename(h.tabId, "leader").catch(() => {});
+          }
           if (!has(args, "no-sidebar") && h.paneId) {
             sidebar = await openSidebar(h.paneId, has(args, "left")).catch(() => null);
             if (sidebar) await update((s) => void (s.runs[run.id]!.sidebar_pane_id = sidebar));
+            if (sidebar) await renamePane(sidebar, "Pack");
           }
         } catch (err) {
           warning = `run ${run.id} was created, but ${sidebar ? `recording its sidebar pane ${sidebar} failed` : "a step after creating it failed"}: ${(err as Error).message}`;

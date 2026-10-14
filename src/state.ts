@@ -18,7 +18,7 @@ export type Run = {
   created_at: string;
   closed_at?: string;
   /** The agent you talk to. */
-  orchestrator: { pane_id: string | null; workspace_id: string | null; tab_id: string | null; cwd: string };
+  orchestrator: { pane_id: string | null; workspace_id: string | null; tab_id: string | null; tab_label?: string | null; cwd: string };
   /** The sidebar pane pack-leader opened for this run, if any. */
   sidebar_pane_id?: string | null;
   /** Set while sync() cannot reach herdr: worker liveness verdicts are stale until it clears. */

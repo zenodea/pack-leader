@@ -35,7 +35,7 @@ command = ["node", "src/cli.ts", "run", "close", "--release"]
 
 [[panes]]
 id = "sidebar"
-title = "Pack Leader"
+title = "Pack"
 placement = "split"
 command = ["sh", "-c", "exec node --no-warnings \"$HERDR_PLUGIN_ROOT/src/cli.ts\" sidebar"]
 
