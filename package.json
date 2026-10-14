@@ -13,6 +13,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p .",
+    "pretest": "tsc -p .",
     "test": "node --test 'test/**/*.test.ts'"
   },
   "devDependencies": {

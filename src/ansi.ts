@@ -25,9 +25,23 @@ export const screen = {
   at: (row: number, col: number) => `\x1b[${row};${col}H`,
 };
 
-/** Printable width, ignoring escape sequences; wide glyphs count as 1 (close enough for a sidebar). */
+const escape = /\x1b\[[0-9;?]*[A-Za-z]/g;
+const graphemes = new Intl.Segmenter();
+// East Asian Wide/Fullwidth blocks and the emoji blocks that draw two cells by default.
+const wide = /^[\u1100-\u115F\u231A\u231B\u23E9-\u23EC\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6\u{1F300}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{1FA70}-\u{1FAFF}\u{20000}-\u{3FFFD}]/u;
+
+/** Cells one grapheme takes: 0 for lone combining or format marks, 2 for wide glyphs and emoji, else 1. */
+function cells(g: string): number {
+  if (/^[\p{Mn}\p{Me}\p{Cf}]+$/u.test(g)) return 0;
+  if (wide.test(g) || (g.includes("\uFE0F") && /\p{Extended_Pictographic}/u.test(g))) return 2;
+  return 1;
+}
+
+/** Printable width in terminal cells, ignoring escape sequences. */
 export function width(s: string): number {
-  return [...s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")].length;
+  let n = 0;
+  for (const { segment } of graphemes.segment(s.replace(escape, ""))) n += cells(segment);
+  return n;
 }
 
 /** Closes everything this module can open: bold/dim, inverse, and a foreground colour. Not a full reset. */
@@ -43,19 +57,18 @@ export function truncate(s: string, max: number, close: string = closeStyles): s
   if (width(s) <= max) return s;
   let out = "";
   let n = 0;
-  for (let i = 0; i < s.length; ) {
-    const m = /^\x1b\[[0-9;?]*[A-Za-z]/.exec(s.slice(i));
-    if (m) {
-      out += m[0];
-      i += m[0].length;
+  // Escape sequences are kept up to the cut; text is cut on grapheme boundaries by cell width.
+  for (const part of s.split(/(\x1b\[[0-9;?]*[A-Za-z])/)) {
+    if (part.startsWith("\x1b[")) {
+      out += part;
       continue;
     }
-    if (n >= max - 1) break;
-    const cp = s.codePointAt(i)!;
-    const ch = String.fromCodePoint(cp);
-    out += ch;
-    n++;
-    i += ch.length;
+    for (const { segment } of graphemes.segment(part)) {
+      const w = cells(segment);
+      if (n + w > max - 1) return out + "…" + close;
+      out += segment;
+      n += w;
+    }
   }
   return out + "…" + close;
 }

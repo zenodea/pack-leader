@@ -4,7 +4,7 @@ Pack Leader is the coordination layer for a pack of coding agents inside herdr. 
 records who owns which task, which attempt is authoritative, and what each
 worker reported, in a state file outside every agent's context. The
 orchestrator is the agent the user talks to; workers are agents Pack Leader starts in
-sibling panes. The only channel between them is the `pack-leader` CLI.
+their own hidden herdr tabs (or a split beside the orchestrator). The only channel between them is the `pack-leader` CLI.
 
 ## Outcome
 
@@ -44,7 +44,7 @@ no state the user can see in the sidebar.
 - herdr commands remain available (`herdr agent read`, `herdr pane ...`); use
   them to inspect, not to bypass Pack Leader's lifecycle.
 - Never close panes you did not create. `pack-leader worker release` closes only the
-  pane Pack Leader split for that worker.
+  tab (or split pane) Pack Leader created for that worker.
 
 ## Orchestrator: the supervised loop
 
@@ -305,6 +305,25 @@ pack-leader send NAME|@all|@idle|@KIND "text" [--now]
 pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
 pack-leader ask "question" [--options a,b,c] [--timeout MS] | ask --id ID
 pack-leader note "text" | send WORKER "text" [--now] | heartbeat "note" | inbox
+# either
+pack-leader skill [--install] | sidebar | help
 ```
 
-`pack-leader help` prints the same list. Unknown flags are errors; do not guess.
+`pack-leader help` prints the same commands and flags, with a note on each. Flags are not checked: a misspelled or
+unknown flag is silently ignored, so copy flags from this list rather than
+guessing. A flag value that itself starts with `--` must be written
+`--flag=value` (`--body=--no`), or it is read as the next flag.
+
+Less common flags, not in the list above:
+
+- Any orchestrator command: `--run ID` picks the run instead of the pane's own.
+- `run create`: `--another` binds a second run to a pane that already has one;
+  `--left` opens the sidebar on the left.
+- `worker start`: `--title T` (task title for `--spec`), `--target-pane P` and
+  `--ratio R` (with `--placement split`), `--no-default-args` (no
+  `--allowedTools` for the agent), `--timeout MS` (agent start, default 45000).
+- Worker side (`done`, `ask`, `heartbeat`, `note`, `inbox`): `--run`, `--worker`,
+  `--task`, `--dispatch` override the IDs from the environment; `ask`,
+  `heartbeat`, `note` and `send` also take the text as `--body "..."`.
+- Run by herdr, not by agents: `sidebar-open [--left] [--no-focus]` (the plugin
+  action) and `event pane.closed|pane.exited` (plugin events).

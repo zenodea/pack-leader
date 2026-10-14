@@ -1,7 +1,7 @@
 // Pack Leader: an orchestrator agent and its pack of workers, on herdr.
 //
 // Orchestrator side (the agent you talk to):
-//   pack-leader run create --objective "..." | show | list | close [--release] [--force]
+//   pack-leader run create --objective "..." [--no-sidebar] | show | list | close [--release] [--force]
 //   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 //   pack-leader status [--json] [--all]
 //   pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
@@ -11,7 +11,7 @@
 //   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
 //   pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree]
 //   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
-//   pack-leader check [--wait] [--timeout MS] [--ack ID] [--types done,ask,attention,note]
+//   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
 //   pack-leader reply ASK_ID --body "..." [--free]
 //   pack-leader send NAME|@all|@idle|@KIND "text" [--now]
 // Worker side (inside a pane pack-leader started; IDs come from the environment):

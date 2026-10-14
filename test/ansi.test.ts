@@ -4,13 +4,36 @@ import { bold, closeStyles, dim, fg, inverse, pad, reset, truncate, width } from
 
 const CLOSE = "\x1b[22m\x1b[27m\x1b[39m";
 
-test("width ignores escape sequences and counts code points", () => {
+test("width ignores escape sequences and counts terminal cells", () => {
   assert.equal(width(""), 0);
   assert.equal(width("hello"), 5);
   assert.equal(width(bold("hi")), 2);
   assert.equal(width(fg.red(dim("abc")) + inverse("d")), 4);
   assert.equal(width("\x1b[2K\x1b[3;4Hx"), 1);
-  assert.equal(width("é…😀"), 3);
+  assert.equal(width("é…😀"), 4);
+});
+
+test("width: wide glyphs take two cells, combining marks and joiners none", () => {
+  assert.equal(width("日本語"), 6);
+  assert.equal(width("한글"), 4);
+  assert.equal(width("ｆｕｌｌ"), 8);
+  assert.equal(width("e\u0301"), 1, "decomposed é");
+  assert.equal(width("👍🏽"), 2, "emoji with a skin tone");
+  assert.equal(width("👩‍💻"), 2, "ZWJ sequence");
+  assert.equal(width("❤️"), 2, "text symbol with emoji presentation");
+  assert.equal(width("❤ ✔ ● ◐ ■ ✕ ◌"), 13, "the sidebar's glyphs stay narrow");
+  assert.equal(width("\u200b"), 0);
+});
+
+test("truncate cuts wide text by cells and never splits a grapheme", () => {
+  assert.equal(truncate("日本語です", 5), "日本…" + CLOSE);
+  assert.equal(width(truncate("日本語です", 5)), 5);
+  // No room for a whole wide glyph before the ellipsis: one cell short, never over.
+  assert.equal(truncate("日本語です", 4), "日…" + CLOSE);
+  assert.equal(width(truncate("日本語です", 4)), 3);
+  assert.equal(truncate("ab👩‍💻cd", 5), "ab👩‍💻…" + CLOSE);
+  assert.equal(truncate("abe\u0301fg", 4), "abe\u0301…" + CLOSE);
+  assert.equal(width(pad(truncate("任务：修复测试", 6), 6)), 6);
 });
 
 test("truncate leaves short strings untouched", () => {

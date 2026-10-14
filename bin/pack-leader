@@ -7,4 +7,11 @@ while [ -L "$self" ]; do
   case "$self" in /*) ;; *) self="$dir/$self" ;; esac
 done
 root=$(cd "$(dirname "$self")/.." && pwd)
+# Node runs the TypeScript directly, which needs type stripping without a flag (22.18+).
+ver=$(node --version 2>/dev/null) || { echo "pack-leader: node not found on PATH; Pack Leader needs Node 22.18 or newer" >&2; exit 127; }
+v=${ver#v}; major=${v%%.*}; rest=${v#*.}; minor=${rest%%.*}
+if [ "$major" -lt 22 ] 2>/dev/null || { [ "$major" -eq 22 ] && [ "$minor" -lt 18 ]; }; then
+  echo "pack-leader: Node $v is too old; Pack Leader needs Node 22.18 or newer ($(command -v node))" >&2
+  exit 1
+fi
 exec node --no-warnings "$root/src/cli.ts" "$@"

@@ -1,52 +1,78 @@
 # Pack Leader
 
 Pack Leader is a [herdr](https://github.com/zenodea/herdr) plugin: the agent you talk to
-becomes an orchestrator, starts worker agents in sibling panes, hands each one
+becomes an orchestrator, starts worker agents in hidden tabs, hands each one
 a task, answers their questions and waits for their reports. A sidebar pane
 shows the pack. The run state (tasks, dispatches, messages) lives outside every
 agent's context, so a compaction in the orchestrator loses nothing.
 
 ```
-┌─────────────────────────────────────────┬────────────────┐
-│                                         │ r1 ship it     │
-│   orchestrator (the one you talk to)    │ ┌────────────┐ │
-│                                         │ │◐ api claude│ │
-│   $ pack-leader check --wait            │ │runtime 3m  │ │
-│                                         │ │Fix the API │ │
-│                                         │ └────────────┘ │
-│      workers run in hidden tabs:        │ ┌────────────┐ │
-│      api   docs                         │ │● docs      │ │
-│      Enter in the sidebar opens one,    │ │runtime 2m  │ │
-│      prefix+; or `o` brings you back    │ └────────────┘ │
-└─────────────────────────────────────────┴────────────────┘
+┌─────────────────────────────────────────┬────────────────────────┐
+│                                         │ goal ship it           │
+│   orchestrator (the one you talk to)    │ ┌────────────────────┐ │
+│                                         │ │ ◐ api claude       │ │
+│   $ pack-leader check --wait            │ │ runtime 3m · work… │ │
+│                                         │ │ Fix the API        │ │
+│                                         │ │ ↳ tests green      │ │
+│      workers run in hidden tabs:        │ └────────────────────┘ │
+│      api   docs                         │ ┌────────────────────┐ │
+│      Enter in the sidebar opens one,    │ │ ● docs claude      │ │
+│      prefix+; or `o` brings you back    │ │ runtime 2m · idle  │ │
+│                                         │ └────────────────────┘ │
+└─────────────────────────────────────────┴────────────────────────┘
 ```
 
 ## Install
 
 ```bash
 herdr plugin install zenodea/pack-leader   # or: herdr plugin link ~/pack-leader
-pack-leader skill --install                     # or the "pack-leader: install the skill" action
+herdr plugin action invoke install-skill --plugin pack-leader
 ```
 
-`pack-leader skill --install` writes the skill stub into the skills directory of Claude Code, Codex and pi (whichever are set up)
-and links `pack-leader` into `~/.local/bin`. Workers start with `--allowedTools
-"Bash(pack-leader:*)"` so their reports do not stall on a permission prompt; add the
-same to your Claude Code settings if you also want the orchestrator to run pack-leader
-without prompts.
+`pack-leader` is not on PATH until the skill is installed, so the second line
+runs the plugin's "Pack Leader: install the skill" action through herdr (the
+same action is in herdr's action menu). From a checkout, `bin/pack-leader skill
+--install` does the same. It writes the skill stub into the skills directory of
+Claude Code, Codex and pi (whichever are set up) and links `pack-leader` into
+`~/.local/bin` (put that directory on PATH if it is not). Needs herdr 0.9+ and
+Node 22.18+; `pack-leader` says so if `node` is older. Workers start with
+`--allowedTools "Bash(pack-leader:*)"` so their reports do not stall on a
+permission prompt; add the same to your Claude Code settings if you also want
+the orchestrator to run pack-leader without prompts.
 
-Bind the sidebar to a key in herdr's `config.toml`, and let herdr's own
-agent-walking actions move between workers (hidden tabs included):
+Workers start with `--allowedTools "Bash(pack-leader:*)"` so their reports do not
+stall on a permission prompt. The orchestrator waits with `pack-leader check --wait
+--timeout 540000` (nine minutes), so its Bash tool timeout must be at least that
+long. For the orchestrator to run `pack-leader` without
+prompts too, add the rule to Claude Code's settings, `~/.claude/settings.json`
+(or a project's `.claude/settings.json`):
+
+```json
+{
+  "permissions": {
+    "allow": ["Bash(pack-leader:*)"]
+  }
+}
+```
+
+Bind the sidebar to a key in herdr's `config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+a"
+key = "prefix+alt+w"
 type = "plugin_action"
 command = "pack-leader.sidebar"
 description = "Pack Leader: the pack"
+```
 
+herdr's own agent-walking keys move between workers, hidden tabs included.
+They are fields of the `[keys]` table, not of a `[[keys.command]]` entry, so
+they need the `[keys]` header (`herdr config check` warns about them otherwise):
+
+```toml
+[keys]
 next_agent = "prefix+shift+j"
 previous_agent = "prefix+shift+k"
-focus_agent = "prefix+alt+1..9"
 ```
 
 ## Use
@@ -118,14 +144,17 @@ deletes them with their records and archives (it keeps the 5 most recent;
 `pack-leader help` lists every command. The sidebar (`pack-leader: show the pack`)
 lists one box per worker with its state (including `NO AGENT` and `STALLED`),
 task and last message (a heartbeat, a note, a report, an open question with its
-options, or the answer); `j`/`k` move, Enter focuses the worker's pane, `r`
-previews its last lines.
+options, or the answer); `j`/`k` move (the list scrolls to keep the selected
+box in view), Enter focuses the worker's pane, `o` goes back to the
+orchestrator, `r` previews its last lines, `R` (shift-r) refreshes, `?` shows
+the keys and `q` quits. Until herdr has answered once, and while it is
+unreachable, a worker's state shows as `?` rather than `gone`.
 
 ## How it works
 
-- `herdr pane split` with `PACK_*` variables in the environment, `herdr agent
-  start`, and `herdr agent prompt` start a worker; nothing is forked inside the
-  orchestrator.
+- herdr's `tab.create` (or `pane.split` with `--placement split`) with
+  `PACK_*` variables in the environment, then `agent.start` and `agent.prompt`,
+  start a worker; nothing is forked inside the orchestrator.
 - State is one JSON file under `~/.local/state/herdr/plugins/pack-leader/`, written
   atomically under a lock; every `pack-leader` command is a short-lived process.
 - `pack-leader check --wait` subscribes to herdr's events and reconciles each worker's
@@ -148,6 +177,7 @@ npm install
 npm run typecheck
 npm test
 herdr plugin link ~/pack-leader
+npm link                     # optional: pack-leader on PATH from this checkout
 ```
 
 Node 22.18+ runs the TypeScript directly; there is no build step.

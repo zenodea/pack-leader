@@ -43,7 +43,7 @@ export function installSkill(): InstallReport {
   } catch (err) {
     note.push(`could not link pack-leader into ${localBin}: ${(err as Error).message}`);
   }
-  if (bin && !(process.env.PATH ?? "").split(":").includes(localBin)) note.push(`${localBin} is not on PATH in this shell`);
+  if (bin && !(process.env.PATH ?? "").split(":").includes(localBin)) note.push(`${localBin} is not on PATH in this shell; add it to your shell profile: export PATH="${localBin}:$PATH"`);
   return { skills, bin, note };
 }
 

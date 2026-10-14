@@ -2,9 +2,9 @@
 // events and the state file; keys move between boxes, Enter jumps to a worker.
 import { watch, type FSWatcher } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
-import { bold, dim, fg, inverse, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
+import { bold, dim, fg, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
 import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "./herdr.ts";
-import { ensureDir, stateDir, stateFile } from "./paths.ts";
+import { ensureDir, stateDir } from "./paths.ts";
 import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, unacked, type Worker } from "./state.ts";
 import { formatOptions, sync } from "./inbox.ts";
 
@@ -22,11 +22,15 @@ function elapsed(iso: string): string {
   return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m${sec}s`;
 }
 
-/** The message a worker's box shows: the last thing it said (heartbeat, note, done, ask), or the last reply to it. */
-export function lastMessageFor(state: State, runId: string, worker: string): Message | null {
+/**
+ * The message a worker's box shows: the last thing it said (heartbeat, note, done, ask), or the last reply to it.
+ * With `dispatchId`, only messages of that dispatch count, so a new dispatch does not show the previous one's report.
+ */
+export function lastMessageFor(state: State, runId: string, worker: string, dispatchId: string | null = null): Message | null {
   for (let i = state.messages.length - 1; i >= 0; i--) {
     const m = state.messages[i]!;
     if (m.run_id !== runId) continue;
+    if (dispatchId && m.dispatch_id !== dispatchId) continue;
     if (m.from === worker && (m.type === "heartbeat" || m.type === "note" || m.type === "done" || m.type === "ask")) return m;
     if (m.to === worker && m.type === "reply") return m;
   }
@@ -77,7 +81,38 @@ export function boxLines(w: Worker, t: Task | null, last: Message | null, st: st
   ];
 }
 
+/**
+ * The status a box shows. Liveness findings win; then herdr's agent state when `live` is known
+ * (a pane missing from it is gone). Before the first agent list, or while herdr is unreachable,
+ * `live` is null and only the stored liveness can say "exited"; anything else is "unknown".
+ */
+export function statusOf(w: Worker, live: ReadonlyMap<string, { status: AgentStatus }> | null): string {
+  if (w.liveness === "unverifiable") return "unverifiable";
+  if (w.stalled_since) return "stalled";
+  if (live) return live.get(w.pane_id)?.status ?? "exited";
+  return w.liveness === "exited" ? "exited" : "unknown";
+}
+
+/** The key a keypress means. readline names shift-r "r" with `shift` set, so letters are upper-cased here. */
+export function keyName(key: { name?: string; shift?: boolean; sequence?: string }): string | undefined {
+  if (key.name && key.shift && /^[a-z]$/.test(key.name)) return key.name.toUpperCase();
+  return key.name ?? key.sequence;
+}
+
+/**
+ * The first line to show so that lines [start, end) stay visible in `avail` rows, moving as little as
+ * possible from `offset`. A box taller than the pane shows its top. Never scrolls past the last line.
+ */
+export function scrollFor(offset: number, start: number, end: number, avail: number, total: number): number {
+  if (avail <= 0 || total <= avail) return 0;
+  if (end - start >= avail || start < offset) offset = start;
+  else if (end > offset + avail) offset = end - avail;
+  return Math.max(0, Math.min(offset, total - avail));
+}
+
 export async function runSidebar(): Promise<void> {
+  // Outside a herdr pane with no terminal there is nobody to draw for, and the ticker would keep it alive forever.
+  if (!process.stdin.isTTY && !process.env.HERDR_PANE_ID) throw new Error("the sidebar needs a terminal: herdr opens it in a pane (\"Pack Leader: show the pack\")");
   const out = process.stdout;
   const live: Live = new Map();
   let state: State = load();
@@ -86,6 +121,8 @@ export async function runSidebar(): Promise<void> {
   let previewFor: string | null = null;
   let help = false;
   let connected = false;
+  let liveKnown = false;
+  let scroll = 0;
   let message: string | null = null;
   let drawTimer: NodeJS.Timeout | null = null;
 
@@ -94,7 +131,10 @@ export async function runSidebar(): Promise<void> {
       const agents = await listAgents();
       live.clear();
       for (const a of agents) live.set(a.pane_id, { status: a.agent_status, title: a.terminal_title_stripped ?? a.title ?? null, agent: a.agent });
-    } catch {}
+      liveKnown = true;
+    } catch {
+      liveKnown = false;
+    }
   };
 
   const rows = (): { run: Run; worker: Worker }[] => {
@@ -103,48 +143,54 @@ export async function runSidebar(): Promise<void> {
     return list;
   };
 
-  const statusOf = (w: Worker): string =>
-    w.liveness === "unverifiable" ? "unverifiable" : w.stalled_since ? "stalled" : live.get(w.pane_id)?.status ?? "exited";
-
   const draw = () => {
     const cols = out.columns || 30;
     const lines: string[] = [];
     const runs = activeRuns(state);
     // Closed runs are never drawn: activeRuns only.
     if (!runs.length) lines.push(dim("no active run — pack-leader run create"));
-    const all = rows();
     let i = 0;
+    // Lines of the selected box; the first box of a run brings its goal line along.
+    let selStart = 0;
+    let selEnd = 0;
     for (const run of runs) {
       const box = unacked(state, run.id).length;
       if (lines.length) lines.push("");
+      const runStart = lines.length;
       for (const [i, l] of wrapAll(run.objective, Math.max(8, cols - 5)).entries()) lines.push(i ? `     ${l}` : `${dim("goal")} ${l}`);
       if (box) lines.push(fg.yellow(`  ${box} unread for the orchestrator`));
       const ws = runWorkers(state, run.id);
       if (!ws.length) lines.push(dim("  no workers yet"));
-      for (const w of ws) {
+      ws.forEach((w, n) => {
         const t = w.task_id ? state.tasks[w.task_id] ?? null : null;
-        lines.push(...boxLines(w, t, lastMessageFor(state, run.id, w.name), statusOf(w), cols, i === sel));
+        if (i === sel) selStart = n === 0 ? runStart : lines.length;
+        lines.push(...boxLines(w, t, lastMessageFor(state, run.id, w.name, w.dispatch_id), statusOf(w, liveKnown ? live : null), cols, i === sel));
+        if (i === sel) selEnd = lines.length;
         i++;
-      }
+      });
       const pending = runTasks(state, run.id).filter((t) => t.status === "pending");
       if (pending.length) lines.push(dim(`  ${pending.length} pending task${pending.length === 1 ? "" : "s"}`));
     }
+    // The preview and a message stay pinned above the footer; the boxes scroll.
+    const tail: string[] = [];
     if (preview && previewFor) {
-      lines.push("", dim(`── ${previewFor} ──`));
-      for (const l of preview) lines.push(truncate(l, cols));
+      tail.push("", dim(`── ${previewFor} ──`));
+      for (const l of preview) tail.push(truncate(l, cols));
     }
-    if (message) lines.push("", fg.yellow(truncate(message, cols)));
-    const footer = [(connected ? "" : fg.red("offline · ")) + (help ? dim("j/k move · enter open worker · o back · r peek · R refresh · q quit") : "")];
+    if (message) tail.push("", fg.yellow(truncate(message, cols)));
+    const footer = [(connected ? "" : fg.red("offline · ")) + (help ? dim("j/k move · enter open worker · o back · r peek · R refresh · q quit") : dim("enter opens a worker · ? help"))];
 
     const rowsAvail = out.rows || 24;
-    const body = lines.slice(0, Math.max(0, rowsAvail - footer.length - 1));
+    const pinned = tail.slice(-Math.floor(rowsAvail / 2));
+    const avail = Math.max(1, rowsAvail - footer.length - 1 - pinned.length);
+    scroll = scrollFor(scroll, selStart, selEnd, avail, lines.length);
+    const body = [...lines.slice(scroll, scroll + avail), ...pinned];
     let buf = screen.home;
     for (let r = 0; r < rowsAvail; r++) {
       const line = r < body.length ? body[r]! : r === rowsAvail - 1 ? footer[0]! : "";
       buf += screen.at(r + 1, 1) + screen.clearLine + truncate(line, cols);
     }
     out.write(buf);
-    void all;
   };
 
   const schedule = () => {
@@ -181,6 +227,7 @@ export async function runSidebar(): Promise<void> {
     },
     (c) => {
       connected = c;
+      if (!c) liveKnown = false;
       if (c) void refreshLive().then(schedule);
       schedule();
     },
@@ -220,11 +267,11 @@ export async function runSidebar(): Promise<void> {
   emitKeypressEvents(process.stdin);
   process.stdin.setRawMode(true);
   process.stdin.resume();
-  process.stdin.on("keypress", (_s: string, key: { name?: string; ctrl?: boolean; sequence?: string }) => {
+  process.stdin.on("keypress", (_s: string, key: { name?: string; ctrl?: boolean; shift?: boolean; sequence?: string }) => {
     const n = rows().length;
     const cur = rows()[sel];
     if (key.ctrl && key.name === "c") return quit();
-    switch (key.name ?? key.sequence) {
+    switch (keyName(key)) {
       case "q":
         return quit();
       case "j":
