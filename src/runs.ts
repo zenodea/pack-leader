@@ -1,7 +1,7 @@
 // A run's end of life: closing it (workers, tasks, sidebar) and, later,
 // pruning closed runs and everything that belongs to them out of the state.
 import { existsSync, rmSync } from "node:fs";
-import { getPane, paneClose } from "./herdr.ts";
+import { getPane, labelPane, paneClose } from "./herdr.ts";
 import { activeRuns, log, now, runWorkers, type Run, type State, update } from "./state.ts";
 import { archiveDir, settleDispatch } from "./dispatch.ts";
 import { type ReleaseResult, releaseWorker } from "./workers.ts";
@@ -161,6 +161,7 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
       closed_sidebar = sidebar;
     } catch {}
   }
+  if (run.orchestrator.pane_id) await labelPane(run.orchestrator.pane_id, null).catch(() => {});
   log({ event: "run.closed", run: runId, released: released.map((r) => r.worker), forgotten: forgotten.map((f) => f.worker), failed_tasks: failed, closed_sidebar });
   return { closed: runId, released, forgotten, failed_tasks: failed, closed_sidebar };
 }

@@ -28,7 +28,7 @@ herdr plugin install zenodea/pack-leader   # or: herdr plugin link ~/pack-leader
 pack-leader skill --install                     # or the "pack-leader: install the skill" action
 ```
 
-`pack-leader skill --install` writes the skill stub to `~/.claude/skills/pack-leader/SKILL.md`
+`pack-leader skill --install` writes the skill stub into the skills directory of Claude Code, Codex and pi (whichever are set up)
 and links `pack-leader` into `~/.local/bin`. Workers start with `--allowedTools
 "Bash(pack-leader:*)"` so their reports do not stall on a permission prompt; add the
 same to your Claude Code settings if you also want the orchestrator to run pack-leader

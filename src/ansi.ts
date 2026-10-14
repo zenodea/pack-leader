@@ -64,3 +64,17 @@ export function pad(s: string, w: number): string {
   const n = width(s);
   return n >= w ? s : s + " ".repeat(w - n);
 }
+
+export function wrap(s: string, max: number): string[] {
+  const out: string[] = [];
+  for (const para of s.split("\n")) {
+    let line = "";
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      if (!line) line = word;
+      else if (width(line) + 1 + width(word) <= max) line += " " + word;
+      else (out.push(line), (line = word));
+    }
+    out.push(line);
+  }
+  return out.length ? out : [""];
+}

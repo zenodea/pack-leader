@@ -27,8 +27,12 @@ export const stateFile = join(stateDir, "state.json");
 export const lockDir = join(stateDir, "state.lock");
 export const logFile = join(stateDir, "events.jsonl");
 
-/** Where the Claude Code skill stub goes. */
-export const claudeSkillDir = join(home, ".claude", "skills", "pack-leader");
+/** Where the skill stub goes: every harness that has a skills directory. */
+export const skillDirs: Record<string, string> = {
+  claude: join(process.env.CLAUDE_CONFIG_DIR || join(home, ".claude"), "skills", "pack-leader"),
+  codex: join(process.env.CODEX_HOME || join(home, ".codex"), "skills", "pack-leader"),
+  pi: join(process.env.PI_CODING_AGENT_DIR || join(home, ".pi", "agent"), "skills", "pack-leader"),
+};
 export const localBin = join(home, ".local", "bin");
 
 export function herdrSocketPath(env: NodeJS.ProcessEnv = process.env): string {

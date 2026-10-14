@@ -44,6 +44,8 @@ export type Worker = {
   name: string;
   run_id: string;
   kind: string;
+  model?: string | null;
+  thinking?: string | null;
   pane_id: string;
   cwd: string;
   task_id: string | null;

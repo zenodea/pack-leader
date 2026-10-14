@@ -291,7 +291,7 @@ pack-leader status [--json] [--all]
 # tasks
 pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
 # workers
-pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--cwd D] [--placement tab|split]
+pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--cwd D] [--placement tab|split]
                          [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
 pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
 pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME

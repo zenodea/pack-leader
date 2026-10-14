@@ -15,6 +15,46 @@ export function defaultAgentArgs(kind: string): string[] {
   return [];
 }
 
+/** `--model` / `--thinking` as the kind's own flags: claude takes --effort, codex -m and -c, pi --thinking. */
+export function modelArgs(kind: string, model?: string, thinking?: string): string[] {
+  const args: string[] = [];
+  if (kind === "codex") {
+    if (model) args.push("-m", model);
+    if (thinking) args.push("-c", `model_reasoning_effort=${thinking}`);
+  } else if (kind === "pi") {
+    if (model) args.push("--model", model);
+    if (thinking) args.push("--thinking", thinking);
+  } else {
+    if (model) args.push("--model", model);
+    if (thinking) args.push("--effort", thinking);
+  }
+  return args;
+}
+
+/** What the agent was asked to run as, read back from its argv so the pack shows it. */
+export function modelFromArgs(kind: string, args: string[]): { model: string | null; thinking: string | null } {
+  let model: string | null = null;
+  let thinking: string | null = null;
+  const unquote = (v: string) => v.replace(/^["']|["']$/g, "");
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const eq = a.startsWith("--") ? a.indexOf("=") : -1;
+    const flag = eq > 0 ? a.slice(0, eq) : a;
+    const val = eq > 0 ? a.slice(eq + 1) : args[i + 1];
+    if (val === undefined) continue;
+    if (flag === "--model" || flag === "-m") model = val;
+    else if (flag === "--effort" || flag === "--thinking" || flag === "--reasoning-effort") thinking = val;
+    else if ((flag === "-c" || flag === "--config") && val.startsWith("model_reasoning_effort=")) thinking = unquote(val.slice("model_reasoning_effort=".length));
+    else if ((flag === "-c" || flag === "--config") && val.startsWith("model=")) model = unquote(val.slice("model=".length));
+  }
+  if (kind === "pi" && model?.includes(":")) {
+    const [m, t] = model.split(":");
+    model = m!;
+    thinking ??= t ?? null;
+  }
+  return { model, thinking };
+}
+
 export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: string; cwd: string; worktree?: WorktreeInfo | null }): string {
   return [
     `[pack-leader dispatch] You are worker "${p.worker}" in run ${p.run.id}, on task ${p.task.id} ("${p.task.title}"), dispatch ${p.dispatchId}.`,
@@ -62,6 +102,8 @@ export type StartOptions = {
   extraArgs: string[];
   noDefaultArgs: boolean;
   timeoutMs: number;
+  model?: string;
+  thinking?: string;
   /** `new`: create a git worktree for this worker; a path: use that existing checkout. */
   worktree?: string;
   /** For `--worktree new`: the commit to branch from (default HEAD at cwd) and the branch name (default pack/<run>/<worker>). */
@@ -158,10 +200,14 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     throw err;
   }
 
+  const extraArgs = [...o.extraArgs, ...modelArgs(o.kind, o.model, o.thinking)];
+  const asked = modelFromArgs(o.kind, extraArgs);
   const worker: Worker = {
     name: o.name,
     run_id: o.run.id,
     kind: o.kind,
+    model: asked.model,
+    thinking: asked.thinking,
     pane_id: pane.pane_id,
     cwd,
     task_id: task.id,
@@ -187,7 +233,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     t.updated_at = now();
   });
 
-  const args = [...(o.noDefaultArgs ? [] : defaultAgentArgs(o.kind)), ...o.extraArgs];
+  const args = [...(o.noDefaultArgs ? [] : defaultAgentArgs(o.kind)), ...extraArgs];
   let warning: string | undefined;
   try {
     await startWhenShellReady({ name: o.name, kind: o.kind, pane_id: pane.pane_id, args, timeout_ms: o.timeoutMs });
@@ -503,6 +549,8 @@ export const taskSummary = (t: Task) => ({ id: t.id, title: t.title, status: t.s
 export const workerSummary = (w: Worker, state: State) => ({
   name: w.name,
   kind: w.kind,
+  model: w.model ?? null,
+  thinking: w.thinking ?? null,
   pane_id: w.pane_id,
   tab_id: w.tab_id ?? null,
   cwd: w.cwd,

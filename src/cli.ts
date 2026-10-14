@@ -5,7 +5,7 @@
 //   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 //   pack-leader status [--json] [--all]
 //   pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
-//   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind K] [--cwd D] [--placement tab|split]
+//   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind K] [--model M] [--thinking L] [--cwd D] [--placement tab|split]
 //                            [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
 //   pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
 //   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
@@ -21,7 +21,7 @@
 // Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
-import { agentFocus, agentRead, getPane, notify, paneClose, paneFocus } from "./herdr.ts";
+import { agentFocus, agentRead, getPane, labelPane, notify, paneClose, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
 import { ack, ask, check, checkTypes, done, heartbeat, herdrWarning, inbox, note, reply, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
@@ -100,6 +100,7 @@ async function main(): Promise<void> {
           return run;
         });
         log({ event: "run.created", run: run.id, pane: h.paneId });
+        if (h.paneId) await labelPane(h.paneId, "leader");
         let sidebar: string | null = null;
         if (!has(args, "no-sidebar") && h.paneId) {
           sidebar = await openSidebar(h.paneId, has(args, "left")).catch(() => null);
@@ -222,13 +223,15 @@ async function main(): Promise<void> {
           targetPane: str(args, "target-pane"),
           ratio: str(args, "ratio") ? num(args, "ratio", 0.5) : undefined,
           extraArgs: args.rest,
+          model: str(args, "model"),
+          thinking: str(args, "thinking"),
           noDefaultArgs: has(args, "no-default-args"),
           timeoutMs: num(args, "timeout", 45_000),
           worktree: str(args, "worktree"),
           base: str(args, "base"),
           branch: str(args, "branch"),
         });
-        out({ worker: { name: r.worker.name, kind: r.worker.kind, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd, worktree: r.worker.worktree ?? null }, task: taskSummary(r.task), ...(r.warning ? { warning: r.warning } : {}) });
+        out({ worker: { name: r.worker.name, kind: r.worker.kind, model: r.worker.model ?? null, thinking: r.worker.thinking ?? null, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd, worktree: r.worker.worktree ?? null }, task: taskSummary(r.task), ...(r.warning ? { warning: r.warning } : {}) });
         if (r.warning) process.exitCode = 1;
         return;
       }
@@ -566,7 +569,7 @@ Orchestrator (the agent you talk to)
   pack-leader task create --spec "..." [--title T] [--depends-on a,b]
   pack-leader task list | show ID | update ID --status S
  Workers
-  pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--cwd D]
+  pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--model M] [--thinking L] [--cwd D]
                     [--placement tab|split] [--direction right|down]
                     [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
                                                 hidden tab by default; split puts it next to you. --worktree new: its own
@@ -593,7 +596,7 @@ Worker (inside a pane pack-leader started; IDs come from the environment)
   pack-leader send WORKER "text" [--now]               a follow-up to another worker of the same run
   pack-leader heartbeat "note" | pack-leader inbox
 Either
-  pack-leader skill [--install]                        the guide; or install it into Claude Code
+  pack-leader skill [--install]                        the guide; or install it into Claude Code, Codex and pi
   pack-leader sidebar                                  the pack, live (run by herdr in a pane)
   pack-leader help                                     this list
 Plugin root: ${pluginRoot}

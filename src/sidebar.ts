@@ -2,7 +2,7 @@
 // events and the state file; keys move between boxes, Enter jumps to a worker.
 import { watch, type FSWatcher } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
-import { bold, dim, fg, inverse, pad, screen, truncate, width } from "./ansi.ts";
+import { bold, dim, fg, inverse, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
 import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "./herdr.ts";
 import { ensureDir, stateDir, stateFile } from "./paths.ts";
 import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, unacked, type Worker } from "./state.ts";
@@ -16,9 +16,10 @@ const alarming = new Set(["blocked", "unverifiable", "stalled"]);
 
 function elapsed(iso: string): string {
   const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  const sec = String(s % 60).padStart(2, "0");
   if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${sec}s`;
+  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m${sec}s`;
 }
 
 /** The message a worker's box shows: the last thing it said (heartbeat, note, done, ask), or the last reply to it. */
@@ -58,7 +59,7 @@ function wrap(s: string, w: number, max: number): string[] {
  */
 export function boxLines(w: Worker, t: Task | null, last: Message | null, st: string, cols: number, selected = false): string[] {
   const inner = Math.max(1, cols - 4);
-  const agent = `${glyph[st] ?? "?"} ${bold(w.name)} ${dim(w.kind)}`;
+  const agent = [glyph[st] ?? "?", bold(w.name), dim(w.kind), w.model ? dim(w.model) : "", w.thinking ? dim(w.thinking) : ""].filter(Boolean).join(" ");
   const runtime = `${dim("runtime")} ${elapsed(w.started_at)} ${dim("·")} ${alarming.has(st) ? fg.red(word[st]!) : word[st] ?? st}`;
   const objective = t ? `${t.status === "dispatched" ? "" : dim(t.status + ": ")}${t.title}` : dim("no task");
   const note: string[] = [];
@@ -116,7 +117,7 @@ export async function runSidebar(): Promise<void> {
     for (const run of runs) {
       const box = unacked(state, run.id).length;
       if (lines.length) lines.push("");
-      lines.push(`${dim("goal")} ${truncate(run.objective, cols - 5)}`);
+      for (const [i, l] of wrapAll(run.objective, Math.max(8, cols - 5)).entries()) lines.push(i ? `     ${l}` : `${dim("goal")} ${l}`);
       if (box) lines.push(fg.yellow(`  ${box} unread for the orchestrator`));
       const ws = runWorkers(state, run.id);
       if (!ws.length) lines.push(dim("  no workers yet"));
@@ -133,7 +134,7 @@ export async function runSidebar(): Promise<void> {
       for (const l of preview) lines.push(truncate(l, cols));
     }
     if (message) lines.push("", fg.yellow(truncate(message, cols)));
-    const footer = [(connected ? "" : fg.red("offline · ")) + (help ? dim("j/k move · enter open worker · o back · r peek · R refresh · q quit") : dim("enter opens a worker · ? help"))];
+    const footer = [(connected ? "" : fg.red("offline · ")) + (help ? dim("j/k move · enter open worker · o back · r peek · R refresh · q quit") : "")];
 
     const rowsAvail = out.rows || 24;
     const body = lines.slice(0, Math.max(0, rowsAvail - footer.length - 1));
@@ -193,8 +194,10 @@ export async function runSidebar(): Promise<void> {
     schedule();
   }, 5000);
 
+  const clock = setInterval(schedule, 1000);
   const quit = () => {
     clearInterval(ticker);
+    clearInterval(clock);
     stop();
     watcher?.close();
     out.write(screen.showCursor + screen.main);
