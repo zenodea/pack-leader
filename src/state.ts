@@ -115,6 +115,8 @@ export type Message = {
   acked: boolean;
   /** A followup queued because the worker was busy; delivered by prompt later. */
   delivered?: boolean;
+  /** When sync re-nudged the orchestrator about it (once). */
+  nudged_at?: string;
 };
 
 /**

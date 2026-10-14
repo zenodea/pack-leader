@@ -164,8 +164,13 @@ unreachable, a worker's state shows as `?` rather than `gone`.
 - herdr's `tab.create` (or `pane.split` with `--placement split`) with
   `PACK_*` variables in the environment, then `agent.start` and `agent.prompt`,
   start a worker; nothing is forked inside the orchestrator.
-- State is one JSON file under `~/.local/state/herdr/plugins/pack-leader/`, written
-  atomically under a lock; every `pack-leader` command is a short-lived process.
+- State is one JSON file under `~/.local/state/herdr/plugins/pack-leader/`
+  (`$HERDR_PLUGIN_STATE_DIR` wins when set; if both hold a state.json, a
+  `state.dir_divergent` event is logged), written atomically (fsync + rename)
+  under a lock that records its holder's pid, so a crashed command's lock is
+  swept at once; every `pack-leader` command is a short-lived process. A
+  worker's pane gets `HERDR_PLUGIN_STATE_DIR`, so it uses the orchestrator's
+  state file. `events.jsonl` rotates to `events.jsonl.1` at 2 MB.
 - `pack-leader check --wait` subscribes to herdr's events and reconciles each worker's
   live state: a worker that goes idle, blocked or away without `pack-leader done`
   becomes an `attention` message the orchestrator must acknowledge.

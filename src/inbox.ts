@@ -64,8 +64,6 @@ export async function nudgeOrchestrator(run: Run, text: string): Promise<boolean
   }
 }
 
-/** A message the orchestrator was re-nudged about (sync, R11). `nudged_at` is optional, so older state files load. */
-type Nudged = Message & { nudged_at?: string };
 
 /** Unread done/ask/note older than this, with the orchestrator idle, earns one more nudge. PACK_RENUDGE_MS=0 disables. */
 export const renudgeMs = () => envMs("PACK_RENUDGE_MS", 60_000);
@@ -666,7 +664,7 @@ export async function sync(): Promise<Message[]> {
       const pane = r.orchestrator.pane_id;
       const o = pane ? byPane.get(pane) : undefined;
       if (!pane || limit <= 0 || !o || (o.agent_status !== "idle" && o.agent_status !== "done")) continue;
-      const stale = (state.messages as Nudged[]).filter((m) => m.run_id === r.id && m.to === "orchestrator" && !m.acked && RENUDGE_TYPES.includes(m.type) && !m.nudged_at && Date.now() - Date.parse(m.ts) > limit);
+      const stale = state.messages.filter((m) => m.run_id === r.id && m.to === "orchestrator" && !m.acked && RENUDGE_TYPES.includes(m.type) && !m.nudged_at && Date.now() - Date.parse(m.ts) > limit);
       if (!stale.length) continue;
       for (const m of stale) m.nudged_at = now();
       const oldest = stale[0]!;

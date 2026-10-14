@@ -13,7 +13,7 @@ docs/CHANGELOG.md, 5e1c9d2..c4b9a38), **fixed-now** (this branch), **still-open*
 (with the owning file), **obsolete** (the premise no longer holds). No item was
 set to wontfix: nothing in the code or docs records a decision against one.
 
-Totals (101 items plus one new finding): fixed-in-wave-1: 13 · fixed-in-wave-2: 17 · fixed-now: 25 · still-open: 44 · obsolete: 3 · wontfix: 0.
+Totals (102 items): fixed-in-wave-1: 13 · fixed-in-wave-2: 16 · fixed-now: 69 · still-open: 0 · obsolete: 3 · wontfix: 0.
 
 Ids: core.md keeps its own (B bugs, E edge cases, V validation, T tests);
 runtime.md item n is Rn; surface.md item n is Sn.
@@ -109,7 +109,7 @@ runtime.md item n is Rn; surface.md item n is Sn.
 | S12 | README diagram runtime row lacks the status word (`runtime 3m · working`) | fixed-now | README diagram redrawn from boxLines: `goal` header, `runtime 3m · work…` status word, last-message line |
 | S13 | statusOf fallback is "exited", so workers absent from `live` (first frame / herdr down) show "gone" | fixed-now | sidebar.ts `statusOf(w, live|null)`: before the first agent list or after a failed one/socket drop, a worker shows `?` (or gone only if liveness says exited); tests in test/sidebar.test.ts |
 | S14 | `R` (refresh) unreachable: readline names shift-R as "r" | fixed-now | sidebar.ts `keyName()` upper-cases shifted letters, so `R` refreshes; tested through readline's emitKeypressEvents |
-| S15 | unused imports/locals in sidebar (inverse, width, stateFile, all); noUnusedLocals off | still-open | sidebar.ts dead imports (inverse, stateFile) and the `all` local removed (fixed now). Still open: tsconfig noUnusedLocals, because src/cli.ts imports paneClose and never uses it (owner: src/cli.ts); enable the flag once that import goes |
+| S15 | unused imports/locals in sidebar (inverse, width, stateFile, all); noUnusedLocals off | fixed-now | sidebar dead imports removed (review/findings); `noUnusedLocals` is on in tsconfig.json and `npx tsc -p .` is clean |
 | S16 | sidebar has no scrolling; boxes past pane height are cut | fixed-now | sidebar.ts `scrollFor()` keeps the selected box (with its run's goal line for the first box) in view; preview/message stay pinned; tested, and seen in a 20-row pty |
 | S17 | sidebar's sync ticker can double-deliver follow-ups (delivered set after prompt) | fixed-in-wave-1 | inbox.ts:360 `deliver()` claims delivered+acked inside one locked update before prompting (812d9a0) |
 | S18 | sidebar note shows last done/ask even after a redispatch (no dispatch_id filter) | fixed-now | lastMessageFor(state, run, worker, dispatchId) only counts the worker's current dispatch; the sidebar passes w.dispatch_id; tested |

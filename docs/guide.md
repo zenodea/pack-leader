@@ -176,6 +176,11 @@ Workers have two non-blocking channels besides `ask`:
   of the same run, prefixed `[pack-leader follow-up from worker <sender>]`. A
   worker cannot send to itself, to another run, or to a group address.
 
+`blocked` is raised even after a worker reported (for example a permission
+prompt while it handles a follow-up). An orchestrator that sits idle with unread
+reports, questions or notes older than a minute is nudged once more
+(`PACK_RENUDGE_MS`).
+
 ## Task-spec contract
 
 Every spec must be self-contained. Name:
@@ -207,8 +212,12 @@ deleted. `worker list`, `worker show` and `status` show each worker's worktree.
 After an accepted `done` report, do exactly one:
 
 1. Reuse the worker for the next task: `pack-leader worker prompt <name> --spec "..."`.
-   If `worker prompt` prints a `warning` (it exits 1), the dispatch is recorded but the worker may
-   not have received it: read its screen, then `pack-leader worker resend <name>`.
+   It waits up to 30 s for the worker to be idle; if it stays busy, nothing is
+   dispatched. `--task` must have its dependencies met. If the prompt does not go
+   in, the dispatch is rolled back (the task and the worker are as before) and the
+   command fails: run it again. If it prints a `warning` instead (it exits 1), the
+   dispatch is recorded but the worker may not have received it: read its screen,
+   then `pack-leader worker resend <name>`.
 2. Record user-requested retention: `pack-leader worker retain <name>`.
 3. Clean up: `pack-leader worker release <name>`.
 
@@ -218,7 +227,8 @@ and prints `closed_pane`, `closed_tab` (a hidden worker's whole tab goes),
 `archive_path` (or `archive_error`; the release completes either way) and, for a
 worker in a worktree, `worktree: {path, branch, kept, removed}`.
 If herdr fails to close the tab or pane, the release still completes and adds `close_error`
-naming what may still be open. To interrupt a
+naming what may still be open. Followups and replies the worker never received
+are dropped with it (the same on `run close`). To interrupt a
 worker mid-turn use `pack-leader worker stop <name>`, inspect it, and decide.
 When the run is finished, `pack-leader run close --release` releases what is left.
 
@@ -272,8 +282,10 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
 1. Do only the current task, in the given directory. Do not start or steer
    other agents.
 2. Ask the orchestrator blocking questions with `pack-leader ask "<question>"`. It
-   waits for the answer; after a timeout, `pack-leader ask --id <id>` keeps waiting.
-   Never stop on a question the orchestrator cannot see. When the answer is
+   waits for the answer; after a timeout, `pack-leader ask --id <id>` keeps waiting
+   (only your own ask; an id that is not yours fails at once, and if you already
+   collected its answer the error repeats it; if you are released while waiting,
+   `ask` stops). Never stop on a question the orchestrator cannot see. When the answer is
    one of a few choices, offer them: `pack-leader ask "<question>" --options "a,b,c"`.
    The result's `answer` is the chosen option and `option_index` its position
    (null when the orchestrator answered outside them with `--free`; then read
@@ -332,7 +344,9 @@ pack-leader skill [--install] | sidebar | help
 `pack-leader help` prints the same commands and flags, with a note on each. Flags are not checked: a misspelled or
 unknown flag is silently ignored, so copy flags from this list rather than
 guessing. A flag value that itself starts with `--` must be written
-`--flag=value` (`--body=--no`), or it is read as the next flag.
+`--flag=value` (`--spec=--x`), or it is read as the next flag. `--body` and
+`--summary` are free text and take the next word whatever it is
+(`reply m5 --body "--no"`).
 
 What the less obvious flags do:
 
