@@ -36,11 +36,15 @@ no state the user can see in the sidebar.
   dispatch is one authoritative attempt at a task by one worker.
 - Task state changes only through `pack-leader done` (from the worker), or through
   `pack-leader task update` and `pack-leader worker release --force` (from the orchestrator).
+  `task update` refuses a dispatched task, and a succeeded one unless `--force`;
+  setting a task back to `pending` clears its worker, dispatch and outcome.
   A pane title, a worker's screen, or an idle badge proves nothing by itself.
 - Workers get their IDs from the pane environment; the orchestrator never
-  needs to copy them. A redispatch in an existing session carries new IDs in
-  its preamble, and the worker passes them as `--task` and `--dispatch`.
-- All commands print JSON. Read IDs from the output; do not predict them.
+  needs to copy them. A redispatch in an existing session says in its preamble's second line that the pane environment
+  names the previous dispatch, and gives the `--task` and `--dispatch` flags to pass instead.
+- Commands print JSON (except `skill`, `help`, `dispatch show --preamble`, `status` on a terminal,
+  and `worker read` of a live worker, which prints its screen as text). Read IDs from the output; do
+  not predict them.
 - herdr commands remain available (`herdr agent read`, `herdr pane ...`); use
   them to inspect, not to bypass Pack Leader's lifecycle.
 - Never close panes you did not create. `pack-leader worker release` closes only the
@@ -88,7 +92,8 @@ pack-leader check --ack m7 --wait --timeout 540000
 
 Use `pack-leader task create` with `--depends-on` for planned fan-out with ordering,
 then `pack-leader worker start <name> --task <id>` when `pack-leader task list` shows the
-task ready. Prefer parallel waves over chains deeper than three steps.
+task ready. A dependency that is already `failed` or `blocked` is accepted with a
+`warning`: the new task waits until it succeeds. Prefer parallel waves over chains deeper than three steps.
 
 Keep waiting until every dispatched task has settled. Do not stop, release, or
 start a duplicate worker without a `done` report or positive proof the agent
@@ -123,7 +128,9 @@ Each row also shows the worker's `worktree`, when it has one.
 `pack-leader check` returns the oldest unacked message for you; `--ack ID[,ID]`
 acknowledges, and `--types` filters by `done`, `ask`, `attention`, `note` (the
 default is all four; any other value is an error, raised before anything is
-acked).
+acked). An `--ack` that matches nothing adds `acked: 0` and `ack_warning` to the same result.
+A bare `--ack` with no ids is an error; ids that are no message of the run are
+listed in `ack_unknown`.
 
 | `type`      | Meaning                                                   | Your move                                                                                |
 | ----------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -146,6 +153,9 @@ straight into its prompt when it is ready for input (or at once with `--now`),
 otherwise queued for its next `pack-leader inbox` checkpoint. The address is a
 worker name or a group, expanded when you send; each recipient gets its own
 follow-up, and the result lists every recipient with its `delivered` flag.
+A recipient released while a group send was going out is listed with an `error` and nothing is
+sent to it; the others still get theirs. A worker that has not yet received its dispatch prompt
+(still starting, or its prompt failed) gets followups only afterwards, even with `--now`.
 
 | Address    | Recipients (in this run)                                  |
 | ---------- | --------------------------------------------------------- |
@@ -197,6 +207,8 @@ deleted. `worker list`, `worker show` and `status` show each worker's worktree.
 After an accepted `done` report, do exactly one:
 
 1. Reuse the worker for the next task: `pack-leader worker prompt <name> --spec "..."`.
+   If `worker prompt` prints a `warning` (it exits 1), the dispatch is recorded but the worker may
+   not have received it: read its screen, then `pack-leader worker resend <name>`.
 2. Record user-requested retention: `pack-leader worker retain <name>`.
 3. Clean up: `pack-leader worker release <name>`.
 
@@ -204,7 +216,9 @@ Release is post-settlement cleanup, not cancellation. It saves the worker's
 screen to the state dir first, then closes the tab or pane Pack Leader created,
 and prints `closed_pane`, `closed_tab` (a hidden worker's whole tab goes),
 `archive_path` (or `archive_error`; the release completes either way) and, for a
-worker in a worktree, `worktree: {path, branch, kept, removed}`. To interrupt a
+worker in a worktree, `worktree: {path, branch, kept, removed}`.
+If herdr fails to close the tab or pane, the release still completes and adds `close_error`
+naming what may still be open. To interrupt a
 worker mid-turn use `pack-leader worker stop <name>`, inspect it, and decide.
 When the run is finished, `pack-leader run close --release` releases what is left.
 
@@ -244,7 +258,8 @@ and their screen archives; `--keep N` changes the 5, `--older-than 2d` (units `s
 deletes only runs closed longer ago than that (all of them unless `--keep` is
 also given), `--all` deletes every closed run, and `--dry-run` prints what
 would go (it touches neither the state nor the archives). Active runs are
-never pruned, and a worktree on disk is never deleted by pruning. `pack-leader status` counts closed runs;
+never pruned, nor is a run closed less than an hour ago whose workers a `run close` is still releasing; it is
+listed under `skipped` with the command to finish it (`pack-leader run close --run <id> --force`), and a worktree on disk is never deleted by pruning. `pack-leader status` counts closed runs;
 `status --all` lists them.
 
 Commands that name a task or worker (`task show`, `task update`, `worker show`,
@@ -275,7 +290,8 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
 5. Report exactly once, with an explicit outcome:
    `pack-leader done --outcome succeeded|failed --summary "<three sentences: what changed, how it was verified, what is left>" [--files-modified a,b] [--report-path <file>]`.
    Say `failed` when the acceptance check did not pass; never encode failure
-   only in prose.
+   only in prose. A relative `--report-path` is stored as an absolute path,
+   resolved against the directory you run `done` in.
 6. After `pack-leader done`, end your turn and wait. A new `[pack-leader dispatch]` prompt
    or a follow-up from the orchestrator starts new work; a direct instruction
    from the user takes precedence over waiting.
@@ -284,28 +300,32 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
 
 ```text
 # runs
-pack-leader run create --objective "..." [--no-sidebar] | show | list
+pack-leader run create --objective "..." [--no-sidebar] [--left] [--another] [--cwd D] | show | list
 pack-leader run close [--release] [--force]
 pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 pack-leader status [--json] [--all]
+pack-leader COMMAND ... [--run ID]
 # tasks
-pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
+pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S [--summary S] [--force]
 # workers
 pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--cwd D] [--placement tab|split]
-                         [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
-pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
+                         [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [--title T] [--target-pane P]
+                         [--ratio R] [--no-default-args] [--timeout MS] [-- agent args]
+pack-leader worker prompt NAME --spec "..." [--title T] | --task ID | resend NAME
 pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
 pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree]
 pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
 # messaging
 pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
 pack-leader reply ASK_ID --body "..." [--free]
-pack-leader send NAME|@all|@idle|@KIND "text" [--now]
+pack-leader send NAME|@all|@idle|@KIND "text" | --body "..." [--now]
 # worker side
 pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
-pack-leader ask "question" [--options a,b,c] [--timeout MS] | ask --id ID
-pack-leader note "text" | send WORKER "text" [--now] | heartbeat "note" | inbox
+pack-leader ask "question" | --body "..." [--options a,b,c] [--timeout MS] | ask --id ID
+pack-leader note "text" | --body "..." | send WORKER "text" | --body "..." [--now] | heartbeat "note" | --body "..." | inbox
+pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]
 # either
+pack-leader config [show] | pick | set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking]
 pack-leader skill [--install] | sidebar | help
 ```
 
@@ -314,16 +334,22 @@ unknown flag is silently ignored, so copy flags from this list rather than
 guessing. A flag value that itself starts with `--` must be written
 `--flag=value` (`--body=--no`), or it is read as the next flag.
 
-Less common flags, not in the list above:
+What the less obvious flags do:
 
-- Any orchestrator command: `--run ID` picks the run instead of the pane's own.
+- `COMMAND ... --run ID`: any orchestrator command acts on that run instead of
+  the pane's own (`PACK_RUN_ID` does the same).
 - `run create`: `--another` binds a second run to a pane that already has one;
-  `--left` opens the sidebar on the left.
+  `--left` opens the sidebar on the left; `--cwd D` must be an existing
+  directory and is stored as an absolute path.
+- `task update`: `--summary S` records an outcome summary; `--force` lets a
+  succeeded task change status (otherwise refused).
 - `worker start`: `--title T` (task title for `--spec`), `--target-pane P` and
   `--ratio R` (with `--placement split`), `--no-default-args` (no
   `--allowedTools` for the agent), `--timeout MS` (agent start, default 45000).
-- Worker side (`done`, `ask`, `heartbeat`, `note`, `inbox`): `--run`, `--worker`,
-  `--task`, `--dispatch` override the IDs from the environment; `ask`,
-  `heartbeat`, `note` and `send` also take the text as `--body "..."`.
+  A split without `--direction` goes right; `--direction` with `--placement tab`
+  is an error.
+- `WORKER-COMMAND` is `done`, `ask`, `heartbeat`, `note` or `inbox`: `--run`,
+  `--worker`, `--task`, `--dispatch` override the IDs from the environment;
+  `ask`, `heartbeat`, `note` and `send` also take the text as `--body "..."`.
 - Run by herdr, not by agents: `sidebar-open [--left] [--no-focus]` (the plugin
-  action) and `event pane.closed|pane.exited` (plugin events).
+  action) and `event pane.closed|pane.exited|tab.closed` (plugin events).

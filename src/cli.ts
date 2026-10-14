@@ -1,10 +1,10 @@
 // Pack Leader: an orchestrator agent and its pack of workers, on herdr.
 //
 // Orchestrator side (the agent you talk to):
-//   pack-leader run create --objective "..." [--no-sidebar] | show | list | close [--release] [--force]
+//   pack-leader run create --objective "..." [--no-sidebar] [--left] [--another] [--cwd D] | show | list | close [--release] [--force]
 //   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 //   pack-leader status [--json] [--all]
-//   pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S
+//   pack-leader task create --spec "..." [--title T] [--depends-on a,b] | list | show ID | update ID --status S [--summary S] [--force]
 //   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind K] [--model M] [--thinking L] [--cwd D] [--placement tab|split]
 //                            [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
 //   pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
@@ -23,26 +23,46 @@ import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { fg, bold, dim } from "./ansi.ts";
 import { agentFocus, agentRead, getPane, labelPane, notify, paneFocus } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 import { ack, ask, check, checkTypes, done, heartbeat, herdrWarning, inbox, note, reply, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
 import { herdrBin, pluginRoot } from "./paths.ts";
-import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Message, type Run, type State, unacked, update } from "./state.ts";
+import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, runMessages, runTasks, runWorkers, type Message, type Run, type State, type Task, type TaskStatus, unacked, update } from "./state.ts";
 import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
 import { closeRun, parseDuration, pruneRuns, removeArchives } from "./runs.ts";
 import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, taskSummary, workerSummary } from "./workers.ts";
 import { guide, installSkill } from "./skill.ts";
+import { configFile, defaultsFor, loadConfig, saveConfig } from "./config.ts";
+import { choose } from "./choose.ts";
 
 const out = (v: unknown) => process.stdout.write(JSON.stringify(v, null, 2) + "\n");
 
-/** Where this command runs: the pane's own context, or the one herdr hands a plugin action. */
-function here(): { paneId: string | null; workspaceId: string | null; tabId: string | null; cwd: string } {
+/**
+ * The workspace a herdr pane id belongs to: the part before the colon of `w5:p2`.
+ * Null for anything that is not one well-formed `workspace:pane` id. The one place
+ * that splits pane ids; src/workers.ts (tab placement) should use it too.
+ */
+export function workspaceOf(paneId: string | null | undefined): string | null {
+  const m = typeof paneId === "string" ? /^([A-Za-z0-9_-]+):[A-Za-z0-9_-]+$/.exec(paneId) : null;
+  return m ? m[1]! : null;
+}
+
+export type Here = { paneId: string | null; workspaceId: string | null; tabId: string | null; cwd: string };
+
+/**
+ * Where this command runs: the context herdr hands a plugin action (HERDR_PLUGIN_CONTEXT_JSON)
+ * wins over the pane's own env; malformed JSON counts as none. The workspace falls back to the pane id's.
+ */
+export function here(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): Here {
   let ctx: Record<string, unknown> = {};
   try {
-    ctx = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
+    const parsed = JSON.parse(env.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
+    if (parsed && typeof parsed === "object") ctx = parsed;
   } catch {}
   const s = (v: unknown) => (typeof v === "string" && v ? v : null);
-  const paneId = s(ctx.focused_pane_id) ?? s(process.env.HERDR_PANE_ID);
-  const workspaceId = s(ctx.workspace_id) ?? s(ctx.focused_workspace_id) ?? s(process.env.HERDR_WORKSPACE_ID) ?? (paneId?.includes(":") ? paneId.split(":")[0]! : null);
-  return { paneId, workspaceId, tabId: s(process.env.HERDR_TAB_ID), cwd: s(ctx.focused_pane_cwd) ?? s(ctx.workspace_cwd) ?? process.cwd() };
+  const paneId = s(ctx.focused_pane_id) ?? s(env.HERDR_PANE_ID);
+  const workspaceId = s(ctx.workspace_id) ?? s(ctx.focused_workspace_id) ?? s(env.HERDR_WORKSPACE_ID) ?? workspaceOf(paneId);
+  return { paneId, workspaceId, tabId: s(env.HERDR_TAB_ID), cwd: s(ctx.focused_pane_cwd) ?? s(ctx.workspace_cwd) ?? cwd };
 }
 
 /** The run a command means; read-only commands pass `allowClosed` so a closed run can still be looked at by id. */
@@ -92,21 +112,29 @@ async function main(): Promise<void> {
         const objective = str(args, "objective");
         if (!objective) throw new Error("pass --objective \"<what this run is for>\"");
         const h = here();
+        const cwd = runCwd(str(args, "cwd"), has(args, "cwd"), h.cwd);
         const run = await update((state) => {
           const existing = activeRuns(state).find((r) => r.orchestrator.pane_id === h.paneId && h.paneId);
           if (existing && !has(args, "another")) throw new Error(`this pane already orchestrates run ${existing.id}; close it or pass --another`);
-          const run: Run = { id: nextId(state, "r"), objective, status: "active", created_at: now(), orchestrator: { pane_id: h.paneId, workspace_id: h.workspaceId, tab_id: h.tabId, cwd: str(args, "cwd") ?? h.cwd } };
+          const run: Run = { id: nextId(state, "r"), objective, status: "active", created_at: now(), orchestrator: { pane_id: h.paneId, workspace_id: h.workspaceId, tab_id: h.tabId, cwd } };
           state.runs[run.id] = run;
           return run;
         });
-        log({ event: "run.created", run: run.id, pane: h.paneId });
-        if (h.paneId) await labelPane(h.paneId, "leader");
+        // The run is committed: whatever fails from here on is a warning next to it, never a lost run id.
         let sidebar: string | null = null;
-        if (!has(args, "no-sidebar") && h.paneId) {
-          sidebar = await openSidebar(h.paneId, has(args, "left")).catch(() => null);
-          if (sidebar) await update((s) => void (s.runs[run.id]!.sidebar_pane_id = sidebar));
+        let warning: string | undefined;
+        try {
+          log({ event: "run.created", run: run.id, pane: h.paneId });
+          if (h.paneId) await labelPane(h.paneId, "leader");
+          if (!has(args, "no-sidebar") && h.paneId) {
+            sidebar = await openSidebar(h.paneId, has(args, "left")).catch(() => null);
+            if (sidebar) await update((s) => void (s.runs[run.id]!.sidebar_pane_id = sidebar));
+          }
+        } catch (err) {
+          warning = `run ${run.id} was created, but ${sidebar ? `recording its sidebar pane ${sidebar} failed` : "a step after creating it failed"}: ${(err as Error).message}`;
+          sidebar = null;
         }
-        out({ run: { ...run, sidebar_pane_id: sidebar }, hint: `Workers start in hidden tabs of workspace ${h.workspaceId ?? "?"}; the sidebar ${sidebar ? `(pane ${sidebar})` : "was not opened"} shows them. PACK_RUN_ID=${run.id} selects this run explicitly.` });
+        out({ run: { ...run, sidebar_pane_id: sidebar }, hint: `Workers start in hidden tabs of workspace ${h.workspaceId ?? "?"}; the sidebar ${sidebar ? `(pane ${sidebar})` : "was not opened"} shows them. PACK_RUN_ID=${run.id} selects this run explicitly.`, ...(warning ? { warning } : {}) });
         return;
       }
       if (sub === "show") {
@@ -153,14 +181,16 @@ async function main(): Promise<void> {
         const spec = str(args, "spec");
         if (!spec) throw new Error("pass --spec \"<self-contained task spec>\"");
         const run = currentRun(args);
-        const task = await update((state) => {
+        const { task, stuck } = await update((state) => {
           const deps = list(args, "depends-on");
           for (const d of deps) if (!state.tasks[d] || state.tasks[d]!.run_id !== run.id) throw new Error(`no task ${d} in run ${run.id}`);
           const t = { id: nextId(state, "t"), run_id: run.id, title: str(args, "title") ?? spec.split("\n")[0]!.slice(0, 60), spec, status: "pending" as const, depends_on: deps, worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
           state.tasks[t.id] = t;
-          return t;
+          // A dependency that already failed or is blocked will not succeed by itself: say so now, not at start time.
+          const stuck = deps.filter((d) => state.tasks[d]!.status === "failed" || state.tasks[d]!.status === "blocked").map((d) => `${d} (${state.tasks[d]!.status})`);
+          return { task: t, stuck };
         });
-        out({ task: taskSummary(task) });
+        out({ task: taskSummary(task), ...(stuck.length ? { warning: `depends on ${stuck.join(", ")}; ${task.id} is not ready until ${stuck.length === 1 ? "it succeeds" : "they succeed"} (task update ID --status pending to retry one)` } : {}) });
         return;
       }
       if (sub === "list") {
@@ -179,16 +209,18 @@ async function main(): Promise<void> {
       }
       if (sub === "update") {
         const status = str(args, "status");
-        if (!id || !status) throw new Error("usage: pack-leader task update ID --status pending|blocked|failed|succeeded [--summary S]");
-        if (!["pending", "blocked", "failed", "succeeded"].includes(status)) throw new Error(`bad status ${status}`);
+        if (!id || !status) throw new Error("usage: pack-leader task update ID --status pending|blocked|failed|succeeded [--summary S] [--force]");
+        if (!isSettable(status)) throw new Error(`bad status ${status}`);
         const t = await update((state) => {
           const run = currentRun(args, state);
           const t = state.tasks[id];
           if (!t || t.run_id !== run.id) throw new Error(`no task ${id} in run ${run.id}`);
-          if (t.status === "dispatched") throw new Error(`task ${id} is dispatched to ${t.worker}; it settles through \`pack-leader done\` or \`pack-leader worker release --force\``);
-          t.status = status as any;
+          refuseTransition(t, status, has(args, "force"));
+          t.status = status;
           t.updated_at = now();
-          if (str(args, "summary")) t.outcome = { summary: str(args, "summary")!, files_modified: [], report_path: null };
+          // Back to pending is a fresh start: the last attempt's worker, dispatch and outcome no longer describe it.
+          if (status === "pending") Object.assign(t, { worker: null, dispatch_id: null, outcome: null });
+          else if (str(args, "summary")) t.outcome = { summary: str(args, "summary")!, files_modified: [], report_path: null };
           return t;
         });
         out({ task: taskSummary(t) });
@@ -208,11 +240,16 @@ async function main(): Promise<void> {
         if (direction !== "right" && direction !== "down") throw new Error("--direction must be right or down");
         const placement = str(args, "placement") ?? (has(args, "direction") ? "split" : "tab");
         if (placement !== "tab" && placement !== "split") throw new Error("--placement must be tab or split");
+        // A tab has no direction; asking for both is a mistake, not a preference to pick one of.
+        if (placement === "tab" && has(args, "direction")) throw new Error("--direction only applies to --placement split (a split without --direction goes right)");
         if (has(args, "worktree") && !str(args, "worktree")) throw new Error("--worktree takes new or a path");
+        const config = loadConfig();
+        const kind = str(args, "kind") ?? config.kind ?? DEFAULT_KIND;
+        const defaults = defaultsFor(config, kind);
         const r = await startWorker({
           run,
           name,
-          kind: str(args, "kind") ?? DEFAULT_KIND,
+          kind,
           spec: str(args, "spec"),
           title: str(args, "title"),
           taskId: str(args, "task"),
@@ -223,8 +260,8 @@ async function main(): Promise<void> {
           targetPane: str(args, "target-pane"),
           ratio: str(args, "ratio") ? num(args, "ratio", 0.5) : undefined,
           extraArgs: args.rest,
-          model: str(args, "model"),
-          thinking: str(args, "thinking"),
+          model: str(args, "model") ?? defaults.model ?? undefined,
+          thinking: str(args, "thinking") ?? defaults.thinking ?? undefined,
           noDefaultArgs: has(args, "no-default-args"),
           timeoutMs: num(args, "timeout", 45_000),
           worktree: str(args, "worktree"),
@@ -249,7 +286,7 @@ async function main(): Promise<void> {
         const state = load();
         const w = runWorker(args, name, state, true);
         const warning = herdrWarning(state.runs[w.run_id]);
-        out({ worker: workerSummary(w, state), task: w.task_id ? state.tasks[w.task_id] : null, messages: state.messages.filter((m) => m.from === name || m.to === name).slice(-10), ...(warning ? { warning } : {}) });
+        out({ worker: workerSummary(w, state), task: w.task_id ? state.tasks[w.task_id] : null, messages: state.messages.filter((m) => m.run_id === w.run_id && (m.from === name || m.to === name)).slice(-10), ...(warning ? { warning } : {}) });
         return;
       }
       if (sub === "read") {
@@ -343,9 +380,14 @@ async function main(): Promise<void> {
       const types = has(args, "types") ? checkTypes(list(args, "types")) : undefined;
       // One JSON document on stdout: an ack that matched nothing is said inside the result, not as a second object.
       let acked: Record<string, unknown> = {};
-      if (str(args, "ack")) {
-        const n = await ack(run, list(args, "ack"));
+      if (has(args, "ack")) {
+        const ids = list(args, "ack");
+        if (!ids.length) throw new Error("--ack takes message ids: --ack m1,m2");
+        const known = new Set(runMessages(load(), run.id).map((m) => m.id));
+        const unknown = ids.filter((id) => !known.has(id));
+        const n = await ack(run, ids);
         if (!n && !has(args, "wait")) acked = { acked: 0, ack_warning: "nothing to ack with those ids" };
+        if (unknown.length) acked = { ...acked, acked: n, ack_unknown: unknown, ack_warning: `no message ${unknown.join(", ")} in run ${run.id}` };
       }
       const r = await check(run, { wait: has(args, "wait"), timeoutMs: num(args, "timeout", 540_000), types });
       out({ ...acked, ...r });
@@ -401,7 +443,7 @@ async function main(): Promise<void> {
       const outcome = str(args, "outcome");
       const summary = str(args, "summary");
       if ((outcome !== "succeeded" && outcome !== "failed") || !summary) throw new Error("usage: pack-leader done --outcome succeeded|failed --summary \"...\" [--files-modified a,b] [--report-path P]");
-      const m = await done(ctx, { outcome, summary, files: list(args, "files-modified"), reportPath: str(args, "report-path") ?? null });
+      const m = await done(ctx, { outcome, summary, files: list(args, "files-modified"), reportPath: reportPath(str(args, "report-path")) });
       out({ reported: m.id, task_id: m.task_id, outcome, next: "End your turn and wait for the orchestrator." });
       return;
     }
@@ -441,6 +483,39 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "config": {
+      const [sub = "show"] = args.positional;
+      const config = loadConfig();
+      if (sub === "show") {
+        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds });
+        return;
+      }
+      if (sub === "set") {
+        const kind = str(args, "kind") ?? config.kind ?? DEFAULT_KIND;
+        const current = config.kinds[kind] ?? {};
+        const next = {
+          model: has(args, "clear-model") ? null : str(args, "model") ?? current.model ?? null,
+          thinking: has(args, "clear-thinking") ? null : str(args, "thinking") ?? current.thinking ?? null,
+        };
+        config.kinds[kind] = next;
+        if (has(args, "default") || has(args, "kind")) config.kind = kind;
+        saveConfig(config);
+        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, [kind]: next });
+        return;
+      }
+      if (sub === "pick") {
+        const picked = await choose();
+        if (!picked) {
+          process.stderr.write("cancelled\n");
+          return;
+        }
+        if (fromAction) await notify("Pack Leader", `workers: ${picked.kind}${picked.model ? ` · ${picked.model}` : ""}${picked.thinking ? ` · ${picked.thinking}` : ""}`);
+        out({ file: configFile, ...picked });
+        return;
+      }
+      throw new Error(`unknown: pack-leader config ${sub}`);
+    }
+
     // ---- herdr-driven --------------------------------------------------------
     case "sidebar": {
       const { runSidebar } = await import("./sidebar.ts");
@@ -455,18 +530,61 @@ async function main(): Promise<void> {
       return;
     }
     case "event": {
-      // pane.closed / pane.exited: a worker's pane went away.
-      let data: { pane_id?: string } = {};
+      // pane.closed / pane.exited / tab.closed: a worker's pane or hidden tab went away (tab.closed carries no pane_id).
+      let data: { pane_id?: string; tab_id?: string } = {};
       try {
         const e = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON ?? "{}");
         data = e.data ?? e;
       } catch {}
-      if (data.pane_id) await sync().catch(() => {});
+      if (data.pane_id || data.tab_id) await sync().catch(() => {});
       return;
     }
     default:
       throw new Error(`unknown command: ${command}\n${usage()}`);
   }
+}
+
+type Settable = "pending" | "blocked" | "failed" | "succeeded";
+const isSettable = (s: string): s is Settable => ["pending", "blocked", "failed", "succeeded"].includes(s);
+
+/**
+ * What `task update` may do: a dispatched task settles only through `done` or a forced release,
+ * and a succeeded one is final unless `--force`. Setting the same status again (a new summary) is fine.
+ */
+const TRANSITIONS: Record<TaskStatus, readonly Settable[]> = {
+  pending: ["blocked", "failed", "succeeded"],
+  blocked: ["pending", "failed", "succeeded"],
+  failed: ["pending", "blocked", "succeeded"],
+  succeeded: [],
+  dispatched: [],
+};
+
+export function refuseTransition(t: Pick<Task, "id" | "status" | "worker">, to: Settable, force: boolean): void {
+  if (t.status === "dispatched") throw new Error(`task ${t.id} is dispatched to ${t.worker}; it settles through \`pack-leader done\` or \`pack-leader worker release --force\``);
+  if (t.status === to || TRANSITIONS[t.status].includes(to)) return;
+  if (t.status === "succeeded" && force) return;
+  throw new Error(`task ${t.id} is ${t.status}; ${t.status === "succeeded" ? `pass --force to set it ${to}` : `it cannot become ${to}`}`);
+}
+
+/** `done --report-path` as an absolute path: a relative one means the worker's own cwd, which the orchestrator does not share. */
+export function reportPath(p: string | undefined, base = process.cwd()): string | null {
+  return p ? resolve(base, p) : null;
+}
+
+/**
+ * The run's working directory: `--cwd` made absolute (against this process's cwd) and checked
+ * to be an existing directory; without the flag, the pane's own.
+ */
+export function runCwd(flag: string | undefined, given: boolean, fallback: string, base = process.cwd()): string {
+  if (!given) return fallback;
+  if (!flag) throw new Error("--cwd takes a directory");
+  const dir = resolve(base, flag);
+  let isDir = false;
+  try {
+    isDir = statSync(dir).isDirectory();
+  } catch {}
+  if (!isDir) throw new Error(`--cwd ${dir} is not an existing directory`);
+  return dir;
 }
 
 /**
@@ -489,7 +607,7 @@ async function openSidebar(target: string, onLeft = false, focus = false): Promi
     if (!r.sidebar_pane_id) continue;
     try {
       const p = await getPane(r.sidebar_pane_id);
-      if (p.workspace_id === target.split(":")[0]) {
+      if (p.workspace_id === workspaceOf(target)) {
         if (focus) await paneFocus(r.sidebar_pane_id).catch(() => {});
         return r.sidebar_pane_id;
       }
@@ -559,23 +677,30 @@ function usage(): string {
 
 Orchestrator (the agent you talk to)
  Runs
-  pack-leader run create --objective "..." [--no-sidebar]   bind a run to this pane and open the sidebar
+  pack-leader run create --objective "..." [--no-sidebar] [--left] [--another] [--cwd D]
+                                                bind a run to this pane and open the sidebar (--left: on the left);
+                                                --another: a second run on this pane; --cwd: must be a directory
   pack-leader run show | list
   pack-leader run close [--release] [--force]          fail dispatched tasks, settle their dispatches, close the sidebar;
                                                 --release releases (and archives) workers first, --force closes anyway
   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
                                                 delete closed runs, their records and screen archives (keeps 5)
   pack-leader status [--json] [--all]                active runs and a count of closed ones; --all lists those too
+  pack-leader COMMAND ... [--run ID]             any orchestrator command: that run, not the pane's own (or $PACK_RUN_ID)
  Tasks
   pack-leader task create --spec "..." [--title T] [--depends-on a,b]
-  pack-leader task list | show ID | update ID --status S
+  pack-leader task list | show ID | update ID --status S [--summary S] [--force]
+                                                back to pending clears worker, dispatch and outcome; succeeded is
+                                                final unless --force; a dispatched task settles only via done/release
  Workers
   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind ${DEFAULT_KIND}] [--model M] [--thinking L] [--cwd D]
                     [--placement tab|split] [--direction right|down]
-                    [--worktree new|PATH [--base REF] [--branch B]] [-- agent args]
-                                                hidden tab by default; split puts it next to you. --worktree new: its own
+                    [--worktree new|PATH [--base REF] [--branch B]] [--title T] [--target-pane P] [--ratio R]
+                    [--no-default-args] [--timeout MS] [-- agent args]
+                                                hidden tab by default; split puts it next to you, on the right
+                                                unless --direction (an error with --placement tab). --worktree new: its own
                                                 checkout at <repo>-wt/NAME (or $PACK_WORKTREE_DIR/NAME) on pack/RUN/NAME
-  pack-leader worker prompt NAME --spec "..." | --task ID       a new dispatch in the same session
+  pack-leader worker prompt NAME --spec "..." [--title T] | --task ID   a new dispatch in the same session
   pack-leader worker resend NAME                 send the current dispatch's text again (after a startup dialog)
   pack-leader worker list | show NAME            rows carry liveness, attention and next_action (argv to run)
   pack-leader worker read NAME [--lines N] [--dispatch ID]   its screen; after release, the archived one
@@ -589,14 +714,19 @@ Orchestrator (the agent you talk to)
   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
                                                 --wait: a JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
   pack-leader reply ASK_ID --body "..." [--free]     an ask with options takes one (or a unique prefix); --free for free text
-  pack-leader send NAME|@all|@idle|@KIND "text" [--now]   @all: dispatched workers; @idle: idle or done; @KIND: by kind
+  pack-leader send NAME|@all|@idle|@KIND "text" | --body "..." [--now]   @all: dispatched workers; @idle: idle or done; @KIND: by kind
 Worker (inside a pane pack-leader started; IDs come from the environment)
   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
-  pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
-  pack-leader note "text"                              non-blocking line for the orchestrator (blocker, finding, delay)
-  pack-leader send WORKER "text" [--now]               a follow-up to another worker of the same run
-  pack-leader heartbeat "note" | pack-leader inbox
+  pack-leader ask "question" | --body "..." [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
+  pack-leader note "text" | --body "..."               non-blocking line for the orchestrator (blocker, finding, delay)
+  pack-leader send WORKER "text" | --body "..." [--now]   a follow-up to another worker of the same run
+  pack-leader heartbeat "note" | --body "..." | pack-leader inbox
+  pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]
+                                                done/ask/note/heartbeat/inbox: override the IDs from the environment
 Either
+  pack-leader config [show]                            default harness and per-harness model and thinking level for new workers
+  pack-leader config pick                              choose them from searchable lists (needs a terminal)
+  pack-leader config set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking]
   pack-leader skill [--install]                        the guide; or install it into Claude Code, Codex and pi
   pack-leader sidebar                                  the pack, live (run by herdr in a pane)
   pack-leader help                                     this list
@@ -604,7 +734,10 @@ Plugin root: ${pluginRoot}
 `;
 }
 
-main().catch((err) => {
-  process.stderr.write(JSON.stringify({ error: (err as Error).message }) + "\n");
-  process.exit(1);
-});
+// Only as a command: tests (and later src/workers.ts, for workspaceOf) import this file.
+if (import.meta.main) {
+  main().catch((err) => {
+    process.stderr.write(JSON.stringify({ error: (err as Error).message }) + "\n");
+    process.exit(1);
+  });
+}

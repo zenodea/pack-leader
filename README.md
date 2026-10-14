@@ -93,7 +93,8 @@ pack-leader worker release api                # after its report
 Workers live in hidden tabs of the same workspace (one per worker, labelled
 `name`), so your view stays the orchestrator plus the sidebar. The sidebar
 opens on your right with `pack-leader run create` (`--left` for the other side);
-`--placement split` on `worker start` puts a worker next to you instead.
+`--placement split` on `worker start` puts a worker next to you instead (on the
+right unless `--direction down`). `pack-leader help` lists every command and flag.
 
 Workers that could step on each other get a git worktree each:
 `pack-leader worker start api --worktree new --spec "..."` checks out branch
@@ -123,7 +124,11 @@ text instead. The waiting `ask` prints `reply`, `answer` (the chosen option) and
 `pack-leader send` takes a worker name or a group address decided at send time
 (`@all` for every worker that still owes a report, `@idle` for those herdr shows
 idle or done, `@claude` and other kinds), one follow-up per recipient.
+A recipient released while a group send was going out is listed with an `error` and nothing is
+sent to it; the others still get theirs. A worker that has not yet received its dispatch prompt
+(still starting, or its prompt failed) gets followups only afterwards, even with `--now`.
 `pack-leader check --types` filters by `done`, `ask`, `attention` and `note`.
+An `--ack` that matches nothing adds `acked: 0` and `ack_warning` to the same result.
 
 ### Records and cleanup
 
@@ -132,12 +137,16 @@ Each dispatch is recorded with the exact preamble sent (`pack-leader dispatch li
 to `archive/<run>/<worker>-<dispatch>.txt` in the state dir first, so
 `pack-leader worker read <name>` keeps working after the tab is gone; the release
 prints `closed_pane`, `closed_tab`, `archive_path` and the worker's `worktree`.
+If herdr fails to close the tab or pane, the release still completes and adds `close_error`
+naming what may still be open.
 
 When the run is done, `pack-leader run close --release` releases (and archives)
 the workers, fails any task still dispatched and settles its dispatch, and
 closes the sidebar. Closed runs stay readable until `pack-leader run prune`
 deletes them with their records and archives (it keeps the 5 most recent;
-`--keep N`, `--older-than 2d`, `--all`, `--dry-run`).
+`--keep N`, `--older-than 2d`, `--all`, `--dry-run`). Active runs are never pruned,
+nor is a run closed less than an hour ago whose workers a `run close` is still releasing; it is
+listed under `skipped` with the command to finish it (`pack-leader run close --run <id> --force`).
 
 `pack-leader status` prints the run in the terminal (closed runs are counted;
 `--all` lists them); `pack-leader skill` prints the full guide the agents follow;

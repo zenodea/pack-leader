@@ -1,5 +1,5 @@
 # Pack Leader: an orchestrator agent and its pack. The agent you talk to starts worker
-# agents in sibling panes, hands each one a task, and waits for their reports;
+# agents in hidden tabs (or a split beside it), hands each one a task, and waits for their reports;
 # Pack Leader keeps the run state outside the agents so it survives context compaction.
 # The sidebar pane shows one box per worker. See the README.
 id = "pack-leader"
@@ -8,6 +8,12 @@ version = "0.1.0"
 min_herdr_version = "0.9.0"
 description = "An orchestrator agent, its pack of workers, and a sidebar that shows the pack"
 platforms = ["linux", "macos"]
+
+# Paths in action and event commands: herdr runs them with the plugin root as cwd, so
+# `src/cli.ts` is relative to this file (installed or `herdr plugin link`ed alike). The
+# pane entry below goes through `sh -c` with "$HERDR_PLUGIN_ROOT/src/cli.ts" so it does
+# not depend on the cwd herdr gives a pane. Keep new actions and events on the relative
+# form; if herdr ever runs them elsewhere, switch them to the pane entry's form.
 
 # prefix+<your key>: the pack, as a column next to the focused pane.
 [[actions]]
