@@ -47,3 +47,8 @@ command = ["node", "src/cli.ts", "event", "pane.closed"]
 [[events]]
 on = "pane.exited"
 command = ["node", "src/cli.ts", "event", "pane.exited"]
+
+# A hidden-tab worker's tab closing goes the same way (herdr sends tab.closed, not always pane.closed).
+[[events]]
+on = "tab.closed"
+command = ["node", "src/cli.ts", "event", "tab.closed"]

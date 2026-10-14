@@ -1,7 +1,7 @@
 // A run's end of life: closing it (workers, tasks, sidebar) and, later,
 // pruning closed runs and everything that belongs to them out of the state.
 import { existsSync, rmSync } from "node:fs";
-import { getPane, labelPane, paneClose } from "./herdr.ts";
+import { getPane, labelPane, logHerdrError, paneClose } from "./herdr.ts";
 import { activeRuns, log, now, runWorkers, type Run, type State, update } from "./state.ts";
 import { archiveDir, settleDispatch } from "./dispatch.ts";
 import { type ReleaseResult, releaseWorker } from "./workers.ts";
@@ -137,6 +137,8 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
     }
     // Nothing of a closed run is still in flight: any dispatch left open is failed with it.
     for (const d of Object.values(state.dispatches ?? {})) if (d.run_id === runId) settleDispatch(state, d.id, "failed");
+    // Nor still owed to a worker: followups and replies nobody collected are dropped with the run.
+    for (const m of state.messages) if (m.run_id === runId && !m.acked && (m.type === "followup" || m.type === "reply")) m.acked = true;
     run.status = "closed";
     run.closed_at = now();
     // sync() only clears this on active runs; a closed run keeps no stale herdr warning.
@@ -149,7 +151,10 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
     for (const w of workers) {
       try {
         released.push({ worker: w.name, ...(await releaseWorker(run, w.name, { force: true })) });
-      } catch {}
+      } catch (err) {
+        // The worker is forgotten below either way; its pane, if any, shows up in `forgotten`.
+        log({ event: "worker.release_failed", run: runId, worker: w.name, error: (err as Error).message });
+      }
     }
   }
 
@@ -173,7 +178,9 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
       await getPane(sidebar);
       await paneClose(sidebar);
       closed_sidebar = sidebar;
-    } catch {}
+    } catch (err) {
+      logHerdrError("sidebar.close", err, { run: runId, pane: sidebar });
+    }
   }
   if (run.orchestrator.pane_id) await labelPane(run.orchestrator.pane_id, null).catch(() => {});
   log({ event: "run.closed", run: runId, released: released.map((r) => r.worker), forgotten: forgotten.map((f) => f.worker), failed_tasks: failed, closed_sidebar });

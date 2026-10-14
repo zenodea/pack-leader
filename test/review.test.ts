@@ -4,7 +4,7 @@
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,12 +19,15 @@ process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 delete process.env.PACK_WORKTREE_DIR;
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { inbox, sendTo, sync } = await import("../src/inbox.ts");
+const { emptyState, load, save, update } = await import("../src/state.ts");
+const { ack, ask, ASK_TICK_MS, check, done, inbox, markHerdrUnreachable, reply, send, sendTo, sync } = await import("../src/inbox.ts");
+const { getAgent, getPane, herdr, labelPane, subscribeBackoff } = await import("../src/herdr.ts");
 const { preamble, redispatch, releaseWorker, startWorker } = await import("../src/workers.ts");
-const { pruneRuns } = await import("../src/runs.ts");
+const { closeRun, pruneRuns } = await import("../src/runs.ts");
 
-type Handler = (method: string, params: any) => Promise<any> | any;
+/** A handler's answer that is written as is (`""`: no answer at all), for transport tests. */
+type Raw = { __raw: string };
+type Handler = (method: string, params: any, req?: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };
 let server: Server;
 const calls: { method: string; params: any }[] = [];
@@ -39,7 +42,11 @@ before(async () => {
       const req = JSON.parse(buf.slice(0, nl));
       calls.push({ method: req.method, params: req.params });
       try {
-        const result = await handler(req.method, req.params);
+        const result = await handler(req.method, req.params, req);
+        if (result && typeof result === "object" && "__raw" in result) {
+          if ((result as Raw).__raw) conn.write((result as Raw).__raw + "\n");
+          return;
+        }
         conn.write(JSON.stringify({ id: req.id, result }) + "\n");
       } catch (err: any) {
         conn.write(JSON.stringify({ id: req.id, error: { code: err.code ?? "fail", message: err.message } }) + "\n");
@@ -86,6 +93,7 @@ const startHerdr: Handler = (method, params) => {
     case "tab.close":
       return {};
     case "agent.get": throw herdrError("agent_not_found", "no agent");
+    case "agent.wait": return { agent: { agent_status: "idle" } };
     case "pane.get": return { pane: { pane_id: params.pane_id } };
     case "agent.read": return { read: { text: "screen" } };
     default: throw new Error(`unexpected ${method}`);
@@ -149,6 +157,7 @@ test("F2: a redispatched worker that finishes quickly without reporting raises a
       // herdr flips the agent to working the moment the prompt lands.
       case "agent.get": return { agent: { pane_id: "w1:p-bob", agent_status: prompted ? "working" : "idle", state_change_seq: prompted ? 6 : 5 } };
       case "agent.prompt": prompted = true; return {};
+      case "agent.wait": return { agent: { agent_status: "idle" } };
       case "pane.report_metadata": return {};
       case "agent.list": return { agents: [{ pane_id: "w1:p-bob", agent_status: "idle", state_change_seq: 7 }] };
       case "pane.list": return { panes: [{ pane_id: "w1:p-bob" }] };
@@ -163,7 +172,9 @@ test("F2: a redispatched worker that finishes quickly without reporting raises a
 
 // ---- F3: a redispatch whose prompt fails says how to recover -------------------------------------
 
-test("F3: a redispatch whose prompt fails returns a warning naming resend, and the dispatch stays resendable", async () => {
+// Superseded by R19 (docs/review/findings-status.md): a prompt that did not go in is rolled back.
+test("F3/R19: a redispatch whose prompt fails is rolled back: --spec task removed, worker IDs restored, error names worker prompt", async () => {
+  process.env.PACK_PROMPT_RETRY_MS = "0";
   const s = base();
   s.tasks.t0 = task("t0", "succeeded", "bob", "d0");
   s.workers.bob = worker("bob", { task_id: "t0", dispatch_id: "d0" });
@@ -171,15 +182,17 @@ test("F3: a redispatch whose prompt fails returns a warning naming resend, and t
   handler = (method) => {
     if (method === "agent.prompt") throw herdrError("timeout", "herdr agent.prompt timed out");
     if (method === "agent.get") return { agent: { agent_status: "idle", state_change_seq: 1 } };
-    if (method === "pane.report_metadata") return {};
+    if (method === "agent.wait") return { agent: { agent_status: "idle" } };
     throw new Error(`unexpected ${method}`);
   };
-  const r = await redispatch(load().runs.r1!, "bob", undefined, "next thing");
-  assert.match(r.warning ?? "", /pack-leader worker resend bob/);
+  await assert.rejects(redispatch(load().runs.r1!, "bob", undefined, "next thing"), /rolled back.*not kept.*pack-leader worker prompt bob/);
+  assert.equal(prompts().length, 5, "promptWithRetry tried five times (a timeout that did not land is retried)");
   const after = load();
-  assert.equal(after.tasks[r.task.id]!.status, "dispatched");
-  assert.equal(after.workers.bob!.dispatch_id, r.dispatch_id);
-  assert.equal(after.workers.bob!.awaiting_prompt, true);
+  assert.deepEqual(Object.keys(after.tasks), ["t0"]);
+  assert.equal(after.workers.bob!.task_id, "t0");
+  assert.equal(after.workers.bob!.dispatch_id, "d0");
+  assert.equal(after.workers.bob!.awaiting_prompt, false);
+  assert.ok(Object.values(after.dispatches!).every((d) => d.outcome === "failed" && d.settled_at));
 });
 
 // ---- F4: a followup never overtakes the worker's first prompt ------------------------------------
@@ -408,6 +421,7 @@ test("F13: a redispatch preamble puts the --task/--dispatch rule up front and dr
   save(s);
   handler = (method) => {
     if (method === "agent.get") return { agent: { agent_status: "idle", state_change_seq: 1 } };
+    if (method === "agent.wait") return { agent: { agent_status: "idle" } };
     if (method === "agent.prompt" || method === "pane.report_metadata") return {};
     throw new Error(`unexpected ${method}`);
   };
@@ -434,7 +448,8 @@ test("F14: tab.create without a root pane fails the start cleanly and closes the
   const ds = Object.values(after.dispatches!);
   assert.equal(ds.length, 1);
   assert.equal(ds[0]!.outcome, "failed");
-  assert.equal(Object.values(after.tasks)[0]!.status, "pending");
+  // R2: the --spec task made for this start alone is taken back with it.
+  assert.deepEqual(after.tasks, {});
   assert.ok(calls.some((c) => c.method === "tab.close" && c.params.tab_id === "w1:t9"));
 });
 
@@ -453,4 +468,392 @@ test("F15: agent.wait failing during the folder-trust dialog returns the blocked
   assert.match(r.warning ?? "", /blocked on a dialog/);
   assert.match(r.warning ?? "", /pack-leader worker resend bob/);
   assert.equal(load().tasks[r.task.id]!.status, "dispatched");
+});
+
+// ==== Runtime close-out: the R-, E- and V-items of docs/review/findings-status.md ===============
+
+const ctxBob = { run_id: "r1", worker: "bob", task_id: null, dispatch_id: null };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const events = (): any[] => readFileSync(join(stateDir, "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+
+test("R1: the live-agent check is advisory: agent.list failing does not block a start, a live agent of the name still does", async () => {
+  save(base());
+  handler = (method, params) => {
+    if (method === "agent.list") throw herdrError("timeout", "herdr agent.list timed out");
+    return startHerdr(method, params);
+  };
+  const r = await start("bob", { spec: "x" });
+  assert.equal(r.warning, undefined);
+  assert.equal(load().workers.bob!.task_id, r.task.id);
+  assert.ok(events().some((e) => e.event === "herdr.error" && e.op === "agent.list" && e.worker === "bob"));
+  handler = (method, params) => (method === "agent.list" ? { agents: [{ pane_id: "w9:p1", name: "ann", agent_status: "idle" }] } : startHerdr(method, params));
+  await assert.rejects(start("ann", { spec: "y" }), /live herdr agent is already named "ann"/);
+  assert.ok(Object.values(load().dispatches!).every((d) => d.worker !== "ann"), "refused before anything was claimed");
+});
+
+test("R2: a --task start whose tab cannot be made leaves the task as it was and frees name and task", async () => {
+  const s = base();
+  s.tasks.t1 = task("t1", "pending", null, null);
+  s.tasks.t1.attempts = 0;
+  save(s);
+  handler = (method, params) => {
+    if (method === "tab.create") throw herdrError("workspace_not_found", "workspace w1 not found");
+    return startHerdr(method, params);
+  };
+  await assert.rejects(start("bob", { taskId: "t1" }), (err: Error) => /workspace w1 not found/.test(err.message) && !/not kept/.test(err.message));
+  const t = load().tasks.t1!;
+  assert.deepEqual([t.status, t.worker, t.dispatch_id, t.attempts], ["pending", null, null, 0]);
+  handler = startHerdr;
+  const r = await start("bob", { taskId: "t1" });
+  assert.equal(r.task.status, "dispatched");
+});
+
+test("E10: a worker's pane gets HERDR_PLUGIN_STATE_DIR, so it shares the orchestrator's state file", async () => {
+  save(base());
+  handler = startHerdr;
+  await start("bob", { spec: "x" });
+  const env = calls.find((c) => c.method === "tab.create")!.params.env;
+  assert.equal(env.HERDR_PLUGIN_STATE_DIR, stateDir);
+  assert.equal(env.PACK_WORKER, "bob");
+});
+
+test("R6: redispatch waits for the worker to be idle, and dispatches nothing while it stays busy", async () => {
+  const s = base();
+  s.tasks.t0 = task("t0", "succeeded", "bob", "d0");
+  s.workers.bob = worker("bob", { task_id: "t0", dispatch_id: "d0" });
+  save(s);
+  handler = (method) => {
+    if (method === "agent.wait") throw herdrError("timeout", "herdr agent.wait timed out");
+    throw new Error(`unexpected ${method}`);
+  };
+  await assert.rejects(redispatch(load().runs.r1!, "bob", undefined, "next", undefined, { idleWaitMs: 50 }), /still busy.*nothing was dispatched/);
+  assert.deepEqual(Object.keys(load().tasks), ["t0"]);
+  assert.deepEqual(load().dispatches, {});
+  assert.equal(prompts().length, 0);
+  const wait = calls.find((c) => c.method === "agent.wait")!.params;
+  assert.deepEqual([wait.target, wait.until], ["w1:p-bob", ["idle", "done"]]);
+});
+
+test("R16: redispatch --task refuses a task whose dependencies have not succeeded", async () => {
+  const s = base();
+  s.tasks.t0 = task("t0", "succeeded", "bob", "d0");
+  s.tasks.t1 = { ...task("t1", "pending", null), depends_on: ["t2"] };
+  s.tasks.t2 = task("t2", "pending", null);
+  s.workers.bob = worker("bob", { task_id: "t0", dispatch_id: "d0" });
+  save(s);
+  handler = (method) => {
+    if (method === "agent.wait") return { agent: { agent_status: "idle" } };
+    throw new Error(`unexpected ${method}`);
+  };
+  await assert.rejects(redispatch(load().runs.r1!, "bob", "t1", undefined), /task t1 waits on t2/);
+  assert.equal(load().tasks.t1!.status, "pending");
+  assert.equal(load().workers.bob!.dispatch_id, "d0");
+});
+
+test("R19: a --task redispatch whose prompt fails puts task and worker back; a timeout that landed counts as delivered", async () => {
+  process.env.PACK_PROMPT_RETRY_MS = "0";
+  const s = base();
+  s.tasks.t0 = task("t0", "succeeded", "bob", "d0");
+  s.tasks.t1 = task("t1", "failed", "ann", "d5");
+  s.workers.bob = worker("bob", { task_id: "t0", dispatch_id: "d0" });
+  save(s);
+  handler = (method) => {
+    if (method === "agent.wait") return { agent: { agent_status: "idle" } };
+    if (method === "agent.get") return { agent: { agent_status: "idle", state_change_seq: 3 } };
+    if (method === "agent.prompt") throw herdrError("agent_not_found", "no agent bob");
+    throw new Error(`unexpected ${method}`);
+  };
+  await assert.rejects(redispatch(load().runs.r1!, "bob", "t1", undefined), /rolled back and task t1 is failed again/);
+  let after = load();
+  const t1 = after.tasks.t1!;
+  assert.deepEqual([t1.status, t1.worker, t1.dispatch_id, t1.attempts], ["failed", "ann", "d5", 1]);
+  assert.deepEqual([after.workers.bob!.task_id, after.workers.bob!.dispatch_id, after.workers.bob!.awaiting_prompt], ["t0", "d0", false]);
+
+  // herdr slow to confirm a prompt the agent did get: not retried, not rolled back.
+  calls.length = 0;
+  let prompted = false;
+  handler = (method) => {
+    if (method === "agent.wait") return { agent: { agent_status: "idle" } };
+    if (method === "agent.get") return { agent: { agent_status: prompted ? "working" : "idle", state_change_seq: prompted ? 4 : 3 } };
+    if (method === "agent.prompt") {
+      prompted = true;
+      throw herdrError("timeout", "herdr agent.prompt timed out");
+    }
+    if (method === "pane.report_metadata") return {};
+    throw new Error(`unexpected ${method}`);
+  };
+  const r = await redispatch(load().runs.r1!, "bob", "t1", undefined);
+  assert.equal(prompts().length, 1);
+  after = load();
+  assert.deepEqual([after.tasks.t1!.status, after.tasks.t1!.dispatch_id, after.workers.bob!.awaiting_prompt], ["dispatched", r.dispatch_id, false]);
+});
+
+test("R7: a waiting ask wakes on the state file changing, well before its fallback tick", async () => {
+  const s = base();
+  s.workers.bob = worker("bob");
+  save(s);
+  handler = () => ({});
+  const asking = ask(ctxBob, { body: "which one?", timeoutMs: 10_000 });
+  await sleep(300);
+  const id = load().messages.find((m) => m.type === "ask")!.id;
+  const t0 = Date.now();
+  await reply(load().runs.r1!, id, "this one");
+  const r = await asking;
+  assert.equal(r.result, "reply");
+  assert.ok(Date.now() - t0 < ASK_TICK_MS / 2, `woke after ${Date.now() - t0} ms`);
+});
+
+test("V5: ask --id refuses at once an id that is not this worker's ask, and one whose answer it already collected", async () => {
+  const s = base();
+  s.workers.bob = worker("bob");
+  s.workers.ann = worker("ann");
+  s.messages.push(
+    msg("a1", { type: "ask", from: "ann", to: "orchestrator", acked: true }),
+    msg("a2", { type: "ask", from: "bob", to: "orchestrator", acked: true }),
+    msg("r2", { type: "reply", reply_to: "a2", acked: true, body: "use the second" }),
+    msg("n1", { type: "note", from: "bob", to: "orchestrator" }),
+  );
+  save(s);
+  const t0 = Date.now();
+  for (const id of ["nope", "a1", "n1"]) await assert.rejects(ask(ctxBob, { resumeId: id, timeoutMs: 10_000 }), new RegExp(`no ask ${id} from worker "bob" in run r1`));
+  await assert.rejects(ask(ctxBob, { resumeId: "a2", timeoutMs: 10_000 }), /ask a2 was already answered \(reply r2\): use the second/);
+  assert.ok(Date.now() - t0 < 1000);
+});
+
+test("D3: an ask stops waiting when its worker is released", async () => {
+  const s = base();
+  s.workers.bob = worker("bob", { started_at: iso(5000) });
+  s.messages.push(msg("a1", { type: "ask", from: "bob", to: "orchestrator" }));
+  save(s);
+  const asking = ask(ctxBob, { resumeId: "a1", timeoutMs: 10_000 });
+  await sleep(200);
+  await update((st) => {
+    delete st.workers.bob;
+  });
+  await assert.rejects(asking, /"bob" was released while waiting on ask a1/);
+});
+
+test("R10: release and run close drop the worker's undelivered followups and uncollected replies", async () => {
+  const s = base();
+  s.workers.bob = worker("bob", { started_at: iso(5000), owns_pane: false });
+  s.workers.ann = worker("ann", { owns_pane: false });
+  s.messages.push(
+    msg("f1", { ts: iso(1000) }),
+    msg("r1", { type: "reply", reply_to: "a0", ts: iso(1000) }),
+    msg("f2", { to: "ann" }),
+    msg("n1", { type: "note", from: "ann", to: "orchestrator" }),
+  );
+  save(s);
+  handler = startHerdr;
+  await releaseWorker(load().runs.r1!, "bob", {});
+  const acked = () => Object.fromEntries(load().messages.map((m) => [m.id, m.acked]));
+  assert.deepEqual(acked(), { f1: true, r1: true, f2: false, n1: false });
+  await closeRun("r1");
+  assert.deepEqual(acked(), { f1: true, r1: true, f2: true, n1: false }, "the orchestrator's own messages stay");
+});
+
+test("R11: sync nudges an idle orchestrator once more about a report left unread; a busy one is left alone", async () => {
+  process.env.PACK_RENUDGE_MS = "1000";
+  try {
+    const s = base();
+    s.messages.push(msg("dn", { type: "done", from: "bob", to: "orchestrator", ts: iso(5000) }), msg("nt", { type: "note", from: "bob", to: "orchestrator" }));
+    save(s);
+    let orch = "working";
+    handler = (method) => {
+      if (method === "agent.list") return { agents: [{ pane_id: "w1:p1", agent_status: orch, state_change_seq: 1 }] };
+      if (method === "pane.list") return { panes: [{ pane_id: "w1:p1" }] };
+      if (method === "agent.prompt") return {};
+      throw new Error(`unexpected ${method}`);
+    };
+    await sync();
+    assert.equal(prompts().length, 0);
+    orch = "idle";
+    await sync();
+    assert.equal(prompts().length, 1);
+    assert.match(prompts()[0]!, /a done from bob \(dn\) still unread/);
+    const by = (id: string) => load().messages.find((m) => m.id === id) as Message & { nudged_at?: string };
+    assert.ok(by("dn").nudged_at);
+    assert.equal(by("nt").nudged_at, undefined, "too fresh");
+    await sync();
+    assert.equal(prompts().length, 1, "once per message");
+  } finally {
+    delete process.env.PACK_RENUDGE_MS;
+  }
+});
+
+test("R12: check --wait subscribes to tab.closed, and the manifest hooks tab.closed to the event handler", async () => {
+  save(base());
+  handler = (method) => {
+    if (method === "agent.list") return { agents: [] };
+    if (method === "pane.list") return { panes: [] };
+    if (method === "events.subscribe") return {};
+    throw new Error(`unexpected ${method}`);
+  };
+  await check(load().runs.r1!, { wait: true, timeoutMs: 300, heartbeatMs: 0 });
+  const sub = calls.find((c) => c.method === "events.subscribe")!;
+  assert.ok(sub.params.subscriptions.some((x: { type: string }) => x.type === "tab.closed"));
+  assert.match(readFileSync(resolve("herdr-plugin.toml"), "utf8"), /\[\[events\]\]\non = "tab\.closed"\ncommand = \["node", "src\/cli\.ts", "event", "tab\.closed"\]/);
+});
+
+test("R15: a worker blocked after reporting still raises a blocked attention, once per episode", async () => {
+  const s = base();
+  s.tasks.t1 = task("t1", "succeeded", "bob", "d1");
+  s.workers.bob = worker("bob", { task_id: "t1", dispatch_id: "d1", last_status: "idle", last_seq: 1 });
+  save(s);
+  let st = { agent_status: "blocked", state_change_seq: 2 };
+  handler = (method) => {
+    if (method === "agent.list") return { agents: [{ pane_id: "w1:p-bob", ...st }] };
+    if (method === "pane.list") return { panes: [{ pane_id: "w1:p-bob" }] };
+    throw new Error(`unexpected ${method}`);
+  };
+  const first = await sync();
+  assert.deepEqual(first.map((m) => [m.status, m.dispatch_id]), [["blocked", "d1"]]);
+  assert.match(first[0]!.body, /blocked .* after reporting on task t1/);
+  assert.deepEqual(await sync(), [], "no change, no second alert");
+  await ack(load().runs.r1!, [first[0]!.id]);
+  st = { agent_status: "idle", state_change_seq: 3 };
+  assert.deepEqual(await sync(), [], "idle after done is normal");
+  st = { agent_status: "blocked", state_change_seq: 4 };
+  assert.equal((await sync()).length, 1, "a new blocked episode raises again");
+});
+
+test("R21: a herdr reply without result is bad_reply; wrappers answer bad_result instead of a TypeError", async () => {
+  handler = (_m, _p, req) => ({ __raw: JSON.stringify({ id: req.id }) });
+  await assert.rejects(herdr("pane.list"), (e: any) => e.code === "bad_reply");
+  handler = () => ({});
+  await assert.rejects(getAgent("x"), (e: any) => e.code === "bad_result");
+  await assert.rejects(getPane("x"), (e: any) => e.code === "bad_result");
+});
+
+test("R26: herdr() transport: a foreign id is ignored, silence times out, no socket is unreachable", async () => {
+  handler = () => ({ __raw: JSON.stringify({ id: "someone-else", result: {} }) });
+  await assert.rejects(herdr("pane.list", {}, { timeoutMs: 200 }), (e: any) => e.code === "timeout");
+  handler = () => ({ __raw: "" });
+  await assert.rejects(herdr("pane.list", {}, { timeoutMs: 200 }), (e: any) => e.code === "timeout");
+  process.env.HERDR_SOCKET_PATH = join(dir, "nope.sock");
+  try {
+    await assert.rejects(herdr("pane.list"), (e: any) => e.code === "unreachable");
+  } finally {
+    process.env.HERDR_SOCKET_PATH = sock;
+  }
+});
+
+test("R22: a swallowed herdr failure (pane label) leaves a herdr.error event in the log", async () => {
+  handler = () => {
+    throw herdrError("pane_not_found", "gone");
+  };
+  await labelPane("w1:p7", "t");
+  const e = events().find((e) => e.event === "herdr.error" && e.op === "pane.report_metadata" && e.pane === "w1:p7");
+  assert.equal(e?.code, "pane_not_found");
+});
+
+test("R23: the subscribe backoff doubles from 0.5 s and caps at 10 s; markHerdrUnreachable sets the run warning", async () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 40].map(subscribeBackoff), [500, 1000, 2000, 4000, 8000, 10_000, 10_000, 10_000]);
+  save(base());
+  await markHerdrUnreachable();
+  assert.ok(load().runs.r1!.herdr_unreachable_since);
+});
+
+test("R27: an agent booting before its dispatch prompt (working, then idle) raises no idle attention", async () => {
+  const s = base();
+  s.tasks.t1 = task("t1", "dispatched", "bob", "d1");
+  s.workers.bob = worker("bob", { task_id: "t1", dispatch_id: "d1", awaiting_prompt: true, last_status: "unknown", last_seq: 0, started_at: iso(1000) });
+  save(s);
+  let st = { agent_status: "working", state_change_seq: 1 };
+  handler = (method) => {
+    if (method === "agent.list") return { agents: [{ pane_id: "w1:p-bob", ...st }] };
+    if (method === "pane.list") return { panes: [{ pane_id: "w1:p-bob" }] };
+    throw new Error(`unexpected ${method}`);
+  };
+  for (const [status, seq] of [["working", 1], ["idle", 2], ["working", 3], ["idle", 4]] as const) {
+    st = { agent_status: status, state_change_seq: seq };
+    assert.deepEqual(await sync(), [], `${status} at ${seq} before the prompt`);
+  }
+  // The prompt goes in (baseline at 4); a real turn then ends idle without a report.
+  await update((state) => {
+    Object.assign(state.workers.bob!, { awaiting_prompt: false, worked: false, seq_at_dispatch: 4 });
+  });
+  st = { agent_status: "working", state_change_seq: 5 };
+  await sync();
+  st = { agent_status: "idle", state_change_seq: 6 };
+  assert.deepEqual((await sync()).map((m) => m.status), ["idle"]);
+});
+
+test("R26: done with a stale dispatch id is refused, and so is a second done for the same dispatch", async () => {
+  const s = base();
+  s.tasks.t1 = task("t1", "dispatched", "bob", "d2");
+  s.workers.bob = worker("bob", { task_id: "t1", dispatch_id: "d2" });
+  save(s);
+  handler = () => ({});
+  const report = (dispatch_id: string) => done({ ...ctxBob, task_id: "t1", dispatch_id }, { outcome: "succeeded", summary: "ok", files: [], reportPath: null });
+  await assert.rejects(report("d1"), /stale dispatch d1: task t1 is on d2/);
+  await report("d2");
+  await assert.rejects(report("d2"), /task t1 is already succeeded/);
+});
+
+test("R26: redispatch is refused while the worker still owes a report", async () => {
+  const s = base();
+  s.tasks.t1 = task("t1", "dispatched", "bob", "d1");
+  s.workers.bob = worker("bob", { task_id: "t1", dispatch_id: "d1" });
+  save(s);
+  handler = (method) => {
+    if (method === "agent.wait") return { agent: { agent_status: "idle" } };
+    throw new Error(`unexpected ${method}`);
+  };
+  await assert.rejects(redispatch(load().runs.r1!, "bob", undefined, "more"), /bob is still on task t1; wait for its report/);
+  assert.deepEqual(Object.keys(load().tasks), ["t1"]);
+});
+
+test("R26: a split start splits the orchestrator's pane in the given direction, unfocused, with the worker env", async () => {
+  save(base());
+  handler = (method, params) => (method === "pane.split" ? { pane: { pane_id: "w1:p-split" } } : startHerdr(method, params));
+  await start("bob", { spec: "x", placement: "split", direction: "down", ratio: 0.4 });
+  const sp = calls.find((c) => c.method === "pane.split")!.params;
+  assert.deepEqual([sp.target_pane_id, sp.direction, sp.ratio, sp.focus, sp.env.PACK_WORKER], ["w1:p1", "down", 0.4, false, "bob"]);
+  assert.ok(!calls.some((c) => c.method === "tab.create"));
+  const w = load().workers.bob!;
+  assert.deepEqual([w.pane_id, w.tab_id, w.owns_tab], ["w1:p-split", null, false]);
+});
+
+test("R26: release refuses a worker that still owes a report unless forced; forced, the task fails", async () => {
+  const s = base();
+  s.tasks.t1 = task("t1", "dispatched", "bob", "d1");
+  s.workers.bob = worker("bob", { task_id: "t1", dispatch_id: "d1", owns_pane: false });
+  save(s);
+  handler = startHerdr;
+  await assert.rejects(releaseWorker(load().runs.r1!, "bob", {}), /bob still owns task t1 \(dispatched\)/);
+  assert.ok(load().workers.bob);
+  await releaseWorker(load().runs.r1!, "bob", { force: true });
+  const after = load();
+  assert.equal(after.workers.bob, undefined);
+  assert.equal(after.tasks.t1!.status, "failed");
+  assert.match(after.tasks.t1!.outcome!.summary, /released by the orchestrator/);
+});
+
+test("D1: a followup whose prompt timed out but visibly landed is not reverted, so it is not delivered twice", async () => {
+  const s = base();
+  s.workers.bob = worker("bob");
+  save(s);
+  let prompted = false;
+  handler = (method) => {
+    if (method === "agent.get") return { agent: { agent_status: prompted ? "working" : "idle", state_change_seq: prompted ? 2 : 1 } };
+    if (method === "agent.prompt") {
+      prompted = true;
+      throw herdrError("timeout", "herdr agent.prompt timed out");
+    }
+    throw new Error(`unexpected ${method}`);
+  };
+  const r = await send(load().runs.r1!, "bob", "hello", false);
+  assert.equal(r.delivered, true);
+  assert.equal(load().messages.find((m) => m.id === r.message.id)!.delivered, true);
+  // Nothing moved: the claim is reverted and a later pass retries.
+  handler = (method) => {
+    if (method === "agent.get") return { agent: { agent_status: "idle", state_change_seq: 1 } };
+    if (method === "agent.prompt") throw herdrError("timeout", "herdr agent.prompt timed out");
+    throw new Error(`unexpected ${method}`);
+  };
+  const r2 = await send(load().runs.r1!, "bob", "again", false);
+  assert.equal(r2.delivered, false);
+  const m2 = load().messages.find((m) => m.id === r2.message.id)!;
+  assert.deepEqual([m2.delivered, m2.acked], [false, false]);
 });

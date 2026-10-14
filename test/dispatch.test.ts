@@ -67,6 +67,7 @@ const fakeHerdr: Handler = (method, params) => {
     case "pane.get": return { pane: { pane_id: params.pane_id } };
     case "tab.close": return {};
     case "agent.read": return { read: { text: SCREEN, source: params.source } };
+    case "agent.wait": return { agent: { agent_status: "idle" } };
     default: throw new Error(`unexpected ${method}`); // agent.get included: no startup dialog to clear
   }
 };

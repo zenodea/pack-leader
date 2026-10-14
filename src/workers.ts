@@ -1,10 +1,11 @@
 // Starting a worker: a sibling pane next to the orchestrator, an agent in it,
 // and the task handed over as the first prompt with a preamble that tells the
 // worker how to report back. Also stopping and releasing one.
-import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, paneClose, paneSplit, tabClose, tabCreate, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "./herdr.ts";
-import { EXITED_SUMMARY, touch } from "./inbox.ts";
+import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, logHerdrError, paneClose, paneSplit, promptLanded, tabClose, tabCreate, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "./herdr.ts";
+import { dropUndelivered, envMs, EXITED_SUMMARY, touch } from "./inbox.ts";
+import { stateDir } from "./paths.ts";
 import { load, log, nextId, now, ready, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
-import { archiveScreen, createDispatch, settleDispatch } from "./dispatch.ts";
+import { archiveScreen, createDispatch, settleDispatch, taskDispatchIds } from "./dispatch.ts";
 import { gitWorktreeAdd, gitWorktreeRemove, isUnknownMethod, planWorktree, type WorktreeInfo } from "./worktree.ts";
 
 export const DEFAULT_KIND = "claude";
@@ -129,7 +130,10 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   const baseCwd = o.cwd ?? o.run.orchestrator.cwd;
   // Planned before anything exists: a cwd outside git, a taken branch or an occupied path fails here.
   const wt = o.worktree ? planWorktree({ spec: o.worktree, cwd: baseCwd, runId: o.run.id, worker: o.name, base: o.base, branch: o.branch }) : null;
-  const live = await listAgents();
+  // Advisory: an agent of that name outside Pack Leader (or a pane kept open after a release) would make
+  // agent.start fail later. The name itself is reserved under the lock below: the unsettled dispatch record
+  // claims it (refuseStartInFlight) until the worker is recorded, so two starts cannot both pass.
+  const live = await listAgents().catch((err) => (logHerdrError("agent.list", err, { worker: o.name }), []));
   if (live.some((a) => a.name === o.name)) throw new Error(`a live herdr agent is already named "${o.name}"`);
 
   const cwd = wt ? wt.path : baseCwd;
@@ -174,7 +178,8 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     return { task, dispatchId, text };
   });
 
-  const env = { PACK_ROLE: "worker", PACK_RUN_ID: o.run.id, PACK_WORKER: o.name, PACK_TASK_ID: task.id, PACK_DISPATCH_ID: dispatchId };
+  // The state dir goes along, so a worker whose pane would otherwise fall back to the XDG default reads the orchestrator's file.
+  const env = { PACK_ROLE: "worker", PACK_RUN_ID: o.run.id, PACK_WORKER: o.name, PACK_TASK_ID: task.id, PACK_DISPATCH_ID: dispatchId, HERDR_PLUGIN_STATE_DIR: stateDir };
   let pane: { pane_id: string };
   let tabId: string | null = null;
   let wtReady = false;
@@ -193,7 +198,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       if (!workspace) throw new Error("the run has no workspace; pass --target-pane");
       const t = await tabCreate({ workspace_id: workspace, label: `${o.name}`, cwd, env });
       if (!t.root_pane?.pane_id) {
-        if (t.tab?.tab_id) await tabClose(t.tab.tab_id).catch(() => {});
+        if (t.tab?.tab_id) await tabClose(t.tab.tab_id).catch((err) => logHerdrError("tab.close", err, { tab: t.tab.tab_id }));
         throw new HerdrError("bad_result", "herdr did not return the new tab's pane");
       }
       pane = t.root_pane;
@@ -207,8 +212,15 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       log({ event: "pane.split", run: o.run.id, worker: o.name, pane: pane.pane_id });
     }
   } catch (err) {
-    // No worktree or no pane, no dispatch: settle the record so it does not look in flight forever.
-    await update((state) => settleDispatch(state, dispatchId, "failed")).catch(() => {});
+    // No worktree or no pane, no dispatch: settle the record so it does not look in flight forever (and frees the name),
+    // and take back a task made by this --spec start alone. A --task start never touched its task.
+    const dropped = await update((state) => {
+      settleDispatch(state, dispatchId, "failed");
+      if (o.taskId || !state.tasks[task.id] || !taskDispatchIds(state, task.id).every((d) => d === dispatchId)) return false;
+      delete state.tasks[task.id];
+      return true;
+    }).catch(() => false);
+    if (dropped) (err as Error).message += `; task ${task.id} was not kept`;
     // A checkout made for this worker alone is empty: take it away again rather than leave it orphaned.
     if (wt && wtReady) (err as Error).message += `; ${await undoWorktree(wt, o.run.id, o.name)}`;
     throw err;
@@ -275,9 +287,9 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: `${o.name} is blocked on a dialog in pane ${pane.pane_id} and has not received its task. Read it with \`pack-leader worker read ${o.name}\`, answer it with \`herdr agent send-keys ${o.name} <keys>\` only if it is safe, then \`pack-leader worker resend ${o.name}\`.` };
   }
   // Right after start the name can lag the pane by a moment: address the pane, and retry briefly.
-  await baseline(o.name, pane.pane_id);
+  const seq = await baseline(o.name, pane.pane_id);
   try {
-    await promptWithRetry(pane.pane_id, text);
+    await promptWithRetry(pane.pane_id, text, seq);
   } catch (err) {
     const e = err as HerdrError;
     log({ event: "worker.prompt_failed", run: o.run.id, worker: o.name, error: e.message });
@@ -288,8 +300,22 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   return { worker, task: { ...task, status: "dispatched", worker: o.name, dispatch_id: dispatchId }, pane_id: pane.pane_id };
 }
 
-/** Send a follow-up dispatch to a worker that already settled: same pane, new dispatch on a task. */
-export async function redispatch(run: Run, name: string, taskId: string | undefined, spec: string | undefined, title?: string): Promise<{ task: Task; dispatch_id: string; warning?: string }> {
+/** How long `worker prompt` waits for a worker that is still finishing its last turn before it hands over the next dispatch. */
+export const REDISPATCH_IDLE_WAIT_MS = 30_000;
+
+/**
+ * Send a follow-up dispatch to a worker that already settled: same pane, new dispatch on a task.
+ * Waits (bounded) for the agent to be idle or done first, and checks a --task's dependencies as
+ * `worker start` does. When the prompt does not go in, the new dispatch is rolled back: settled
+ * as failed, a --spec task removed, a --task task and the worker's IDs put back as they were.
+ */
+export async function redispatch(run: Run, name: string, taskId: string | undefined, spec: string | undefined, title?: string, o: { idleWaitMs?: number } = {}): Promise<{ task: Task; dispatch_id: string; warning?: string }> {
+  const known = load().workers[name];
+  if (!known || known.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
+  // A prompt typed into a busy agent lands in the middle of its turn: give it a moment to finish first.
+  const waitMs = o.idleWaitMs ?? REDISPATCH_IDLE_WAIT_MS;
+  const st = await agentWait(known.pane_id, ["idle", "done"], waitMs);
+  if (st !== "idle" && st !== "done") throw new Error(`${name} is ${st === "timeout" ? "still busy" : st} after waiting ${Math.round(waitMs / 1000)}s; nothing was dispatched. Check it with \`pack-leader worker read ${name}\` and try again when it is idle`);
   const r = await update((state) => {
     const w = state.workers[name];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
@@ -300,6 +326,8 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
       task = state.tasks[taskId]!;
       if (!task || task.run_id !== run.id) throw new Error(`no task ${taskId} in run ${run.id}`);
       if (task.status === "dispatched" || task.status === "succeeded") throw new Error(`task ${task.id} is ${task.status}`);
+      // As in `worker start`: a failed task is a retry, anything else waits on its dependencies.
+      if (task.status !== "failed" && !ready(state, task)) throw new Error(`task ${task.id} waits on ${task.depends_on.filter((d) => state.tasks[d]?.status !== "succeeded").join(", ")}`);
     } else {
       if (!spec) throw new Error("pass --spec or --task");
       task = {
@@ -318,6 +346,9 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
       };
       state.tasks[task.id] = task;
     }
+    // What a rollback puts back.
+    const before = taskId ? { status: task.status, worker: task.worker, dispatch_id: task.dispatch_id, attempts: task.attempts, updated_at: task.updated_at } : null;
+    const prev = { task_id: w.task_id, dispatch_id: w.dispatch_id };
     const dispatchId = nextId(state, "d");
     // The pane's environment still names the first dispatch; the preamble carries the new IDs
     // and the worker commands accept them as flags.
@@ -331,16 +362,32 @@ export async function redispatch(run: Run, name: string, taskId: string | undefi
     w.task_id = task.id;
     w.dispatch_id = dispatchId;
     w.awaiting_prompt = true;
-    return { task, dispatchId, w, text };
+    return { task: { ...task }, dispatchId, w: { ...w }, text, before, prev };
   });
-  await baseline(name, r.w.pane_id);
+  const seq = await baseline(name, r.w.pane_id);
   try {
-    await agentPrompt(name, r.text);
+    await promptWithRetry(r.w.pane_id, r.text, seq);
   } catch (err) {
-    // The dispatch is recorded and owed; say how to hand it over instead of leaving it dispatched with only an error.
     const e = err as HerdrError;
     log({ event: "worker.prompt_failed", run: run.id, worker: name, dispatch: r.dispatchId, error: e.message });
-    return { task: r.task, dispatch_id: r.dispatchId, warning: `${name} did not confirm receiving dispatch ${r.dispatchId} (${e.code ?? "error"}: ${e.message}); task ${r.task.id} stays dispatched. Read it with \`pack-leader worker read ${name}\`, then \`pack-leader worker resend ${name}\` if the dispatch is not on its screen.` };
+    const restored = await update((state) => {
+      settleDispatch(state, r.dispatchId, "failed");
+      const t = state.tasks[r.task.id];
+      if (t && t.dispatch_id === r.dispatchId) {
+        if (r.before) Object.assign(t, r.before);
+        else if (taskDispatchIds(state, t.id).every((d) => d === r.dispatchId)) delete state.tasks[t.id];
+      }
+      const w = state.workers[name];
+      if (w && w.dispatch_id === r.dispatchId) {
+        w.task_id = r.prev.task_id;
+        w.dispatch_id = r.prev.dispatch_id;
+        w.awaiting_prompt = false;
+      }
+      return t?.status;
+    });
+    log({ event: "worker.redispatch_rolled_back", run: run.id, worker: name, dispatch: r.dispatchId, task: r.task.id });
+    const what = r.before ? `task ${r.task.id} is ${restored ?? r.before.status} again` : `task ${r.task.id} was not kept`;
+    throw new Error(`${name} did not receive dispatch ${r.dispatchId} (${e.code ?? "error"}: ${e.message}); it was rolled back and ${what}. Check it with \`pack-leader worker read ${name}\`, then run \`pack-leader worker prompt ${name}\` again`);
   }
   await markPrompted(name);
   await labelPane(r.w.pane_id, r.task.title);
@@ -376,6 +423,8 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
       t.outcome = { summary: "released by the orchestrator before reporting", files_modified: [], report_path: null };
       settleDispatch(state, w.dispatch_id, "failed");
     }
+    // Nothing still queued for it may reach a later worker of the same name.
+    dropUndelivered(state, w);
     delete state.workers[name];
     const rec = w.worktree ? state.worktrees?.[w.worktree.path] : undefined;
     if (rec) rec.released_at = now();
@@ -416,6 +465,7 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
       }
     } catch (err) {
       // Already gone is fine; anything else leaves a tab or pane open that no record points at any more.
+      logHerdrError("release.close", err, { worker: name, pane: w.pane_id, tab: w.tab_id ?? null });
       const code = (err as HerdrError).code;
       if (code !== "pane_not_found" && code !== "tab_not_found") close_error = `${w.owns_tab && w.tab_id ? `tab ${w.tab_id}` : `pane ${w.pane_id}`} may still be open: ${(err as Error).message}`;
     }
@@ -559,8 +609,8 @@ export async function resendPreamble(run: Run, name: string): Promise<{ task: Ta
   if (a.agent_status === "blocked") throw new Error(`${name} is still blocked on a dialog in pane ${w.pane_id}`);
   // The same text as the first time: the dispatch record keeps it (worktree line included).
   const text = state.dispatches?.[w.dispatch_id]?.preamble ?? preamble({ worker: name, run, task, dispatchId: w.dispatch_id, cwd: w.cwd, worktree: w.worktree });
-  await baseline(name, w.pane_id);
-  await promptWithRetry(w.pane_id, text);
+  const seq = await baseline(name, w.pane_id);
+  await promptWithRetry(w.pane_id, text, seq);
   await markPrompted(name);
   log({ event: "worker.resent", run: run.id, worker: name, task: task.id });
   return { task, dispatch_id: w.dispatch_id };
@@ -572,7 +622,7 @@ export async function resendPreamble(run: Run, name: string): Promise<{ task: Ta
  * already working when the counter is read would move the baseline past its own
  * working phase, and a quick idle without a report would go unnoticed.
  */
-async function baseline(name: string, paneId: string): Promise<void> {
+async function baseline(name: string, paneId: string): Promise<number> {
   let seq = 0;
   try {
     seq = (await getAgent(paneId)).state_change_seq ?? 0;
@@ -584,6 +634,7 @@ async function baseline(name: string, paneId: string): Promise<void> {
     w.seq_at_dispatch = seq;
     w.last_seq = seq;
   });
+  return seq;
 }
 
 /** The prompt went in: a sign of life, and followups may now be delivered. */
@@ -611,19 +662,28 @@ async function startWhenShellReady(p: Parameters<typeof agentStart>[0], waitMs =
   }
 }
 
-async function promptWithRetry(target: string, text: string, tries = 5): Promise<void> {
+/**
+ * Prompt, retrying a failure a few times. A timeout is retried only when the agent shows no
+ * sign of having received it (its state counter still at `seqBefore`): a prompt herdr was slow
+ * to confirm is not sent twice.
+ */
+async function promptWithRetry(target: string, text: string, seqBefore?: number, tries = 5): Promise<void> {
   for (let i = 1; ; i++) {
     try {
       await agentPrompt(target, text);
       return;
     } catch (err) {
+      if ((err as HerdrError).code === "timeout" && seqBefore !== undefined && (await promptLanded(target, seqBefore))) {
+        log({ event: "prompt.timeout_landed", target });
+        return;
+      }
       if (i >= tries) throw err;
       // A dialog that appeared late (folder trust) is cleared the same way as at start.
       if ((err as HerdrError).code === "agent_blocked") {
         if (await clearStartupDialog(target)) throw err;
         continue;
       }
-      await new Promise((r) => setTimeout(r, 1000 * i));
+      await new Promise((r) => setTimeout(r, envMs("PACK_PROMPT_RETRY_MS", 1000) * i));
     }
   }
 }

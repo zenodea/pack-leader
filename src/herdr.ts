@@ -3,6 +3,7 @@
 import { createConnection, type Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { herdrSocketPath } from "./paths.ts";
+import { log } from "./state.ts";
 
 export class HerdrError extends Error {
   readonly code: string;
@@ -55,6 +56,8 @@ export function herdr<T = any>(method: string, params: Record<string, unknown> =
         }
         if (msg.id !== id) return;
         if (msg.error) settle(() => reject(new HerdrError(msg.error.code ?? "error", msg.error.message ?? "herdr error")));
+        // A success reply always carries `result`; one without it is a protocol error, not an empty answer.
+        else if (!("result" in msg)) settle(() => reject(new HerdrError("bad_reply", `herdr ${method} answered without a result`)));
         else settle(() => resolve(msg.result as T));
       }),
     );
@@ -99,14 +102,27 @@ function listIn<T>(res: any, key: string, method: string): T[] {
   return v as T[];
 }
 
+/** The object a herdr answer carries under `key`; missing, it is an error with a code rather than a TypeError later. */
+function objectIn<T>(res: any, key: string, method: string): T {
+  const v = res?.[key];
+  if (typeof v !== "object" || v === null) throw new HerdrError("bad_result", `herdr ${method} answered without ${key}`);
+  return v as T;
+}
+
+/** Log a herdr failure that is deliberately swallowed, so a leaked pane or a lost label leaves a trace. */
+export function logHerdrError(op: string, err: unknown, extra: Record<string, unknown> = {}): void {
+  try {
+    log({ event: "herdr.error", op, code: (err as HerdrError)?.code ?? "error", error: (err as Error)?.message ?? String(err), ...extra });
+  } catch {}
+}
+
 export const listAgents = async (): Promise<AgentInfo[]> => listIn<AgentInfo>(await herdr("agent.list"), "agents", "agent.list");
-export const getAgent = async (target: string): Promise<AgentInfo> => (await herdr("agent.get", { target })).agent;
-export const getPane = async (pane_id: string): Promise<PaneInfo> => (await herdr("pane.get", { pane_id })).pane;
+export const getAgent = async (target: string): Promise<AgentInfo> => objectIn<AgentInfo>(await herdr("agent.get", { target }), "agent", "agent.get");
+export const getPane = async (pane_id: string): Promise<PaneInfo> => objectIn<PaneInfo>(await herdr("pane.get", { pane_id }), "pane", "pane.get");
 export const listPanes = async (workspace_id?: string): Promise<PaneInfo[]> => listIn<PaneInfo>(await herdr("pane.list", workspace_id ? { workspace_id } : {}), "panes", "pane.list");
 
 export async function paneSplit(p: { target_pane_id: string; direction: "right" | "down"; cwd?: string; env?: Record<string, string>; ratio?: number }): Promise<PaneInfo> {
-  const res = await herdr("pane.split", { ...p, focus: false });
-  return res.pane;
+  return objectIn<PaneInfo>(await herdr("pane.split", { ...p, focus: false }), "pane", "pane.split");
 }
 
 export async function agentStart(p: { name: string; kind: string; pane_id: string; args?: string[]; timeout_ms?: number }): Promise<any> {
@@ -126,8 +142,9 @@ export type TabInfo = { tab_id: string; workspace_id: string; label: string; foc
 
 /** A new tab in the workspace, unfocused: where a worker lives out of sight. */
 export async function tabCreate(p: { workspace_id: string; label: string; cwd?: string; env?: Record<string, string> }): Promise<{ tab: TabInfo; root_pane: PaneInfo }> {
+  // startWorker checks root_pane itself (and closes a tab that came without one).
   const res = await herdr("tab.create", { ...p, focus: false });
-  return { tab: res.tab, root_pane: res.root_pane };
+  return { tab: res?.tab, root_pane: res?.root_pane };
 }
 export const tabClose = (tab_id: string) => herdr("tab.close", { tab_id });
 
@@ -158,14 +175,18 @@ export async function labelPane(pane_id: string, title: string | null): Promise<
   try {
     if (title === null) await herdr("pane.report_metadata", { pane_id, source: "pack-leader", clear_title: true }, { timeoutMs: 3000 });
     else await herdr("pane.report_metadata", { pane_id, source: "pack-leader", title }, { timeoutMs: 3000 });
-  } catch {}
+  } catch (err) {
+    logHerdrError("pane.report_metadata", err, { pane: pane_id });
+  }
 }
 
 /** A herdr toast. Never throws. */
 export async function notify(title: string, body?: string, sound: "none" | "request" = "none"): Promise<void> {
   try {
     await herdr("notification.show", { title, body: body ?? null, sound }, { timeoutMs: 3000 });
-  } catch {}
+  } catch (err) {
+    logHerdrError("notification.show", err);
+  }
 }
 
 export type Subscription = { type: string; pane_id?: string };
@@ -173,12 +194,21 @@ export type EventEnvelope = { event: string; data: Record<string, any> };
 
 /**
  * Streams herdr events until closed. Reconnects after a dropped connection
- * (herdr restarts, update handoff) with a short backoff.
+ * (herdr restarts, update handoff) with an exponential backoff from
+ * SUBSCRIBE_RETRY_MS, capped at SUBSCRIBE_RETRY_MAX_MS, reset once connected.
+ * `onState` hears every connect (true) and drop (false).
  */
+export const SUBSCRIBE_RETRY_MS = 500;
+export const SUBSCRIBE_RETRY_MAX_MS = 10_000;
+
+/** The wait before reconnect attempt `n` (0-based): doubling, capped. */
+export const subscribeBackoff = (n: number): number => Math.min(SUBSCRIBE_RETRY_MAX_MS, SUBSCRIBE_RETRY_MS * 2 ** Math.min(n, 20));
+
 export function subscribe(subs: Subscription[], onEvent: (e: EventEnvelope) => void, onState?: (connected: boolean) => void): () => void {
   let closed = false;
   let conn: Socket | null = null;
   let retry: NodeJS.Timeout | null = null;
+  let failures = 0;
   const open = () => {
     if (closed) return;
     const id = `pack-leader:sub:${process.pid}:${++nextId}`;
@@ -196,13 +226,15 @@ export function subscribe(subs: Subscription[], onEvent: (e: EventEnvelope) => v
         } catch {
           return;
         }
+        // A connection that answers without an error is a working one: the next drop starts the backoff over.
+        if (msg && !msg.error) failures = 0;
         if (msg && typeof msg.event === "string") onEvent(msg as EventEnvelope);
       }),
     );
     const again = () => {
       if (closed) return;
       onState?.(false);
-      if (!retry) retry = setTimeout(() => ((retry = null), open()), 1500);
+      if (!retry) retry = setTimeout(() => ((retry = null), open()), subscribeBackoff(failures++));
     };
     conn.on("error", again);
     conn.on("close", again);
@@ -213,4 +245,18 @@ export function subscribe(subs: Subscription[], onEvent: (e: EventEnvelope) => v
     if (retry) clearTimeout(retry);
     conn?.destroy();
   };
+}
+
+/**
+ * After a prompt that timed out: did it land anyway? An agent whose state counter moved
+ * past `seqBefore`, or that is working now, received something since. A guess, not a
+ * receipt: herdr has no delivery acknowledgement.
+ */
+export async function promptLanded(target: string, seqBefore: number): Promise<boolean> {
+  try {
+    const a = await getAgent(target);
+    return (a.state_change_seq ?? 0) > seqBefore || a.agent_status === "working";
+  } catch {
+    return false;
+  }
 }

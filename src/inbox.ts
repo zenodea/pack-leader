@@ -1,6 +1,9 @@
 // Messages between the orchestrator and its workers, and the sync that turns
 // herdr's live agent states into attention messages the orchestrator must ack.
-import { agentPrompt, getAgent, listAgents, listPanes, type AgentStatus, subscribe } from "./herdr.ts";
+import { watch, type FSWatcher } from "node:fs";
+import { basename, dirname } from "node:path";
+import { agentPrompt, getAgent, type HerdrError, listAgents, listPanes, logHerdrError, promptLanded, type AgentStatus, subscribe } from "./herdr.ts";
+import { stateFile } from "./paths.ts";
 import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load } from "./state.ts";
 import { settleDispatch } from "./dispatch.ts";
 
@@ -55,9 +58,73 @@ export async function nudgeOrchestrator(run: Run, text: string): Promise<boolean
     if (a.agent_status !== "idle" && a.agent_status !== "done") return false;
     await agentPrompt(run.orchestrator.pane_id, text);
     return true;
-  } catch {
+  } catch (err) {
+    logHerdrError("nudge", err, { run: run.id });
     return false;
   }
+}
+
+/** A message the orchestrator was re-nudged about (sync, R11). `nudged_at` is optional, so older state files load. */
+type Nudged = Message & { nudged_at?: string };
+
+/** Unread done/ask/note older than this, with the orchestrator idle, earns one more nudge. PACK_RENUDGE_MS=0 disables. */
+export const renudgeMs = () => envMs("PACK_RENUDGE_MS", 60_000);
+const RENUDGE_TYPES: readonly string[] = ["done", "ask", "note"];
+
+/**
+ * Followups and uncollected replies for a worker that is going away (release, run
+ * close): acked, so no later sync or `inbox` hands them to a new worker of the name.
+ */
+export function dropUndelivered(state: State, w: Pick<Worker, "name" | "run_id" | "started_at">): number {
+  let n = 0;
+  for (const m of state.messages) {
+    if (m.to !== w.name || m.acked || (m.type !== "followup" && m.type !== "reply") || !meantFor(state, w, m)) continue;
+    m.acked = true;
+    n++;
+  }
+  return n;
+}
+
+/** How often a waiting `ask` re-reads the state when no change event arrived. */
+export const ASK_TICK_MS = 2000;
+
+/**
+ * Wakes a waiting loop when state.json is replaced (save() renames a temp file over
+ * it, so the directory is watched, not the file), or after the fallback tick. A
+ * change that comes between two waits makes the next wait return at once.
+ */
+function stateWatcher(): { next: (ms: number) => Promise<void>; close: () => void } {
+  let wake: (() => void) | null = null;
+  let dirty = false;
+  let w: FSWatcher | null = null;
+  const name = basename(stateFile);
+  try {
+    w = watch(dirname(stateFile), (_e, f) => {
+      if (f && f !== name) return;
+      if (wake) wake();
+      else dirty = true;
+    });
+    w.on("error", () => {
+      w?.close();
+      w = null;
+    });
+  } catch {
+    w = null;
+  }
+  return {
+    next: (ms) =>
+      new Promise<void>((r) => {
+        if (dirty) return (dirty = false), r();
+        const timer = setTimeout(fire, ms);
+        function fire() {
+          clearTimeout(timer);
+          wake = null;
+          r();
+        }
+        wake = fire;
+      }),
+    close: () => w?.close(),
+  };
 }
 
 /** A sign of life from the worker: refresh last_seen and let a later stall raise attention again. */
@@ -197,8 +264,14 @@ export async function ask(ctx: WorkerContext, o: { body?: string; options?: stri
     const choices = options.length ? ` Options: ${formatOptions(options)} (answer with one, a unique prefix, or --free for free text).` : "";
     await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} asks a question (${askId}).${choices} Run \`pack-leader check\` and answer it with \`${replyHint(r.msg)}\`.`);
   } else {
-    // Resuming: the options are the stored ask's, whatever was passed now. Still waiting on it is a sign of life too.
-    options = load().messages.find((m) => m.id === askId && m.type === "ask")?.options ?? [];
+    // Resuming: only this worker's own ask, and not one whose reply it already collected; the options are the stored ask's.
+    const s = load();
+    const a = s.messages.find((m) => m.id === askId);
+    if (!a || a.type !== "ask" || a.run_id !== ctx.run_id || a.from !== ctx.worker) throw new Error(`no ask ${askId} from worker "${ctx.worker}" in run ${ctx.run_id}; pass the id your \`pack-leader ask\` printed`);
+    const answered = s.messages.find((m) => m.type === "reply" && m.reply_to === askId);
+    if (answered?.acked) throw new Error(`ask ${askId} was already answered (reply ${answered.id}): ${answered.body}`);
+    options = a.options ?? [];
+    // Still waiting on it is a sign of life too.
     await update((state) => {
       const w = state.workers[ctx.worker];
       if (w) touch(w);
@@ -206,18 +279,29 @@ export async function ask(ctx: WorkerContext, o: { body?: string; options?: stri
   }
   const withOptions = options.length ? { options } : {};
   const deadline = Date.now() + o.timeoutMs;
-  for (;;) {
-    const state = load();
-    const reply = state.messages.find((m) => m.type === "reply" && m.reply_to === askId);
-    if (reply) {
-      await update((s) => {
-        const r = s.messages.find((m) => m.id === reply.id);
-        if (r) r.acked = true;
-      });
-      return { result: "reply", ask_id: askId!, ...withOptions, reply };
+  const askedAt = load().messages.find((m) => m.id === askId)?.ts ?? now();
+  // Woken by a change to the state file, with a slow fallback tick, rather than re-reading it every second.
+  const changes = stateWatcher();
+  try {
+    for (;;) {
+      const state = load();
+      const reply = state.messages.find((m) => m.type === "reply" && m.reply_to === askId);
+      if (reply) {
+        await update((s) => {
+          const r = s.messages.find((m) => m.id === reply.id);
+          if (r) r.acked = true;
+        });
+        return { result: "reply", ask_id: askId!, ...withOptions, reply };
+      }
+      // Released (or the run closed) while waiting: nothing will answer, so stop instead of waiting out the timeout.
+      const w = state.workers[ctx.worker];
+      if (!w || w.run_id !== ctx.run_id || Date.parse(w.started_at) > Date.parse(askedAt)) throw new Error(`worker "${ctx.worker}" was released while waiting on ask ${askId}; no answer will come`);
+      const left = deadline - Date.now();
+      if (left < 0) return { result: "timeout", ask_id: askId!, ...withOptions };
+      await changes.next(Math.min(ASK_TICK_MS, left + 1));
     }
-    if (Date.now() > deadline) return { result: "timeout", ask_id: askId!, ...withOptions };
-    await new Promise((r) => setTimeout(r, 1000));
+  } finally {
+    changes.close();
   }
 }
 
@@ -270,12 +354,14 @@ export async function send(run: Run, worker: string, body: string, force: boolea
   });
   // A worker that has not been handed its dispatch yet gets the followup after it (queued), even with --now.
   let ready = false;
+  let seq: number | undefined;
   try {
     const a = await getAgent(worker);
     ready = !waiting && (force || a.agent_status === "idle" || a.agent_status === "done");
+    seq = a.state_change_seq;
   } catch {}
   // A concurrent sync() may deliver the queued message first; claim() decides who prompts.
-  const delivered = ready ? await deliver(msg.id, worker, body, from) : false;
+  const delivered = ready ? await deliver(msg.id, worker, body, from, seq) : false;
   log({ event: from === "orchestrator" ? "orchestrator.send" : "worker.send", run: run.id, from, to: worker, delivered });
   return { message: { ...msg, delivered, acked: delivered }, delivered };
 }
@@ -380,11 +466,16 @@ const followupPrompt = (body: string, from = "orchestrator") =>
  * acked) inside the lock before the prompt goes out, so a concurrent sync() or
  * send() cannot prompt it a second time; if the prompt fails, the claim is
  * reverted so a later pass retries it. True when this call delivered it.
+ * A worker released (or replaced by a new one of the name) since gets nothing.
+ * `seqBefore`, the agent's state counter before the prompt, lets a timed-out
+ * prompt that visibly landed count as delivered instead of being sent twice.
  */
-async function deliver(id: string, worker: string, body: string, from = "orchestrator"): Promise<boolean> {
+async function deliver(id: string, worker: string, body: string, from = "orchestrator", seqBefore?: number): Promise<boolean> {
   const claimed = await update((state) => {
     const m = state.messages.find((m) => m.id === id);
     if (!m || m.delivered || m.acked) return false;
+    const w = state.workers[worker];
+    if (!w || !meantFor(state, w, m)) return false;
     m.delivered = true;
     m.acked = true;
     return true;
@@ -393,7 +484,11 @@ async function deliver(id: string, worker: string, body: string, from = "orchest
   try {
     await agentPrompt(worker, followupPrompt(body, from));
     return true;
-  } catch {
+  } catch (err) {
+    if ((err as HerdrError).code === "timeout" && seqBefore !== undefined && (await promptLanded(worker, seqBefore))) {
+      log({ event: "followup.timeout_landed", worker, id });
+      return true;
+    }
     await update((state) => {
       const m = state.messages.find((m) => m.id === id);
       if (m) {
@@ -443,22 +538,27 @@ export function herdrWarning(run: Run | undefined): string | undefined {
  * exited. When herdr cannot be reached the verdicts stay as they were and the
  * run records `herdr_unreachable_since`.
  */
+/** Record that herdr cannot be reached, without asking it: what sync() does when its calls fail. */
+export async function markHerdrUnreachable(): Promise<void> {
+  if (!activeRuns(load()).some((r) => !r.herdr_unreachable_since)) return;
+  await update((state) => {
+    for (const r of activeRuns(state)) r.herdr_unreachable_since ??= now();
+  }).catch(() => {});
+}
+
 export async function sync(): Promise<Message[]> {
   // A worker recorded after this moment may be missing from the snapshot below without being gone.
   const snapAt = Date.now();
   const agents = await listAgents().catch(() => null);
   const panes = await listPanes().catch(() => null);
   if (!agents || !panes) {
-    if (activeRuns(load()).some((r) => !r.herdr_unreachable_since)) {
-      await update((state) => {
-        for (const r of activeRuns(state)) r.herdr_unreachable_since ??= now();
-      }).catch(() => {});
-    }
+    await markHerdrUnreachable();
     return [];
   }
   const byPane = new Map(agents.map((a) => [a.pane_id, a]));
   const paneIds = new Set(panes.map((p) => p.pane_id));
-  const toDeliver: { worker: string; body: string; id: string; from: string }[] = [];
+  const toDeliver: { worker: string; body: string; id: string; from: string; seq?: number }[] = [];
+  const renudge: { run: string; pane: string; text: string }[] = [];
   const created = await update((state) => {
     const out: Message[] = [];
     for (const r of activeRuns(state)) if (r.herdr_unreachable_since) r.herdr_unreachable_since = null;
@@ -498,7 +598,8 @@ export async function sync(): Promise<Message[]> {
       const task = w.task_id ? state.tasks[w.task_id] : null;
       const owes = task?.status === "dispatched";
       const changed = status !== w.last_status || (a && seq !== w.last_seq);
-      if (status === "working") w.worked = true;
+      // Before its dispatch prompt went in, an agent booting (working, then idle at its prompt) has not worked on anything.
+      if (status === "working" && !w.awaiting_prompt) w.worked = true;
       if (changed) {
         // Only the agent itself changing state is a sign of life; its pane disappearing is not.
         if (a) touch(w);
@@ -506,14 +607,17 @@ export async function sync(): Promise<Message[]> {
         w.last_seq = seq;
         // Idle right after the prompt is the agent reading it, not a finished turn: require a working phase first
         // (or two state changes since the dispatch, in case the poll missed it). Blocked and exited count at once.
-        const turned = w.worked || (w.seq_at_dispatch !== undefined && seq >= w.seq_at_dispatch + 2);
+        const turned = !w.awaiting_prompt && (w.worked || (w.seq_at_dispatch !== undefined && seq >= w.seq_at_dispatch + 2));
         const settled = status === "blocked" || status === "exited" || ((status === "idle" || status === "done") && turned);
         // Only report a settled state when a report is still owed; a worker idling after `pack-leader done` is normal.
-        if (owes && settled) {
-          const recent = state.messages.find((m) => m.type === "attention" && m.from === w.name && m.dispatch_id === w.dispatch_id && m.status === status && !m.acked);
+        // Blocked is the exception: a worker stuck on a permission prompt (say, while handling a follow-up) needs a hand either way.
+        if (settled && (owes || status === "blocked")) {
+          // One open alert per worker, dispatch and status; acking it lets the next one through.
+          const recent = state.messages.find((m) => m.type === "attention" && m.from === w.name && m.run_id === w.run_id && m.dispatch_id === w.dispatch_id && m.status === status && !m.acked);
           if (!recent) {
             const body =
-              status === "blocked" ? `${w.name} is blocked on an approval or question in its own UI (pane ${w.pane_id}); it should have used \`pack-leader ask\`. Inspect with \`pack-leader worker read ${w.name}\`.`
+              status === "blocked" && !owes ? `${w.name} is blocked on an approval or question in its own UI (pane ${w.pane_id}) after reporting${task ? ` on task ${task.id}` : ""}. Inspect with \`pack-leader worker read ${w.name}\`.`
+              : status === "blocked" ? `${w.name} is blocked on an approval or question in its own UI (pane ${w.pane_id}); it should have used \`pack-leader ask\`. Inspect with \`pack-leader worker read ${w.name}\`.`
               : status === "exited" ? `${w.name}'s pane ${w.pane_id} is gone without a report.`
               : `${w.name} is ${status} without having reported on task ${task!.id}. Read its screen with \`pack-leader worker read ${w.name}\`; if it finished, re-prompt it to run \`pack-leader done\`.`;
             out.push(message(state, { run_id: w.run_id, type: "attention", from: w.name, to: "orchestrator", task_id: w.task_id, dispatch_id: w.dispatch_id, body, status }));
@@ -545,12 +649,41 @@ export async function sync(): Promise<Message[]> {
 
       // Not before the worker has its dispatch: a followup must not overtake the preamble.
       if (a && (status === "idle" || status === "done") && !w.awaiting_prompt) {
-        for (const m of state.messages) if (m.to === w.name && m.type === "followup" && !m.delivered && !m.acked && meantFor(state, w, m)) toDeliver.push({ worker: w.name, body: m.body, id: m.id, from: m.from });
+        let first = true;
+        for (const m of state.messages) {
+          if (m.to !== w.name || m.type !== "followup" || m.delivered || m.acked || !meantFor(state, w, m)) continue;
+          // Only the first prompt of the pass knows the agent's counter before it; later ones retry on a timeout, as before.
+          toDeliver.push({ worker: w.name, body: m.body, id: m.id, from: m.from, ...(first ? { seq } : {}) });
+          first = false;
+        }
       }
+    }
+
+    // Re-nudge: unread reports, questions and notes the orchestrator was nudged about while busy (or missed).
+    // Once per message, when the orchestrator agent sits idle and the message is older than renudgeMs().
+    const limit = renudgeMs();
+    for (const r of activeRuns(state)) {
+      const pane = r.orchestrator.pane_id;
+      const o = pane ? byPane.get(pane) : undefined;
+      if (!pane || limit <= 0 || !o || (o.agent_status !== "idle" && o.agent_status !== "done")) continue;
+      const stale = (state.messages as Nudged[]).filter((m) => m.run_id === r.id && m.to === "orchestrator" && !m.acked && RENUDGE_TYPES.includes(m.type) && !m.nudged_at && Date.now() - Date.parse(m.ts) > limit);
+      if (!stale.length) continue;
+      for (const m of stale) m.nudged_at = now();
+      const oldest = stale[0]!;
+      const what = stale.length === 1 ? `a ${oldest.type} from ${oldest.from} (${oldest.id})` : `${stale.length} messages, oldest a ${oldest.type} from ${oldest.from} (${oldest.id})`;
+      renudge.push({ run: r.id, pane, text: `Pack Leader: run ${r.id} has ${what} still unread. Run \`pack-leader check\` and continue the run.` });
     }
     return out;
   });
-  for (const d of toDeliver) await deliver(d.id, d.worker, d.body, d.from);
+  for (const d of toDeliver) await deliver(d.id, d.worker, d.body, d.from, d.seq);
+  for (const n of renudge) {
+    try {
+      await agentPrompt(n.pane, n.text);
+      log({ event: "orchestrator.renudged", run: n.run });
+    } catch (err) {
+      logHerdrError("renudge", err, { run: n.run });
+    }
+  }
   for (const m of created) log({ event: "attention", run: m.run_id, worker: m.from, status: m.status });
   return created;
 }
@@ -620,7 +753,16 @@ export async function check(run: Run, o: { wait: boolean; timeoutMs: number; typ
     } catch {}
   }, every) : null;
   let poke: (() => void) | null = null;
-  const stop = subscribe([{ type: "pane.updated" }, { type: "pane.closed" }, { type: "pane.exited" }], () => poke?.());
+  // While the event stream is down herdr is taken as unreachable: no 15 s timeouts per sync, only the warning.
+  const link = { up: null as boolean | null };
+  const stop = subscribe(
+    [{ type: "pane.updated" }, { type: "pane.closed" }, { type: "pane.exited" }, { type: "tab.closed" }],
+    () => poke?.(),
+    (up) => {
+      if (link.up !== up) poke?.();
+      link.up = up;
+    },
+  );
   try {
     for (;;) {
       const left = deadline - Date.now();
@@ -630,7 +772,8 @@ export async function check(run: Run, o: { wait: boolean; timeoutMs: number; typ
         setTimeout(r, Math.min(left, 1500));
       });
       poke = null;
-      await sync();
+      if (link.up === false) await markHerdrUnreachable();
+      else await sync();
       const m = pick(load());
       if (m) return warned(m);
     }
