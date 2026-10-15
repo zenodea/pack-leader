@@ -1,6 +1,6 @@
 // A searchable list for the terminal: type to filter, arrows or ctrl+j/k to
 // move, enter to take the highlighted entry (or the typed text when nothing
-// matches), esc to cancel. Used by `pack-leader config pick`.
+// matches), esc to cancel. Used by `pack-leader settings`.
 import { emitKeypressEvents } from "node:readline";
 import { bold, dim, fg, inverse, pad, screen, truncate, width } from "./ansi.ts";
 
@@ -31,13 +31,13 @@ export function fuzzyFilter(query: string, items: PickItem[]): PickItem[] {
     .map((x) => x.item);
 }
 
-export type PickOptions = { title: string; items: PickItem[]; current?: string | null; allowCustom?: boolean; hint?: string };
+export type PickOptions = { title: string; items: PickItem[]; current?: string | null; allowCustom?: boolean; hint?: string; nested?: boolean };
 
 /** Resolves to the chosen value, the typed text when `allowCustom` and nothing matched, or undefined on cancel. */
 export function pick(o: PickOptions): Promise<string | undefined> {
   const out = process.stdout;
   const inp = process.stdin;
-  if (!inp.isTTY || !out.isTTY) return Promise.reject(new Error("pack-leader config pick needs a terminal"));
+  if (!inp.isTTY || !out.isTTY) return Promise.reject(new Error("pack-leader settings needs a terminal"));
   let query = "";
   let sel = Math.max(0, o.items.findIndex((i) => i.value === o.current));
   let visible = fuzzyFilter(query, o.items);
@@ -75,12 +75,12 @@ export function pick(o: PickOptions): Promise<string | undefined> {
     emitKeypressEvents(inp);
     inp.setRawMode(true);
     inp.resume();
-    out.write(screen.alt + screen.hideCursor + screen.clear);
+    out.write(o.nested ? screen.clear : screen.alt + screen.hideCursor + screen.clear);
     const finish = (value: string | undefined) => {
       inp.setRawMode(false);
       inp.pause();
       inp.removeListener("keypress", onKey);
-      out.write(screen.showCursor + screen.main);
+      if (!o.nested) out.write(screen.showCursor + screen.main);
       resolve(value);
     };
     const onKey = (ch: string | undefined, key: { name?: string; ctrl?: boolean; meta?: boolean; sequence?: string }) => {

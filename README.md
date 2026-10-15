@@ -74,7 +74,8 @@ an agent's claims.
 | --- | --- |
 | **Plan work** | Tasks carry specs, titles and outcomes. Use `--depends-on` for ordering, `worker start --retry` for failed tasks, and `--parent` / `task tree` for hierarchy. Parent links are not dependencies. |
 | **Require approval** | `gate create --task TASK_ID --reason "…"` blocks dispatch. Resolve with `gate resolve GATE_ID --decision approve\|reject`. Decisions are durable, coordinator-owned and immutable—not worker questions. |
-| **Choose agents** | `config pick` or `config set` sets defaults. Override `--kind`, `--model` and `--thinking` per worker; pass native agent arguments after `--`. |
+| **Choose defaults** | `pack-leader settings` opens a settings page: harness, model, effort, placement, worktrees (on, off or leader decides), observer, stall alert and handoff. `config set` writes the same values from scripts. Override `--kind`, `--model` and `--thinking` per worker; pass native agent arguments after `--`. |
+| **Hand off long runs** | With handoff on, a Claude Code or pi coordinator whose context passes the limit writes a note; Pack Leader clears its session (`/clear` or `/new`) once it is idle and resumes the run from the note and `pack-leader status`. |
 | **Isolate changes** | `--worktree new` creates a branch and checkout; `--worktree PATH` reuses one. `--base` / `--branch` customize new checkouts. Ordinary `--cwd` execution needs no Git repository. |
 | **Prepare checkouts** | `--setup-command "npm ci"` runs before a local worktree agent launches, with bounded logs and `--setup-timeout` in milliseconds. Failure blocks launch; reuse does not rerun setup. |
 | **Adopt sessions** | `worker adopt NAME --spec "…"` attaches to an existing named idle/done local agent without restarting it. `--target-pane` disambiguates names. Release never closes adopted sessions. |
@@ -107,7 +108,10 @@ before state changes.
 In the sidebar, click a worker to select it; **Enter** or a second click opens
 its tab. Press **`o`** in the sidebar or run `pack-leader leader` to return to the
 coordinator. Selection follows herdr's accent colour. Workers use hidden tabs
-by default; `--placement split` places one beside you instead.
+by default. With placement "beside the leader" in `pack-leader settings` there
+is no sidebar: the coordinator keeps the top left, the observer the bottom
+left, and workers fill the right half, each new one splitting the biggest
+worker the other way.
 
 <details>
 <summary>Optional: keyboard shortcuts and Claude Code permissions</summary>
@@ -115,6 +119,14 @@ by default; `--placement split` places one beside you instead.
 Add shortcuts to herdr's `config.toml`:
 
 ```toml
+[[keys.command]]
+key = "prefix+p"
+type = "popup"
+command = "pack-leader settings"
+description = "Pack Leader: settings"
+width = "60%"
+height = "60%"
+
 [[keys.command]]
 key = "prefix+alt+w"
 type = "plugin_action"

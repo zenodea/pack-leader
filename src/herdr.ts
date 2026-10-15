@@ -128,6 +128,11 @@ export async function paneSplit(p: { target_pane_id: string; direction: "right" 
   return objectIn<PaneInfo>(await herdr("pane.split", { ...p, focus: false }), "pane", "pane.split");
 }
 
+export type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; direction: "right" | "down"; ratio: number; first: LayoutNode; second: LayoutNode };
+export const layoutExport = async (tab_id: string): Promise<LayoutNode> => objectIn<{ root: LayoutNode }>(await herdr("layout.export", { tab_id }), "layout", "layout.export").root;
+export type PaneDestination = { type: "tab"; tab_id: string; split: "right" | "down"; target_pane_id?: string | null; ratio?: number } | { type: "new_tab"; workspace_id?: string | null; label?: string | null };
+export const paneMove = (pane_id: string, destination: PaneDestination) => herdr("pane.move", { pane_id, destination, focus: false });
+
 export async function agentStart(p: { name: string; kind: string; pane_id: string; args?: string[]; timeout_ms?: number }): Promise<any> {
   return herdr("agent.start", p, { timeoutMs: (p.timeout_ms ?? 30_000) + 5_000 });
 }

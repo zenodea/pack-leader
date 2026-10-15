@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
 import { loadTheme } from "./theme.ts";
+import { placeInPack } from "./pack-layout.ts";
 import { dropUndelivered, envMs, EXITED_SUMMARY, touch } from "./inbox.ts";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -130,6 +131,7 @@ export type StartOptions = {
   cwd?: string;
   /** `tab`: a hidden tab of its own (default). `split`: a visible pane next to the orchestrator. */
   placement: "tab" | "split";
+  packLayout?: boolean;
   direction: "right" | "down";
   targetPane?: string;
   ratio?: number;
@@ -353,7 +355,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     } else {
       const target = o.targetPane ?? o.run.orchestrator.pane_id;
       if (!target) throw new Error("the run has no orchestrator pane; pass --target-pane");
-      pane = await paneSplit({ target_pane_id: target, direction: o.direction, cwd, env, ratio: o.ratio });
+      pane = o.packLayout ? await placeInPack(o.run, { cwd, env }) : await paneSplit({ target_pane_id: target, direction: o.direction, cwd, env, ratio: o.ratio });
       if (!pane?.pane_id) throw new HerdrError("bad_result", "herdr did not return the new pane");
       paneCreated = true;
       log({ event: "pane.split", run: o.run.id, worker: o.name, pane: pane.pane_id });
@@ -372,7 +374,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   }
 
   // The bar is for the human watching, so no flag turns it off: only PACK_LEADER_BAR=0 in the environment.
-  const barPane = process.env.PACK_LEADER_BAR === "0" ? null : await openLeaderBar(o.run, o.name, pane.pane_id, { where: wt?.branch ?? basename(cwd), whereLabel: wt?.branch ? "Branch" : "Dir", task: task.title });
+  const barPane = process.env.PACK_LEADER_BAR === "0" || o.packLayout ? null : await openLeaderBar(o.run, o.name, pane.pane_id, { where: wt?.branch ?? basename(cwd), whereLabel: wt?.branch ? "Branch" : "Dir", task: task.title });
   const extraArgs = [...o.extraArgs, ...modelArgs(o.kind, o.model, o.thinking)];
   const asked = modelFromArgs(o.kind, extraArgs);
   const worker: Worker = {

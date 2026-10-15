@@ -27,6 +27,18 @@ export type Run = {
   observer?: { pane_id: string; agent: string } | null;
   /** Set while sync() cannot reach herdr: worker liveness verdicts are stale until it clears. */
   herdr_unreachable_since?: string | null;
+  handoff?: RunHandoff | null;
+};
+
+export type RunHandoff = {
+  status: "requested" | "pending" | "resumed" | "failed";
+  requested_at: string;
+  tokens: number;
+  asked: number;
+  note?: string;
+  saved_at?: string;
+  resumed_at?: string;
+  error?: string;
 };
 
 export type GateStatus = "pending" | "approved" | "rejected";

@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { HerdrError } from "./herdr.ts";
+import type { WorktreeMode } from "./config.ts";
 
 /** What a worker's worktree is. Kept on the Worker, and in `state.worktrees` after release. */
 export type WorktreeInfo = {
@@ -144,3 +145,16 @@ export function gitWorktreeRemove(info: WorktreeInfo): void {
 
 /** herdr answers a method it does not know with invalid_request "unknown variant". */
 export const isUnknownMethod = (err: unknown): boolean => (err as HerdrError)?.code === "invalid_request" && /unknown variant/.test((err as Error).message ?? "");
+
+export type WorktreeChoice = { worktree?: string; note?: string };
+
+export function worktreeForMode(mode: WorktreeMode, flag: string | undefined, cwd: string, remote: boolean): WorktreeChoice {
+  if (mode === "off" && flag) throw new Error("worktrees are off in Pack Leader settings (`pack-leader settings`); start the worker without --worktree");
+  if (mode !== "on" || flag || remote) return { worktree: flag };
+  try {
+    repoRoot(cwd);
+    return { worktree: "new" };
+  } catch {
+    return { note: `worktrees are on, but ${cwd} is not in a git repository, so this worker shares it` };
+  }
+}

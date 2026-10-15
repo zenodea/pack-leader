@@ -70,6 +70,8 @@ const commandFlags: Record<string, FlagSchema> = {
   note: { ...schema([], ["body"]), ...workerContext },
   inbox: workerContext,
   config: schema(),
+  settings: schema(),
+  handoff: withRun(schema([], ["body"])),
   skill: schema(["install"]),
   sidebar: schema(),
   leader: withRun(schema()),
@@ -95,7 +97,7 @@ function allowedFor(command: string, args: Args): FlagSchema {
   }
   if (command === "config") {
     const sub = args.positional[0] ?? "show";
-    if (sub === "set") return schema(["clear-model", "clear-thinking", "default"], ["kind", "model", "thinking"]);
+    if (sub === "set") return schema(["clear-model", "clear-thinking", "default"], ["kind", "model", "thinking", "placement", "worktree-mode", "observer", "stall-minutes", "handoff", "handoff-at"]);
     return schema();
   }
   return ownValue(commandFlags, command) ?? schema();
@@ -121,7 +123,7 @@ export function validateCommandArgs(command: string, args: Args): void {
     }
     if (kind === "optional" && value === true) continue;
     if (value === true || value.length === 0) throw new Error(missingValueMessage(name));
-    if (["keep", "timeout", "lines", "ratio", "setup-timeout"].includes(name) && !Number.isFinite(Number(value))) {
+    if (["keep", "timeout", "lines", "ratio", "setup-timeout", "stall-minutes"].includes(name) && !Number.isFinite(Number(value))) {
       throw new Error(`--${name} must be a number`);
     }
     if (name === "timeout" && Number(value) < 0) throw new Error("--timeout must be non-negative");

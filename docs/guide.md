@@ -76,8 +76,12 @@ hidden tab of its own; the sidebar shows it as a box (agent, runtime and
 state, objective, last message: a heartbeat, a `note`, a report, an open
 question with its options, or your answer) under the run's goal; a click
 selects a box, Enter or a second click opens its tab, and `o` (or the "Pack
-Leader: back to the leader" action) comes back. Pass
-`--placement split` only when the user wants to watch a worker next to you.
+Leader: back to the leader" action) comes back. With placement "beside the
+leader" in the settings (or `--placement split`), there is no sidebar: you keep
+the top left, the observer the bottom left, and workers fill the right half of
+your tab, each new one splitting the biggest worker the other way; a released
+worker's neighbour takes its space. Pass `--placement split` yourself only when
+the user wants to watch a worker next to you.
 Never open, focus, or close worker tabs yourself; `pack-leader worker focus <name>`
 shows one when the user asks.
 
@@ -158,6 +162,29 @@ reached: liveness is as last seen, so do not release anything on it alone.
 Heartbeats, asks, notes, worker sends, reports and any herdr state change
 refresh a worker's `last_seen`; one of them after a `stalled` alert re-arms it.
 Each row also shows the worker's `worktree`, when it has one.
+
+### Handoff
+
+With handoff on in the settings, `check --wait` first measures your own context.
+Once it passes the limit, `check` returns `"result": "handoff"` with
+`instructions` instead of waiting:
+
+1. Write a note for the session that replaces you: the user's goal, every
+   instruction, decision and constraint they gave you, anything you promised
+   them, and what you were about to do next. Leave out tasks, workers, reports
+   and messages: Pack Leader's state holds them.
+2. Save it: `pack-leader handoff --body "<note>"`.
+3. End your turn with one line saying you are handing off. Do not run `check`
+   again; while the handoff is pending it only repeats `"status": "pending"`.
+
+Pack Leader waits until you are idle, clears the session (`/clear` in Claude
+Code, `/new` in pi; other harnesses are never asked to hand off), and prompts the fresh one with
+`[pack-leader handoff]`, the run, and your note. Messages that arrive meanwhile
+wait in the inbox, and an `--ack` on the `check` that returned the handoff is
+already applied. A session that starts with `[pack-leader handoff]` is the
+orchestrator: load this guide, run `pack-leader status`, then carry on the loop.
+If you do not hand off after two requests, `check` waits normally again; a
+failed handoff is reported to the user and not retried for that run.
 
 ## Messaging
 
@@ -426,6 +453,7 @@ pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,atte
 pack-leader reply ASK_ID --body "..." [--free]
 pack-leader say "text" | --body "..."
 pack-leader send NAME|@all|@idle|@KIND "text" | --body "..." [--now]
+pack-leader handoff --body "<note>"
 # worker side (adopted sessions use the explicit context prefix in their preamble)
 pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
 pack-leader ask "question" | --body "..." [--options a,b,c] [--timeout MS] | ask --id ID
@@ -433,7 +461,8 @@ pack-leader note "text" | --body "..." | send WORKER "text" | --body "..." [--no
 pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]
 # either
 pack-leader config [show] | pick | set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
-pack-leader skill [--install] | sidebar | leader [--run ID] | observe [--turns N] | observer [--close] | help
+                   [--placement tab|split] [--worktree-mode on|off|leader] [--observer on|off] [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
+pack-leader settings | skill [--install] | sidebar | leader [--run ID] | observe [--turns N] | observer [--close] | help
 ```
 
 `pack-leader help` prints the same commands and flags, with a note on each. Flags are validated for the selected command before it can touch state, archives, herdr, or configuration: unknown options fail with a spelling suggestion when one is likely, and options that take a value (including `--keep` and `--timeout`) fail if the value is missing. Boolean switches reject `=value` forms rather than silently treating them as enabled. List-valued options may be repeated or comma-separated.
@@ -453,7 +482,11 @@ What the less obvious flags do:
   actively claimed tasks cannot be reparented.
 - `config set`: `--default` records the selected kind as the default (without
   `--kind`, the current/default kind is selected). `--kind K` also selects that
-  kind as the default.
+  kind as the default. The other flags store what the settings page shows:
+  `--placement` and `--worktree-mode` for new workers, `--observer` for
+  `run create`, `--stall-minutes N` (0 is off; `PACK_STALL_MS` still wins), and
+  `--handoff`/`--handoff-at` (a token count such as `200000`, `200k` or `1m`).
+  Flags on the command itself still win over the stored values.
 - `worker start`: `--title T` (task title for `--spec`), `--target-pane P` and
   `--ratio R` (with `--placement split`), `--no-default-args` (no
   `--allowedTools` for the agent), `--timeout MS` (agent start, default 45000), and
@@ -461,8 +494,9 @@ What the less obvious flags do:
   once before agent launch; `--setup-timeout MS` defaults to 120000, max 300000).
   Setup output is privately logged with a 256 KiB cap; failures block launch and
   preserve dirty or existing checkouts. Setup is not rerun on `worker prompt`.
-  A split without `--direction` goes right; `--direction` with `--placement tab`
-  is an error. `--host NAME --cwd /remote/path` starts in an existing remote
+  A split without `--target-pane`, `--direction` or `--ratio` joins the right
+  half; with any of them it splits that one pane (right unless `--direction`).
+  `--direction` with `--placement tab` is an error. `--host NAME --cwd /remote/path` starts in an existing remote
   workspace; it accepts tab placement only and rejects worktree/setup options before dispatch.
 - `worker adopt NAME`: attach to one existing named herdr agent only when it is
   idle or done. `--target-pane P` selects the exact pane when names are duplicated;

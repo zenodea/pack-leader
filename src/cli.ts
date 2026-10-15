@@ -37,13 +37,15 @@ import { activeRuns, load, log, nextId, now, resolveRun, ready, runDispatches, r
 import { createGate, GateError, resolveGate, runGates } from "./gates.ts";
 import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
 import { assertTaskParentMutable, taskTree, TaskHierarchyError, validateTaskParent } from "./hierarchy.ts";
+import { worktreeForMode } from "./worktree.ts";
+import { handoffGate, resumeAfterHandoff, saveHandoff, spawnResume } from "./handoff.ts";
 import { closeRun, parseDuration, type PruneOptions, pruneRuns, removeArchives } from "./runs.ts";
 import { AdoptionError, adoptWorker } from "./adoption.ts";
 import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, sweepWorktrees, taskSummary, workerSummary } from "./workers.ts";
 import { SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS } from "./setup-policy.ts";
 import { guide, installSkill } from "./skill.ts";
-import { configFile, defaultsFor, loadConfig, saveConfig } from "./config.ts";
-import { choose } from "./choose.ts";
+import { configFile, defaultsFor, loadConfig, parseTokens, PLACEMENTS, saveConfig, settingsOf, WORKTREE_MODES, type Config, type Placement, type WorktreeMode } from "./config.ts";
+import { describeSettings, runSettings, settingsInForce } from "./settings.ts";
 import { addHost, getHost, HostProfileError, listHosts, removeHost } from "./hosts.ts";
 import { callbackFlagValues, executeRemoteRpc, forwardWorkerCallback, readStdinJson, RemoteError, validateCallbackRequest, withExecutionHost } from "./remote.ts";
 
@@ -57,6 +59,48 @@ const out = (v: unknown) => process.stdout.write(JSON.stringify(v, null, 2) + "\
 export function workspaceOf(paneId: string | null | undefined): string | null {
   const m = typeof paneId === "string" ? /^([A-Za-z0-9_-]+):[A-Za-z0-9_-]+$/.exec(paneId) : null;
   return m ? m[1]! : null;
+}
+
+function onOff(args: Args, name: string): boolean {
+  const v = (str(args, name) ?? "").toLowerCase();
+  if (v === "on" || v === "true") return true;
+  if (v === "off" || v === "false") return false;
+  throw new Error(`--${name} takes on or off`);
+}
+
+function applySettingFlags(config: Config, args: Args): void {
+  const placement = str(args, "placement");
+  if (placement !== undefined) {
+    if (!PLACEMENTS.includes(placement as Placement)) throw new Error(`--placement takes ${PLACEMENTS.join(" or ")}`);
+    config.placement = placement as Placement;
+  }
+  const worktree = str(args, "worktree-mode");
+  if (worktree !== undefined) {
+    if (!WORKTREE_MODES.includes(worktree as WorktreeMode)) throw new Error(`--worktree-mode takes ${WORKTREE_MODES.join(", ")}`);
+    config.worktree = worktree as WorktreeMode;
+  }
+  if (has(args, "observer")) config.observer = onOff(args, "observer");
+  if (has(args, "stall-minutes")) {
+    const minutes = Number(str(args, "stall-minutes"));
+    if (!Number.isInteger(minutes) || minutes < 0) throw new Error("--stall-minutes takes a whole number of minutes, 0 for off");
+    config.stall_minutes = minutes;
+  }
+  if (has(args, "handoff")) config.handoff = { ...config.handoff, enabled: onOff(args, "handoff") };
+  if (has(args, "handoff-at")) config.handoff = { ...config.handoff, at_tokens: parseTokens(str(args, "handoff-at") ?? "") };
+}
+
+function guideSettings(): string {
+  try {
+    return settingsInForce(loadConfig());
+  } catch {
+    return "";
+  }
+}
+
+async function openSettings(fromAction: boolean): Promise<void> {
+  const config = await runSettings();
+  if (fromAction) await notify("Pack Leader", describeSettings(config));
+  out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds, settings: settingsOf(config) });
 }
 
 export type Here = { paneId: string | null; workspaceId: string | null; tabId: string | null; cwd: string };
@@ -156,7 +200,7 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
         const r = installSkill();
         if (fromAction) await notify("Pack Leader", r.bin ? `skill installed, pack-leader on PATH` : `skill installed; ${r.note.join("; ")}`);
         out(r);
-      } else process.stdout.write(guide());
+      } else process.stdout.write(guide() + guideSettings());
       return;
     }
 
@@ -188,13 +232,13 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
             await update((s) => void (s.runs[run.id] && (s.runs[run.id]!.orchestrator.tab_label = before)));
             await tabRename(h.tabId, "leader").catch(() => {});
           }
-          if (!has(args, "no-sidebar") && h.paneId) {
+          if (!has(args, "no-sidebar") && settingsOf(loadConfig()).placement !== "split" && h.paneId) {
             sidebar = await openSidebar(h.paneId, has(args, "left")).catch(() => null);
             if (sidebar) await update((s) => void (s.runs[run.id]!.sidebar_pane_id = sidebar));
             if (sidebar) await renamePane(sidebar, "Pack");
           }
           // The observer goes under the orchestrator once the sidebar stands to its right, so the sidebar keeps its full height.
-          if (!has(args, "no-observer") && h.paneId) {
+          if (!has(args, "no-observer") && settingsOf(loadConfig()).observer && h.paneId) {
             const current = load().runs[run.id];
             if (current) {
               const ob = await startObserver(current).catch((err) => ({ warning: `observer not opened: ${(err as Error).message}` }) as { warning: string });
@@ -385,12 +429,14 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
         const run = currentRun(args);
         const direction = str(args, "direction") ?? "right";
         if (direction !== "right" && direction !== "down") throw new Error("--direction must be right or down");
-        const placement = str(args, "placement") ?? (has(args, "direction") ? "split" : "tab");
+        const config = loadConfig();
+        const settings = settingsOf(config);
+        const placement = str(args, "placement") ?? (has(args, "direction") ? "split" : str(args, "host") ? "tab" : settings.placement);
         if (placement !== "tab" && placement !== "split") throw new Error("--placement must be tab or split");
         // A tab has no direction; asking for both is a mistake, not a preference to pick one of.
         if (placement === "tab" && has(args, "direction")) throw new Error("--direction only applies to --placement split (a split without --direction goes right)");
         if (has(args, "worktree") && !str(args, "worktree")) throw new Error("--worktree takes new or a path");
-        const config = loadConfig();
+        const choice = worktreeForMode(settings.worktree, str(args, "worktree"), str(args, "cwd") ?? run.orchestrator.cwd, Boolean(str(args, "host")));
         const kind = str(args, "kind") ?? config.kind ?? DEFAULT_KIND;
         const defaults = defaultsFor(config, kind);
         const r = await startWorker({
@@ -404,6 +450,7 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
           cwd: str(args, "cwd"),
           host: str(args, "host"),
           placement,
+          packLayout: placement === "split" && !["target-pane", "direction", "ratio"].some((f) => has(args, f)),
           direction,
           targetPane: str(args, "target-pane"),
           ratio: str(args, "ratio") ? num(args, "ratio", 0.5) : undefined,
@@ -412,13 +459,13 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
           thinking: str(args, "thinking") ?? defaults.thinking ?? undefined,
           noDefaultArgs: has(args, "no-default-args"),
           timeoutMs: num(args, "timeout", 45_000),
-          worktree: str(args, "worktree"),
+          worktree: choice.worktree,
           base: str(args, "base"),
           branch: str(args, "branch"),
           setupCommand: str(args, "setup-command"),
           setupTimeoutMs: str(args, "setup-timeout") === undefined ? undefined : num(args, "setup-timeout", SETUP_DEFAULT_TIMEOUT_MS),
         });
-        out({ worker: { name: r.worker.name, kind: r.worker.kind, model: r.worker.model ?? null, thinking: r.worker.thinking ?? null, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd, worktree: r.worker.worktree ?? null, execution_host: r.worker.execution_host?.name ?? null }, task: taskSummary(r.task, load()), ...(r.warning ? { warning: r.warning } : {}) });
+        out({ worker: { name: r.worker.name, kind: r.worker.kind, model: r.worker.model ?? null, thinking: r.worker.thinking ?? null, pane_id: r.pane_id, tab_id: r.worker.tab_id ?? null, cwd: r.worker.cwd, worktree: r.worker.worktree ?? null, execution_host: r.worker.execution_host?.name ?? null }, task: taskSummary(r.task, load()), ...(choice.note ? { note: choice.note } : {}), ...(r.warning ? { warning: r.warning } : {}) });
         if (r.warning) process.exitCode = 1;
         return;
       }
@@ -551,8 +598,26 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
         raised = { timeout_raised_from_ms: timeoutMs, timeout_ms: floor, hint: `a wait shorter than ${Math.round(floor / 60_000)} min was raised to it: check --wait returns as soon as a message arrives, so a short timeout only costs you another call` };
         timeoutMs = floor;
       }
+      const handoff = has(args, "wait") ? await handoffGate(run) : null;
+      if (handoff) {
+        out({ ...acked, ...handoff });
+        return;
+      }
       const r = await check(run, { wait: has(args, "wait"), timeoutMs, types });
       out({ ...acked, ...r, ...raised });
+      return;
+    }
+    case "handoff": {
+      const run = currentRun(args);
+      if (args.positional[0] === "resume") {
+        out({ run: run.id, handoff: await resumeAfterHandoff(run.id) });
+        return;
+      }
+      const body = str(args, "body") ?? args.positional.join(" ");
+      if (!body.trim()) throw new Error('usage: pack-leader handoff --body "<note for the session that replaces you>"');
+      const saved = await saveHandoff(run, body);
+      spawnResume(run.id);
+      out({ handoff: "pending", ...saved, next: "End your turn now with one line saying you are handing off. Pack Leader clears this session once you are idle and resumes the run in a fresh one." });
       return;
     }
     case "reply": {
@@ -696,34 +761,39 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
       const [sub = "show"] = args.positional;
       const config = loadConfig();
       if (sub === "show") {
-        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds });
+        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds, settings: settingsOf(config) });
         return;
       }
       if (sub === "set") {
+        const kindFlags = ["kind", "model", "thinking", "clear-model", "clear-thinking", "default"];
+        const settingFlags = ["placement", "worktree-mode", "observer", "stall-minutes", "handoff", "handoff-at"];
+        applySettingFlags(config, args);
+        const touchesKind = kindFlags.some((f) => has(args, f)) || !settingFlags.some((f) => has(args, f));
         const kind = str(args, "kind") ?? config.kind ?? DEFAULT_KIND;
-        const current = Object.hasOwn(config.kinds, kind) ? config.kinds[kind]! : {};
-        const next = {
-          ...current,
-          model: has(args, "clear-model") ? null : str(args, "model") ?? current.model ?? null,
-          thinking: has(args, "clear-thinking") ? null : str(args, "thinking") ?? current.thinking ?? null,
-        };
-        Object.defineProperty(config.kinds, kind, { value: next, enumerable: true, writable: true, configurable: true });
-        if (has(args, "default") || has(args, "kind")) config.kind = kind;
+        let next: Record<string, unknown> | undefined;
+        if (touchesKind) {
+          const current = Object.hasOwn(config.kinds, kind) ? config.kinds[kind]! : {};
+          next = {
+            ...current,
+            model: has(args, "clear-model") ? null : str(args, "model") ?? current.model ?? null,
+            thinking: has(args, "clear-thinking") ? null : str(args, "thinking") ?? current.thinking ?? null,
+          };
+          Object.defineProperty(config.kinds, kind, { value: next, enumerable: true, writable: true, configurable: true });
+          if (has(args, "default") || has(args, "kind")) config.kind = kind;
+        }
         saveConfig(config);
-        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, [kind]: next });
+        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, ...(next ? { [kind]: next } : {}), settings: settingsOf(config) });
         return;
       }
       if (sub === "pick") {
-        const picked = await choose();
-        if (!picked) {
-          process.stderr.write("cancelled\n");
-          return;
-        }
-        if (fromAction) await notify("Pack Leader", `workers: ${picked.kind}${picked.model ? ` · ${picked.model}` : ""}${picked.thinking ? ` · ${picked.thinking}` : ""}`);
-        out({ file: configFile, ...picked });
+        await openSettings(fromAction);
         return;
       }
       throw new Error(`unknown: pack-leader config ${sub}`);
+    }
+    case "settings": {
+      await openSettings(fromAction);
+      return;
     }
 
     // ---- herdr-driven --------------------------------------------------------
@@ -1045,8 +1115,9 @@ Orchestrator (the agent you talk to)
                     [--placement tab|split] [--direction right|down]
                     [--worktree new|PATH [--base REF] [--branch B]] [--title T] [--target-pane P] [--ratio R]
                     [--setup-command STRING [--setup-timeout MS]] [--no-default-args] [--timeout MS] [-- agent args]
-                                                hidden tab by default; split puts it next to you, on the right
-                                                unless --direction (an error with --placement tab). --worktree new: its own
+                                                hidden tab by default; split fills the right half of your tab, each new worker
+                                                halving the biggest one the other way. --target-pane, --direction or --ratio
+                                                split that one pane instead (--direction is an error with --placement tab). --worktree new: its own
                                                 checkout at <repo>-wt/NAME (or $PACK_WORKTREE_DIR/NAME) on pack/RUN/NAME
                                                 --setup-command runs an explicitly authorized shell hook there once before agent launch
                                                 --setup-timeout defaults to ${SETUP_DEFAULT_TIMEOUT_MS}ms (maximum ${SETUP_MAX_TIMEOUT_MS}ms); hook output is logged privately
@@ -1068,6 +1139,9 @@ Orchestrator (the agent you talk to)
   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
                                                 --wait: returns on the first message; a timeout under PACK_MIN_WAIT_MS (5 min)
                                                 is raised to it. A JSON heartbeat line on stderr every PACK_WAIT_HEARTBEAT_MS (15000; 0 off)
+                                                with handoff on and your context past its limit, --wait returns result "handoff" instead
+  pack-leader handoff --body "<note>"                save the note for the session that replaces you; end your turn after it,
+                                                Pack Leader clears this session and resumes the run in a fresh one
   pack-leader reply ASK_ID --body "..." [--free]     an ask with options takes one (or a unique prefix); --free for free text
   pack-leader say "text" | --body "..."              from the human (or the observer) to the orchestrator: a user message in check
   pack-leader send NAME|@all|@idle|@KIND "text" | --body "..." [--now]   @all: dispatched workers; @idle: idle or done; @KIND: by kind
@@ -1081,9 +1155,13 @@ Worker (registered session; adopted workers use the explicit prefix in their pre
                                                 done/ask/note/heartbeat/send/inbox: override the IDs from the environment; orchestrator send accepts --run only
 Remote host requirements: reciprocal non-interactive SSH access, pre-trusted host keys, and Pack Leader/herdr/Node already installed remotely. Remote worktrees, local setup hooks and adoption are unsupported; host disconnects preserve workers/tasks as unreachable, not exited.
 Either
-  pack-leader config [show]                            default harness and per-harness model and thinking level for new workers
-  pack-leader config pick                              choose them from searchable lists (needs a terminal)
+  pack-leader settings                                 the settings page: harness, model, effort, placement, worktrees, observer,
+                                                       stall alert and handoff (needs a terminal)
+  pack-leader config pick                              the same page, under its old name
+  pack-leader config [show]                            the settings as JSON
   pack-leader config set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
+                     [--placement tab|split] [--worktree-mode on|off|leader] [--observer on|off]
+                     [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
   pack-leader skill [--install]                        the guide; or install it into Claude Code, Codex and pi
   pack-leader sidebar                                  the pack, live (run by herdr in a pane)
   pack-leader leader [--run ID]                        focus this pane's orchestrator (from a worker pane or the sidebar)

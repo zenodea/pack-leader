@@ -5,6 +5,7 @@ import { basename, dirname } from "node:path";
 import { hostname } from "node:os";
 import { agentPrompt, getAgent, type HerdrError, isRemotePromptReceiptError, listAgents, listPanes, logHerdrError, observePromptReceipt, promptLanded, type AgentStatus, subscribe } from "./herdr.ts";
 import { stateFile } from "./paths.ts";
+import { DEFAULT_SETTINGS, loadConfig, settingsOf } from "./config.ts";
 import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load } from "./state.ts";
 import { settleDispatch } from "./dispatch.ts";
 import { withExecutionHost } from "./remote.ts";
@@ -55,6 +56,7 @@ function prune(state: State): void {
 /** Wake the orchestrator when it sits idle: it may have stopped waiting. Best effort. */
 export async function nudgeOrchestrator(run: Run, text: string): Promise<boolean> {
   if (!run.orchestrator.pane_id) return false;
+  if (load().runs[run.id]?.handoff?.status === "pending") return false;
   try {
     const a = await getAgent(run.orchestrator.pane_id);
     if (a.agent_status !== "idle" && a.agent_status !== "done") return false;
@@ -771,7 +773,15 @@ export function envMs(name: string, fallback: number): number {
 }
 
 /** Owing a report with no sign of life for this long raises a `stalled` attention. PACK_STALL_MS=0 disables. */
-export const stallMs = () => envMs("PACK_STALL_MS", 20 * 60_000);
+export const stallMs = () => envMs("PACK_STALL_MS", configuredStallMinutes() * 60_000);
+
+function configuredStallMinutes(): number {
+  try {
+    return settingsOf(loadConfig()).stall_minutes;
+  } catch {
+    return DEFAULT_SETTINGS.stall_minutes;
+  }
+}
 
 /** The warning check/status/worker list print while sync() cannot reach herdr. */
 export function herdrWarning(run: Run | undefined): string | undefined {
