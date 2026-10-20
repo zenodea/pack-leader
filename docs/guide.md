@@ -85,6 +85,16 @@ the user wants to watch a worker next to you.
 Never open, focus, or close worker tabs yourself; `pack-leader worker focus <name>`
 shows one when the user asks.
 
+The sidebar's `[u] Unread` and `[y] From you` counters also have keyboard
+views. Press `u` to inspect unacknowledged agent messages or `y` to inspect
+human messages waiting for the coordinator, scoped to the selected run.
+Messages appear oldest first with sender, type, age and preview. Use `j`/`k`
+or the arrow keys to browse, Enter to read the full message, and Esc to return
+to the list and then the dashboard. Full messages can be scrolled. These are
+read-only views: opening or reading a message never acknowledges it or sends
+a reply. Continue processing and acknowledging messages through `check` and
+`reply` as normal.
+
 `pack-leader check --wait` blocks until the oldest unread message arrives, so give
 the shell tool a timeout at least as long (10 minutes is the usual ceiling).
 A `timeout` result is a checkpoint: look at `pack-leader status`, then wait again.

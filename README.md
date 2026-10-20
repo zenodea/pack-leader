@@ -107,8 +107,19 @@ before state changes.
 
 In the sidebar, click a worker to select it; **Enter** or a second click opens
 its tab. Press **`o`** in the sidebar or run `pack-leader leader` to return to the
-coordinator. Selection follows herdr's accent colour. Workers use hidden tabs
-by default. With placement "beside the leader" in `pack-leader settings` there
+coordinator. Selection follows herdr's accent colour.
+
+The header's **`[u] Unread`** and **`[y] From you`** counters open read-only
+message queues for the selected run. Press **`u`** for pending agent reports,
+questions, notes and alerts, or **`y`** for your messages waiting for the
+coordinator. Messages are oldest first and show their sender, type, age and
+preview. Use **j/k** or **↑/↓** to browse, **Enter** to read a full message, and
+**Esc** to return to the list and then the worker dashboard. Long messages can
+be scrolled in the detail view. Looking at a message **does not acknowledge
+it**: unread means the coordinator has not handled it, not that you have not
+looked at it.
+
+Workers use hidden tabs by default. With placement "beside the leader" in `pack-leader settings` there
 is no sidebar: the coordinator keeps the top left, the observer the bottom
 left, and workers fill the right half, each new one splitting the biggest
 worker the other way.
