@@ -50,8 +50,11 @@ pack-leader check --wait --timeout 540000
 
 A run opens a sidebar and an **observer agent** for progress questions; skip
 these with `--no-sidebar` or `--no-observer`. The observer reads run state and
-recent coordinator turns. `pack-leader say "…"` sends your instructions to the
-coordinator.
+recent coordinator turns. Ask it about a pack member's progress, approach or
+blocker and it also reads that member's live activity or saved screen, including
+remote members. It stays read-only: it cannot steer workers or acknowledge
+messages. `pack-leader say "…"` sends your instructions to the coordinator only
+when you ask it to relay them.
 
 Keep checking until every task has an explicit outcome. Answer questions with
 `reply MESSAGE_ID --body "…"` and acknowledge messages with `check --ack MESSAGE_ID`.
@@ -107,7 +110,10 @@ before state changes.
 
 In the sidebar, click a worker to select it; **Enter** or a second click opens
 its tab. Press **`o`** in the sidebar or run `pack-leader leader` to return to the
-coordinator. Selection follows herdr's accent colour.
+coordinator. Selection follows herdr's accent colour. In a worker's **Back to
+leader** bar, click or press **Enter**, **o** or **Space** to return to that
+run's coordinator. A failed return shows an error in the bar so you can retry;
+the global back-to-leader action reports failures as a notification.
 
 The header's **`[u] Unread`** and **`[y] From you`** counters open read-only
 message queues for the selected run. Press **`u`** for pending agent reports,

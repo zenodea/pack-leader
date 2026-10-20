@@ -161,7 +161,13 @@ export type StartOptions = {
 async function openLeaderBar(run: Run, name: string, paneId: string, info: { where: string; whereLabel: "Branch" | "Dir"; task: string }): Promise<string | null> {
   try {
     const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
-    const env: Record<string, string> = { PACK_RUN_ID: run.id, PACK_WORKER: name, PACK_OBJECTIVE: oneLine(run.objective), PACK_WHERE: info.where, PACK_WHERE_LABEL: info.whereLabel, PACK_TASK: oneLine(info.task) };
+    const env: Record<string, string> = {
+      PACK_RUN_ID: run.id, PACK_WORKER: name, PACK_OBJECTIVE: oneLine(run.objective), PACK_WHERE: info.where, PACK_WHERE_LABEL: info.whereLabel, PACK_TASK: oneLine(info.task),
+      // Herdr replaces protected HERDR_* variables on plugin panes. Carry the
+      // creator's state/socket in private aliases for the bar's leader subprocess.
+      PACK_LEADER_STATE_DIR: stateDir, PACK_LEADER_SOCKET_PATH: herdrSocketPath(),
+      PACK_ROLE: "bar", PACK_REMOTE_CALLBACK_TARGET: "",
+    };
     const accent = loadTheme().accent;
     if (accent) env.PACK_ACCENT = accent;
     const bar = await pluginPaneOpen({ entrypoint: "bar", target_pane_id: paneId, direction: "down", env });

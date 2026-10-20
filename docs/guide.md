@@ -68,9 +68,16 @@ its own), then `pack-leader worker resend <name>`.
 
 `run create` opens the Pack Leader sidebar next to you and an observer agent
 under you (`--no-observer` skips it): a second agent the user talks to about
-the run, which reads `pack-leader observe` (state plus your last turns) and
-never acts on the run. What the user tells it to pass on reaches you as a
-`user` message in `check`. Leave the observer alone: it is not a worker and
+the run. Every answer starts with `pack-leader observe` (state plus your last
+turns). When asked to analyse a pack member, its progress or approach, it also
+uses `pack-leader worker read NAME --run ID --lines 120` to inspect the relevant
+member's live activity or saved screen. The same read command supports remote
+members and `--dispatch ID` for earlier attempts from that run. This is
+on-demand inspection, not continuous polling. It distinguishes screen evidence
+from verified outcomes, reports unavailable reads honestly, and never acts on
+the run: no steering workers, acknowledging messages or editing files. What
+the user tells it to pass on reaches you as a `user` message in `check`; it
+never forwards anything on its own. Leave the observer alone: it is not a worker and
 `worker list` does not show it. Each worker starts in a
 hidden tab of its own; the sidebar shows it as a box (agent, runtime and
 state, objective, last message: a heartbeat, a `note`, a report, an open
@@ -84,6 +91,13 @@ worker's neighbour takes its space. Pass `--placement split` yourself only when
 the user wants to watch a worker next to you.
 Never open, focus, or close worker tabs yourself; `pack-leader worker focus <name>`
 shows one when the user asks.
+
+The worker's two-row **Back to leader** bar also returns to its run's
+coordinator: click it, or press Enter, `o` or Space while it has focus.
+Mouse navigation activates on release, after Herdr has focused the clicked
+bar. A failed return displays a retryable error in the bar; the global
+back-to-leader action shows a notification instead of failing silently.
+Navigation does not acknowledge messages or change task state.
 
 The sidebar's `[u] Unread` and `[y] From you` counters also have keyboard
 views. Press `u` to inspect unacknowledged agent messages or `y` to inspect

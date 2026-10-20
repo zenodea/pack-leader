@@ -41,6 +41,7 @@ import { worktreeForMode } from "./worktree.ts";
 import { handoffGate, resumeAfterHandoff, saveHandoff, spawnResume } from "./handoff.ts";
 import { closeRun, parseDuration, type PruneOptions, pruneRuns, removeArchives } from "./runs.ts";
 import { AdoptionError, adoptWorker } from "./adoption.ts";
+import { resolveLeaderRun } from "./leader.ts";
 import { DEFAULT_KIND, nextAction, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, sweepWorktrees, taskSummary, workerSummary } from "./workers.ts";
 import { SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS } from "./setup-policy.ts";
 import { guide, installSkill } from "./skill.ts";
@@ -852,11 +853,21 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
     }
     case "leader": {
       // herdr action (or a human in a worker pane): back to the orchestrator of the run this pane belongs to.
-      requireHerdr();
-      const run = currentRun(args);
-      if (!run.orchestrator.pane_id) throw new Error(`run ${run.id} has no orchestrator pane`);
-      await paneFocus(run.orchestrator.pane_id);
-      out({ run: run.id, focused: run.orchestrator.pane_id });
+      try {
+        requireHerdr();
+        const h = here();
+        const run = resolveLeaderRun(load(), { runId: str(args, "run"), paneId: h.paneId, workspaceId: h.workspaceId });
+        if (!run.orchestrator.pane_id) throw new Error(`run ${run.id} has no orchestrator pane`);
+        // Herdr's direct pane focus selects its owning tab AND workspace. Do not
+        // use stored tab IDs (the pane may have moved), or require an agent label.
+        await paneFocus(run.orchestrator.pane_id);
+        out({ run: run.id, focused: run.orchestrator.pane_id });
+      } catch (err) {
+        // Plugin actions have no terminal to show stderr in. The bar displays its
+        // own error; ordinary CLI callers still get the machine-readable failure.
+        if (fromAction) await notify("Back to leader failed", (err as Error).message);
+        throw err;
+      }
       return;
     }
     case "sidebar-open": {

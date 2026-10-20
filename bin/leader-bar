@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Pack Leader: the two-row bar herdr shows above a worker's pane. A click on it, or Enter, o
-# or space while it has the keyboard, focuses the run's orchestrator. Pack Leader opens it
-# with PACK_RUN_ID, PACK_WORKER, PACK_OBJECTIVE, PACK_WHERE and PACK_WHERE_LABEL (Branch or
-# Dir), PACK_TASK and PACK_ACCENT in the environment; q closes it.
+# The two-row worker bar. Click (release), Enter, o or space returns to the leader;
+# q closes it. PACK_RUN_ID pins navigation even when several runs share a workspace.
 set -u
 run="${PACK_RUN_ID:-}"
 worker="${PACK_WORKER:-}"
@@ -12,6 +10,9 @@ where_label="${PACK_WHERE_LABEL:-Where}"
 task="${PACK_TASK:-}"
 here="$(cd "$(dirname "$0")" && pwd)"
 pl="${HERDR_PLUGIN_ROOT:-$(dirname "$here")}/bin/pack-leader"
+error=""
+cols=80
+redraw=0
 
 accent() {
   if [[ "${PACK_ACCENT:-}" =~ ^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$ ]]; then
@@ -21,39 +22,61 @@ accent() {
   fi
 }
 
-# `s` cut to `n` cells with an ellipsis (plain text only).
+# Leave slack at the right edge so the second row cannot wrap/scroll the button away.
 cut() { local s=$1 n=$2; if (( n <= 0 )); then printf ''; elif (( ${#s} > n )); then printf '%s…' "${s:0:n-1}"; else printf '%s' "$s"; fi; }
-label() { printf '\033[1;2m%s\033[22m ' "$1"; }   # a bold, dim field name
-value() { printf '%s' "$1"; }
-quote() { printf '\033[3m%s\033[23m' "$1"; }       # free text (goal, task) in italics
-
-# Two columns: the button on the left, the run on the right.
-#   ◀ Back to leader    Leader  <goal, italic>
-#                       Worker  name   Branch  pack/…   Task  <title, italic>
+plain() { LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' | tr '\r\n\t' '   '; }
 draw() {
-  local cols
-  cols=$(tput cols 2>/dev/null || echo 80)
-  local btn=" ◀ Back to leader"
-  local col=$(( ${#btn} + 4 ))           # ◀ may take two cells: one cell of slack
-  local width=$(( cols - col - 3 ))      # room for the info column (border slack included)
-  local indent
-  indent=$(printf '%*s' "$col" "")
+  local size width btn=" ◀ Back to leader" info=""
+  # tput in command substitution can report its default 80 rather than the PTY width.
+  size=$(stty size 2>/dev/null) || size="2 80"
+  cols=${size##* }
+  [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+  width=$(( cols - 2 ))
   printf '\033[H\033[2J'
-  printf '%s\033[1m%s\033[22m\033[39m' "$(accent)" "$btn"
-  printf '%*s' $(( col - ${#btn} )) ""
-  label "Leader"; quote "$(cut "$objective" $(( width - 7 )))"
-  printf '\033[2;1H%s' "$indent"
-  local used=0
-  if [[ -n "$worker" ]]; then label "Worker"; value "$worker"; printf '   '; used=$(( used + 7 + ${#worker} + 3 )); fi
-  if [[ -n "$where" ]]; then label "$where_label"; value "$where"; printf '   '; used=$(( used + ${#where_label} + 1 + ${#where} + 3 )); fi
-  if [[ -n "$task" ]]; then label "Task"; quote "$(cut "$task" $(( width - used - 5 )))"; fi
-  printf '\033[0m'
+  if [[ -n "$error" ]]; then
+    printf '\033[31;1m%s\033[0m' "$(cut 'Back failed; o/Enter: retry' "$width")"
+    printf '\033[2;1H%s' "$(cut "$error" "$width")"
+  else
+    printf '%s\033[1m%s\033[0m' "$(accent)" "$(cut "$btn" "$width")"
+    if (( width > ${#btn} + 12 )); then
+      printf '    \033[2m%s\033[0m' "$(cut "Leader $(printf '%s' "$objective" | plain)" $(( width - ${#btn} - 4 )))"
+    fi
+    [[ -n "$worker" ]] && info="Worker $worker"
+    [[ -n "$where" ]] && info+="   $where_label $where"
+    [[ -n "$task" ]] && info+="   Task $task"
+    printf '\033[2;1H\033[2m%s\033[0m' "$(cut "$(printf '%s' "$info" | plain)" "$width")"
+  fi
 }
 
-go() { "$pl" leader ${run:+--run "$run"} >/dev/null 2>&1; }
-cleanup() { printf '\033[?1006l\033[?1000l\033[?25h'; stty sane 2>/dev/null; }
+go() {
+  local output status
+  # Do not let a child consume queued mouse releases/keys. Keep diagnostics visible
+  # in this two-row pane, including launcher errors when Node is not on PATH.
+  if output=$(
+    # The host pins its own HERDR_* paths on plugin panes; restore the creator's
+    # private aliases only for navigation, never for a worker callback or SSH relay.
+    [[ -z "${PACK_LEADER_STATE_DIR:-}" ]] || export HERDR_PLUGIN_STATE_DIR="$PACK_LEADER_STATE_DIR"
+    [[ -z "${PACK_LEADER_SOCKET_PATH:-}" ]] || export HERDR_SOCKET_PATH="$PACK_LEADER_SOCKET_PATH"
+    export PACK_ROLE=bar PACK_REMOTE_CALLBACK_TARGET=""
+    "$pl" leader ${run:+--run "$run"} </dev/null 2>&1
+  ); then
+    error=""
+  else
+    status=$?
+    error=$(printf '%s' "$output" | plain)
+    [[ -n "$error" ]] || error="leader command exited $status"
+  fi
+  draw
+}
+tty_state=$(stty -g 2>/dev/null) || tty_state=""
+cleanup() {
+  printf '\033[?1006l\033[?1000l\033[?25h'
+  [[ -z "$tty_state" ]] || stty "$tty_state" 2>/dev/null
+}
 trap cleanup EXIT
-trap draw WINCH
+# Queue resize paints: re-entering draw mid-row can append the old-width row
+# after the new narrow frame and scroll the button off a two-row terminal.
+trap 'redraw=1' WINCH
 trap 'exit 0' HUP TERM INT
 
 stty -echo -icanon min 1 time 0 2>/dev/null
@@ -61,12 +84,26 @@ printf '\033[?25l\033[?1000h\033[?1006h'
 draw
 
 seq=""
-while IFS= read -rsn1 c; do
+while :; do
+  if (( redraw )); then redraw=0; draw; fi
+  # Bash 3 (macOS) needs an integer timeout and returns 1 for BOTH timeout and
+  # EOF. Time only partial escapes; the next ordinary read handles EOF normally.
+  if [[ -n "$seq" ]]; then
+    if ! IFS= read -rsn1 -t 1 c; then seq=""; continue; fi
+  elif ! IFS= read -rsn1 c; then
+    (( redraw )) && continue
+    break
+  fi
   if [[ -n "$seq" ]]; then
     seq+="$c"
-    # A CSI sequence ends on a letter or ~; a left button press is \e[<0;x;yM.
     if [[ "$c" =~ [A-Za-z~] ]]; then
-      [[ "$seq" =~ ^$'\033'\[\<0\;[0-9]+\;[0-9]+M$ ]] && go
+      # Activate once, on left SGR RELEASE, even if the host consumed the press.
+      # Herdr 0.9.1 forwards Down and then focuses the clicked pane: navigating on
+      # Down races that focus. Waiting for Up also avoids double navigation.
+      if [[ "$seq" =~ ^$'\033'\[\<0\;([0-9]{1,5})\;([12])m$ ]]; then
+        x=$((10#${BASH_REMATCH[1]}))
+        (( x >= 1 && x <= cols )) && go
+      fi
       seq=""
     elif (( ${#seq} > 32 )); then
       seq=""
