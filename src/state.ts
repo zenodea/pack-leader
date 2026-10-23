@@ -8,10 +8,13 @@ import { ensureDir, lockDir, logFile, stateDirDivergence, stateFile } from "./pa
 import type { AgentStatus } from "./herdr.ts";
 import type { WorktreeInfo, WorktreeRecord } from "./worktree.ts";
 import type { SetupMetadata } from "./setup.ts";
+import type { Runtime, RoutingProvenance } from "./routing.ts";
 import type { HostProfile } from "./hosts.ts";
+import type { RequestRecord } from "./requests.ts";
 
-export type TaskStatus = "pending" | "dispatched" | "succeeded" | "failed" | "blocked";
-export type MessageType = "done" | "ask" | "reply" | "heartbeat" | "note" | "followup" | "attention" | "user";
+export const TASK_STATUSES = ["pending", "dispatched", "succeeded", "failed", "blocked"] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+export type MessageType = "done" | "ask" | "reply" | "heartbeat" | "note" | "escalation" | "followup" | "attention" | "user";
 
 export type Run = {
   id: string;
@@ -28,7 +31,22 @@ export type Run = {
   /** Set while sync() cannot reach herdr: worker liveness verdicts are stale until it clears. */
   herdr_unreachable_since?: string | null;
   handoff?: RunHandoff | null;
+  /** A sub-run: the worker (and its dispatch) that coordinates it from its own pane. Top-level runs have none. */
+  parent?: { run_id: string; worker: string; task_id: string | null; dispatch_id: string | null } | null;
+  /** 0 for a top-level run, one more for each sub-run level. */
+  depth?: number;
 };
+
+/** How deep sub-runs may nest (`PACK_MAX_RUN_DEPTH`, default 1: a worker may coordinate one sub-run level; 0 forbids). */
+export function maxRunDepth(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.PACK_MAX_RUN_DEPTH;
+  return raw !== undefined && Number.isInteger(Number(raw)) && Number(raw) >= 0 ? Number(raw) : 1;
+}
+
+/** Active sub-runs coordinated by `worker` of run `runId`. */
+export function childRuns(state: State, runId: string, worker: string): Run[] {
+  return activeRuns(state).filter((r) => r.parent?.run_id === runId && r.parent.worker === worker);
+}
 
 export type RunHandoff = {
   status: "requested" | "pending" | "resumed" | "failed";
@@ -56,6 +74,9 @@ export type TaskGate = {
   decision?: GateDecision;
   resolved_at?: string;
   resolution_reason?: string;
+  /** A decision gate: the choices it asks between. Approving it records one of them as `choice`. */
+  options?: string[];
+  choice?: string;
 };
 
 export type Task = {
@@ -74,9 +95,13 @@ export type Task = {
   created_at: string;
   updated_at: string;
   outcome: { summary: string; files_modified: string[]; report_path: string | null } | null;
+  /** Set when the coordinator returns the task to pending: failed attempts before it no longer count toward the retry limit. */
+  retry_reset_at?: string;
 };
 
 export type Worker = {
+  /** The phase from the worker's last heartbeat, if it gave one. */
+  phase?: string;
   name: string;
   run_id: string;
   kind: string;
@@ -176,6 +201,8 @@ export type Message = {
   status?: AttentionStatus;
   /** For a reply: the ask it answers. */
   reply_to?: string;
+  /** For a heartbeat: the worker's phase (investigating, implementing, reviewing, waiting, ...). */
+  phase?: string;
   /** For an ask: the answers the worker offers (`pack-leader ask --options a,b,c`). */
   options?: string[];
   /** For a reply to an ask with options: the chosen option (or the free text with `--free`). */
@@ -209,6 +236,9 @@ export type Dispatch = {
   /** The prompt text the worker received. */
   preamble: string;
   cwd: string;
+  /** Resolved runtime and safe routing decision for this attempt; absent in legacy files. */
+  runtime?: Runtime;
+  routing?: RoutingProvenance;
   /** Canonical --worktree checkout reserved during initial start admission; absent on older records and ordinary --cwd starts. */
   worktree_path?: string;
   /** Renewable lease for a worker start that has not registered its pane yet; started_at remains immutable history. */
@@ -242,6 +272,8 @@ export type State = {
   worktrees?: Record<string, WorktreeRecord>;
   /** Optional in v1 state files written before durable approval gates existed. */
   gates?: Record<string, TaskGate>;
+  /** `--retry-request` identities and their recorded results; optional, dropped after a week. */
+  requests?: Record<string, RequestRecord>;
 };
 
 export const emptyState = (): State => ({ version: 1, runs: {}, tasks: {}, workers: {}, messages: [], dispatches: {}, worktrees: {}, gates: {}, seq: 0 });
@@ -509,6 +541,12 @@ export function resolveRun(
   opts: { runId?: string; paneId?: string | null; workspaceId?: string | null; allowClosed?: boolean },
   env: NodeJS.ProcessEnv = process.env,
 ): Run {
+  // A worker coordinating a sub-run from its pane means that run, not the one in its environment
+  // (which still names the parent run, for its own done/ask/note).
+  if (!opts.runId && opts.paneId && (env.PACK_ROLE === "worker" || env.PACK_WORKER)) {
+    const child = activeRuns(state).find((r) => r.parent && r.orchestrator.pane_id === opts.paneId);
+    if (child) return child;
+  }
   const id = opts.runId || env.PACK_RUN_ID;
   if (id) {
     const r = state.runs[id];

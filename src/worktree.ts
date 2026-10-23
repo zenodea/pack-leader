@@ -34,7 +34,7 @@ export type WorktreeRecord = WorktreeInfo & {
   /** Released with --keep-worktree: the sweep leaves it alone. */
   kept?: boolean;
   /** Fail-closed pane/cleanup lifecycle; only a confirmed pane closure clears this. */
-  cleanup_protection?: "release_in_progress" | "pane_kept" | "pane_close_failed" | "forgotten";
+  cleanup_protection?: "release_in_progress" | "pane_kept" | "pane_close_failed" | "forgotten" | "abandoned";
 };
 
 function git(cwd: string, args: string[]): string {

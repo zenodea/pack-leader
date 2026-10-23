@@ -3,7 +3,7 @@
 import { watch, type FSWatcher } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
-import { bold, dim, fg, fgRgb, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
+import { bold, closeWithItalic, dim, fg, fgRgb, italic, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
 import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "./herdr.ts";
 import { ensureDir, stateDir } from "./paths.ts";
 import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, type Worker } from "./state.ts";
@@ -18,8 +18,9 @@ const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("�
 const word: Record<string, string> = { idle: "idle", done: "done", working: "working", blocked: "BLOCKED", unknown: "?", exited: "gone", unverifiable: "NO AGENT", unreachable: "UNREACHABLE", stalled: "STALLED" };
 const alarming = new Set(["blocked", "unverifiable", "unreachable", "stalled"]);
 
-function elapsed(iso: string): string {
-  const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+function elapsed(iso: string, until?: string): string {
+  const end = until ? Date.parse(until) : NaN;
+  const s = Math.max(0, Math.floor(((Number.isFinite(end) ? end : Date.now()) - Date.parse(iso)) / 1000));
   const sec = String(s % 60).padStart(2, "0");
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m${sec}s`;
@@ -35,7 +36,7 @@ export function lastMessageFor(state: State, runId: string, worker: string, disp
     const m = state.messages[i]!;
     if (m.run_id !== runId) continue;
     if (dispatchId && m.dispatch_id !== dispatchId) continue;
-    if (m.from === worker && (m.type === "heartbeat" || m.type === "note" || m.type === "done" || m.type === "ask")) return m;
+    if (m.from === worker && (m.type === "heartbeat" || m.type === "note" || m.type === "escalation" || m.type === "done" || m.type === "ask")) return m;
     if (m.to === worker && m.type === "reply") return m;
   }
   return null;
@@ -78,7 +79,9 @@ export function boxLines(w: Worker, t: Task | null, last: Message | null, st: st
   const agentLine = `${glyph[st] ?? "?"} ${name} ${harness}`;
   // Selected, a long model name moves the harness to a line of its own instead of being cut.
   const agent = selected && width(agentLine) > inner ? [`${glyph[st] ?? "?"} ${name}`, ...wrapAll(harness, inner - 2).map((l) => "  " + l)] : [agentLine];
-  const runtime = `${dim("runtime")} ${elapsed(w.started_at)} ${dim("·")} ${alarming.has(st) ? fg.red(word[st]!) : word[st] ?? st}`;
+  // The clock stops when the worker's current task settles (done, failed, released): it measures the work, not the idle after it.
+  const settled = t && t.dispatch_id === w.dispatch_id && (t.status === "succeeded" || t.status === "failed") ? t.updated_at : undefined;
+  const runtime = `${dim("runtime")} ${elapsed(w.started_at, settled)} ${dim("·")} ${alarming.has(st) ? fg.red(word[st]!) : word[st] ?? st}`;
   // A prefixed line: `prefix` styled, `plain` its unstyled text, so a wrapped first line can carry it.
   const prefixed = (prefix: string, plain: string, body: string, style: (l: string) => string = (l) => l, max = 1): string[] => {
     if (!selected) return wrap(plain + body, inner, max).map((l, i) => style(i === 0 && l.startsWith(plain) ? prefix + l.slice(plain.length) : l));
@@ -95,6 +98,7 @@ export function boxLines(w: Worker, t: Task | null, last: Message | null, st: st
     }
   } else if (last?.type === "reply") note = prefixed(fg.cyan("answer: "), "answer: ", oneLine(last.answer ?? last.body));
   else if (last?.type === "note") note = prefixed(fg.yellow("note: "), "note: ", oneLine(last.body));
+  else if (last?.type === "escalation") note = prefixed(fg.red("escalates: "), "escalates: ", oneLine(last.body));
   else if (last) {
     const [styled, plain] = last.type === "done" ? (last.outcome === "failed" ? [fg.red("failed: "), "failed: "] : [fg.green("done: "), "done: "]) : [dim("↳ "), "↳ "];
     note = prefixed(styled, plain, oneLine(last.body));
@@ -297,8 +301,9 @@ export async function runSidebar(): Promise<void> {
           return messageCounterLines(pending, yours, cols);
         })()
       : [];
+    // The open view's title in its counter's style (agent messages bold yellow, yours italic cyan), then where you are, dimmed.
     const activeLine = messagePanel
-      ? [bold(truncate(`${messagePanel.view === "unread" ? "Unread" : "From you"} · ${messagePanel.runId}${messagePanel.detail ? " · message" : ""}`, cols))]
+      ? [truncate((messagePanel.view === "unread" ? bold(fg.yellow("Unread")) : italic(fg.cyan("From you"))) + dim(italic(` · ${messagePanel.runId}${messagePanel.detail ? " · message" : ""}`)), cols, closeWithItalic)]
       : [];
     const essentialHeader = [...counterLines, ...activeLine];
     const hasContent = Boolean(messagePanel || runs.length);
@@ -306,11 +311,14 @@ export async function runSidebar(): Promise<void> {
     const goal = selRun ? goalLines(selRun.objective, cols) : [];
     // Counters and the active view outrank extra goal lines in a short pane. At ordinary heights
     // the goal still gets up to the original one-third header budget.
-    const wantedHeader = Math.max(1, Math.floor(rowsAvail / 3), essentialHeader.length + (goal.length ? 1 : 0));
+    // A blank line between the goal and the [u]/[y] counters when the pane has room for it.
+    const gap = rowsAvail >= 10 && goal.length && counterLines.length ? 1 : 0;
+    const wantedHeader = Math.max(1, Math.floor(rowsAvail / 3), essentialHeader.length + (goal.length ? 1 + gap : 0));
     const headerLimit = Math.max(1, Math.min(wantedHeader, rowsAvail - 1 - separator.length));
+    const goalShown = goal.slice(0, Math.max(0, headerLimit - essentialHeader.length - gap));
     const header = essentialHeader.length >= headerLimit
       ? essentialHeader.slice(0, headerLimit)
-      : [...goal.slice(0, headerLimit - essentialHeader.length), ...essentialHeader];
+      : [...goalShown, ...(goalShown.length && gap ? [""] : []), ...essentialHeader];
     if (!selRun && !runs.length) header.push(dim("no active run — pack-leader run create"));
     const head = [...header, ...separator];
 
@@ -321,12 +329,8 @@ export async function runSidebar(): Promise<void> {
       for (const line of preview) tail.push(truncate(line, cols));
     }
     if (message) tail.push("", fg.yellow(truncate(message, cols)));
-    const context = messagePanel
-      ? messagePanel.detail
-        ? `${messagePanel.view === "unread" ? "Unread" : "From you"} · j/k or wheel scroll · Esc list · u/y switch · ? help · q quit`
-        : `${messagePanel.view === "unread" ? "Unread" : "From you"} · j/k or wheel browse · Enter opens · Esc dashboard · u/y switch · ? help · q quit`
-      : "";
-    const footer = [connected ? dim(context) : fg.red(`offline${context ? ` · ${context}` : ""}`)];
+    // No standing key hints: the bottom line is for being offline, and for the keys only while `?` is held open.
+    const footer = [connected ? "" : fg.red("offline")];
     if (help) footer[0] = dim(messagePanel
       ? messagePanel.detail
         ? "j/k or wheel scroll message · Esc returns to list · u/y switch views · q quit"

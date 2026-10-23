@@ -13,10 +13,11 @@ import { join } from "node:path";
 import { herdrSocketPath, stateDir } from "./paths.ts";
 import { acquire, load, log, nextId, now, ready, release, START_CLAIM_MS, taskGateBlockers, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
 import { assertTaskGatesApproved } from "./gates.ts";
-import { archiveScreen, createDispatch, settleDispatch, startClaimIsFresh, taskDispatchIds } from "./dispatch.ts";
+import { archiveScreen, assertRetryBudget, createDispatch, settleDispatch, startClaimIsFresh, taskDispatchIds } from "./dispatch.ts";
 import { gitWorktreeAdd, gitWorktreeRemove, isUnknownMethod, planWorktree, worktreeIdentityPath, type WorktreeInfo } from "./worktree.ts";
 import { runSetup, SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS, setupInProgress } from "./setup.ts";
 import { getHost, type HostProfile } from "./hosts.ts";
+import { selectProfile, validateRouting, routerProvider, type RoutingConfig, type RouterProvider, type Runtime, type RoutingProvenance } from "./routing.ts";
 import { currentExecutionHost, withExecutionHost } from "./remote.ts";
 
 export { START_CLAIM_MS };
@@ -57,13 +58,17 @@ export function modelFromArgs(kind: string, args: string[]): { model: string | n
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const eq = a.startsWith("--") ? a.indexOf("=") : -1;
-    const flag = eq > 0 ? a.slice(0, eq) : a;
-    const val = eq > 0 ? a.slice(eq + 1) : args[i + 1];
+    const short = /^-[mc].+/.test(a);
+    const flag = short ? a.slice(0, 2) : eq > 0 ? a.slice(0, eq) : a;
+    const val = short ? a.slice(2).replace(/^=/, "") : eq > 0 ? a.slice(eq + 1) : args[i + 1];
     if (val === undefined) continue;
     if (flag === "--model" || flag === "-m") model = val;
     else if (flag === "--effort" || flag === "--thinking" || flag === "--reasoning-effort") thinking = val;
-    else if ((flag === "-c" || flag === "--config") && val.startsWith("model_reasoning_effort=")) thinking = unquote(val.slice("model_reasoning_effort=".length));
-    else if ((flag === "-c" || flag === "--config") && val.startsWith("model=")) model = unquote(val.slice("model=".length));
+    else if (flag === "-c" || flag === "--config") {
+      const config = /^(model|model_reasoning_effort)\s*=\s*(.*)$/.exec(val);
+      if (config?.[1] === "model") model = unquote(config[2]!.trim());
+      if (config?.[1] === "model_reasoning_effort") thinking = unquote(config[2]!.trim());
+    }
   }
   if (kind === "pi" && model?.includes(":")) {
     const [m, t] = model.split(":");
@@ -94,15 +99,16 @@ export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: 
         : `${channel}, which already knows your IDs from the environment.`,
     ``,
     `Rules:`,
-    `- Do only this task, in ${p.cwd}. Do not start or steer other agents.`,
+    `- Do only this task, in ${p.cwd}. Do not start or steer other agents, unless the task spec asks you to coordinate workers of your own: then \`pack-leader run create\` from this pane makes a sub-run you lead (see \`pack-leader skill\`, "Sub-runs").`,
     ...(context ? [`- Prefix every Pack Leader worker command with \`${context}\` (append the command and its arguments).`] : []),
     ...(p.worktree ? [worktreeRule(p.worktree)] : []),
     ...(p.remoteHost ? [`- You run on remote execution host "${p.remoteHost.name}" in its existing directory ${p.cwd}; the local leader owns authoritative Pack Leader state.`, `- The remote Pack Leader CLI forwards only done/ask/note/heartbeat/send/inbox through the authenticated callback; do not expect arbitrary local admin commands to work here.`] : []),
     `- Blocking question for the orchestrator: \`pack-leader ask "<question>"\` (with fixed choices, add \`--options "a,b,c"\` and the answer is one of them). It waits for the answer (up to 10 minutes); on timeout, run \`pack-leader ask --id <id>\` to keep waiting. Never stop on a question the orchestrator cannot see.`,
     `- Non-blocking blocker, finding, or "taking longer because ...": \`pack-leader note "<text>"\`; keep working.`,
+    `- Something the orchestrator must act on while you keep working (the spec is wrong, you conflict with another worker, a risk it must decide on): \`pack-leader escalate "<text>"\`.`,
     `- Something another worker of this run needs to know: \`pack-leader send <worker> "<text>"\` (one worker by name; it arrives as a follow-up).`,
     `- Read follow-ups at natural checkpoints (before starting a new file, after a test run) and once more right before reporting: \`pack-leader inbox\`.`,
-    `- During long work, about every 10 minutes: \`pack-leader heartbeat "<one line on progress>"\`.`,
+    `- During long work, about every 10 minutes: \`pack-leader heartbeat "<one line on progress>" --phase investigating|implementing|reviewing|waiting\`.`,
     `- When finished, exactly once: \`pack-leader done --outcome succeeded|failed --summary "<three sentences: what changed, how it was verified, what is left>" [--files-modified a,b] [--report-path <file>]\`. Say failed explicitly when the acceptance check did not pass.`,
     `- After \`pack-leader done\`, end your turn and wait. Do not start new work until prompted.`,
     ``,
@@ -138,8 +144,13 @@ export type StartOptions = {
   extraArgs: string[];
   noDefaultArgs: boolean;
   timeoutMs: number;
+  /** Explicit top-level selections; defaults are separate so routing can outrank them. */
   model?: string;
   thinking?: string;
+  defaultModel?: string;
+  defaultThinking?: string;
+  routing?: RoutingConfig;
+  router?: RouterProvider;
   /** Named trusted SSH profile; remote starts require an existing absolute POSIX cwd and tab placement. */
   host?: string;
   /** `new`: create a git worktree for this worker; a path: use that existing checkout. */
@@ -185,11 +196,42 @@ export type StartResult = {
   worker: Worker;
   task: Task;
   pane_id: string;
+  runtime: Runtime;
+  routing: RoutingProvenance;
   /** When the agent did not come up: what was left behind. */
   warning?: string;
 };
 
+/** Route outside all state/worktree fences, then revalidate and snapshot before effects. */
+async function resolveStartRuntime(o: StartOptions, task: Task, dispatchId: string) {
+  const native = modelFromArgs(o.kind, o.extraArgs);
+  const hasModel = native.model !== null || o.extraArgs.some((a) => /^(--model(?:=|$)|-m)/.test(a));
+  const hasThinking = native.thinking !== null || o.extraArgs.some((a) => /^--(?:effort|thinking|reasoning-effort)(?:=|$)/.test(a));
+  const selected = await selectProfile({ config: o.routing, provider: o.router, kind: o.kind, title: task.title, spec: task.spec, explicitModel: o.model !== undefined, nativeOverride: hasModel || hasThinking });
+  const profile = selected.profile;
+  const model = o.model ?? profile?.model ?? o.defaultModel;
+  const explicitModelThinking = modelFromArgs(o.kind, modelArgs(o.kind, o.model)).thinking;
+  const profileModelThinking = modelFromArgs(o.kind, modelArgs(o.kind, profile?.model)).thinking;
+  const thinking = o.thinking ?? explicitModelThinking ?? (profile?.thinking === null ? undefined : profile?.thinking ?? profileModelThinking ?? o.defaultThinking);
+  // Never append defaults (or top-level flags) over a native explicit selection.
+  const extraArgs = [...o.extraArgs, ...modelArgs(o.kind, hasModel ? undefined : model, hasThinking ? undefined : thinking)];
+  const runtime: Runtime = { kind: o.kind, ...modelFromArgs(o.kind, extraArgs) };
+  await update((state) => {
+    assertStartAuthority(state, { runId: o.run.id, name: o.name, taskId: task.id, dispatchId });
+    const current = state.tasks[task.id]!;
+    if (!o.retry && !ready(state, current)) throw startRevoked(o.run.id, dispatchId);
+    const d = state.dispatches![dispatchId]!;
+    d.runtime = runtime;
+    d.routing = selected.routing;
+  });
+  return { extraArgs, runtime, routing: selected.routing };
+}
+
 export async function startWorker(o: StartOptions): Promise<StartResult> {
+  // Copy/validate before any state or resource effects. The five-minute admission
+  // lease already covers the router's hard maximum of thirty seconds.
+  o = { ...o, ...(o.routing !== undefined ? { routing: validateRouting(o.routing) } : {}) };
+  if (o.router !== undefined) routerProvider(o.router);
   if (!WORKER_NAME.test(o.name)) throw new Error(`worker name must match ${WORKER_NAME}`);
   if (o.host) return startRemoteWorker(o);
   if (o.setupCommand !== undefined && (!o.setupCommand.trim() || !o.worktree)) throw new Error("--setup-command requires a non-empty command and --worktree");
@@ -300,7 +342,9 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   let tabId: string | null = null;
   let wtReady = false;
   let shellTab: string | null = null;
+  let selection!: Awaited<ReturnType<typeof resolveStartRuntime>>;
   try {
+    selection = await resolveStartRuntime(o, task, dispatchId);
     if (wt) {
       // A hidden-tab worker's worktree opens as a herdr workspace and its tab goes there; a split stays next to the orchestrator.
       shellTab = (await materializeWorktree(wt, o.name, o.placement === "tab")).shellTab;
@@ -381,8 +425,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
 
   // The bar is for the human watching, so no flag turns it off: only PACK_LEADER_BAR=0 in the environment.
   const barPane = process.env.PACK_LEADER_BAR === "0" || o.packLayout ? null : await openLeaderBar(o.run, o.name, pane.pane_id, { where: wt?.branch ?? basename(cwd), whereLabel: wt?.branch ? "Branch" : "Dir", task: task.title });
-  const extraArgs = [...o.extraArgs, ...modelArgs(o.kind, o.model, o.thinking)];
-  const asked = modelFromArgs(o.kind, extraArgs);
+  const { extraArgs, runtime: asked } = selection;
   const worker: Worker = {
     name: o.name,
     run_id: o.run.id,
@@ -472,7 +515,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       throw commitError;
     }
     log({ event: "worker.start_failed", run: o.run.id, worker: o.name, error: e.message });
-    return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning };
+    return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning };
   }
   await labelPane(pane.pane_id, task.title);
   // Claude Code asks whether to trust a folder it has not seen: the orchestrator chose this cwd, so say yes.
@@ -480,7 +523,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   if (blocked) {
     await assertCurrentStart();
     log({ event: "worker.blocked_at_start", run: o.run.id, worker: o.name, pane: pane.pane_id });
-    return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: `${o.name} is blocked on a dialog in pane ${pane.pane_id} and has not received its task. Read it with \`pack-leader worker read ${o.name}\`, answer it with \`herdr agent send-keys ${o.name} <keys>\` only if it is safe, then \`pack-leader worker resend ${o.name}\`.` };
+    return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: `${o.name} is blocked on a dialog in pane ${pane.pane_id} and has not received its task. Read it with \`pack-leader worker read ${o.name}\`, answer it with \`herdr agent send-keys ${o.name} <keys>\` only if it is safe, then \`pack-leader worker resend ${o.name}\`.` };
   }
   // Right after start the name can lag the pane by a moment: address the pane, and retry briefly.
   const seq = await baseline(o.name, pane.pane_id);
@@ -505,9 +548,9 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     }
     promptedCurrentAttempt = await markPrompted(o.name, { runId: o.run.id, taskId: task.id, dispatchId });
   });
-  if (promptWarning) return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: promptWarning };
+  if (promptWarning) return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: promptWarning };
   if (promptedCurrentAttempt) log({ event: "worker.started", run: o.run.id, worker: o.name, task: task.id, dispatch: dispatchId, pane: pane.pane_id });
-  return { worker, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id };
+  return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id };
 }
 
 /**
@@ -563,7 +606,9 @@ async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
     PACK_REMOTE_CALLBACK_LEADER_SOCKET: herdrSocketPath(),
   };
   let opened: { pane_id: string; tab_id: string | null } | null = null;
+  let selection!: Awaited<ReturnType<typeof resolveStartRuntime>>;
   try {
+    selection = await resolveStartRuntime(o, task, dispatchId);
     const result = await withExecutionHost(profile, async () => {
       const tabs = await tabCreate({ workspace_id: profile.workspace_id, label: o.name, cwd, env: callbackEnv });
       if (!tabs.root_pane?.pane_id) {
@@ -592,8 +637,7 @@ async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
     throw err;
   }
 
-  const extraArgs = [...o.extraArgs, ...modelArgs(o.kind, o.model, o.thinking)];
-  const asked = modelFromArgs(o.kind, extraArgs);
+  const { extraArgs, runtime: asked } = selection;
   const worker: Worker = {
     name: o.name, run_id: o.run.id, kind: o.kind, model: asked.model, thinking: asked.thinking,
     pane_id: opened.pane_id, tab_id: opened.tab_id, owns_tab: Boolean(opened.tab_id), owns_pane: true,
@@ -637,7 +681,7 @@ async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
           w.liveness = "unreachable"; w.liveness_reason = `SSH/herdr host ${profile.name} became unreachable during start`; w.host_unreachable_since ??= now();
         }
       });
-      return { worker, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id, warning };
+      return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id, warning };
     }
     await update((state) => {
       assertStartAuthority(state, { runId: o.run.id, name: o.name, taskId: task.id, dispatchId, registered: true });
@@ -646,11 +690,11 @@ async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
       settleDispatch(state, dispatchId, "failed");
       const w = state.workers[o.name]; if (w) w.last_status = "exited";
     });
-    return { worker, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id, warning };
+    return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id, warning };
   }
 
   const blocked = await withExecutionHost(profile, () => clearStartupDialog(opened!.pane_id));
-  if (blocked) return { worker, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id, warning: `${o.name} is blocked on a dialog in remote pane ${opened.pane_id} and has not received its task; inspect it with \`pack-leader worker read ${o.name}\`, answer it safely, then run \`pack-leader worker resend ${o.name}\`.` };
+  if (blocked) return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id, warning: `${o.name} is blocked on a dialog in remote pane ${opened.pane_id} and has not received its task; inspect it with \`pack-leader worker read ${o.name}\`, answer it safely, then run \`pack-leader worker resend ${o.name}\`.` };
   const seq = await withExecutionHost(profile, () => baseline(o.name, opened!.pane_id));
   try {
     await withRunStartFence(o.run.id, async () => {
@@ -670,11 +714,11 @@ async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
       }
     });
     log({ event: "worker.prompt_failed", run: o.run.id, worker: o.name, dispatch: dispatchId, error: e.message });
-    return { worker, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id, warning };
+    return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id, warning };
   }
   const promptedCurrentAttempt = await markPrompted(o.name, { runId: o.run.id, taskId: task.id, dispatchId });
   if (promptedCurrentAttempt) log({ event: "worker.started_remote", run: o.run.id, worker: o.name, host: profile.name, task: task.id, dispatch: dispatchId, pane: opened.pane_id });
-  return { worker, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id };
+  return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id };
 }
 
 /** How long `worker prompt` waits for a worker that is still finishing its last turn before it hands over the next dispatch. */
@@ -924,6 +968,72 @@ async function releaseRemoteWorker(run: Run, known: Worker, opts: { force?: bool
   return { closed_pane, closed_tab, archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
 }
 
+/**
+ * What a `worker start` or `worker prompt` would hand over, with no effect: the task (an
+ * existing one, or the one a --spec would create), where the worker would work, and the
+ * exact preamble. Admission checks run as the real dispatch would (gates, retry limit,
+ * readiness, a taken name); the dispatch id is a placeholder and routing is not consulted.
+ */
+export function previewDispatch(state: State, o: { run: Run; name: string; taskId?: string; spec?: string; title?: string; retry?: boolean; redispatch: boolean; cwd?: string; worktree?: string; base?: string; branch?: string }) {
+  if (!WORKER_NAME.test(o.name)) throw new Error(`worker name must match ${WORKER_NAME}`);
+  const w = state.workers[o.name];
+  if (o.redispatch && (!w || w.run_id !== o.run.id)) throw new Error(`no worker "${o.name}" in run ${o.run.id}`);
+  if (!o.redispatch && w && state.runs[w.run_id]?.status === "active") throw new Error(`worker "${o.name}" exists; release it first`);
+  let task: Task;
+  if (o.taskId) {
+    const t = state.tasks[o.taskId];
+    if (!t || t.run_id !== o.run.id) throw new Error(`no task ${o.taskId} in run ${o.run.id}`);
+    if (t.status === "dispatched" || t.status === "succeeded") throw new Error(`task ${t.id} is ${t.status}`);
+    if (t.status === "failed" && !o.retry && !o.redispatch) throw new Error(`task ${t.id} failed; pass --retry to try again`);
+    if (!o.retry && t.status !== "failed" && !ready(state, t)) throw new Error(`task ${t.id} waits on ${t.depends_on.filter((d) => state.tasks[d]?.status !== "succeeded").join(", ") || "a gate"}`);
+    assertTaskGatesApproved(state, t.id);
+    assertRetryBudget(state, t);
+    task = t;
+  } else {
+    if (!o.spec) throw new Error("pass --spec \"<task>\" or --task <id>");
+    task = { id: "t?", run_id: o.run.id, title: o.title ?? firstLine(o.spec), spec: o.spec, status: "pending", depends_on: [], worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
+  }
+  if (o.redispatch && w!.task_id && state.tasks[w!.task_id]?.status === "dispatched") throw new Error(`${o.name} is still on task ${w!.task_id}; wait for its report`);
+  const baseCwd = o.cwd ?? o.run.orchestrator.cwd;
+  const wt = !o.redispatch && o.worktree ? planWorktree({ spec: o.worktree, cwd: baseCwd, runId: o.run.id, worker: o.name, base: o.base, branch: o.branch }) : o.redispatch ? w!.worktree ?? null : null;
+  const cwd = o.redispatch ? w!.cwd : wt ? wt.path : baseCwd;
+  const text = preamble({ worker: o.name, run: o.run, task, dispatchId: "d?", cwd, worktree: wt, remoteHost: o.redispatch ? w!.execution_host ?? undefined : undefined, redispatch: o.redispatch, explicitContext: o.redispatch && w!.context_mode === "explicit" });
+  return { dry_run: true, worker: o.name, task: { id: task.id, title: task.title, status: task.status, new: !o.taskId }, cwd, worktree: wt, preamble: text, note: "nothing was dispatched; ids ending in ? are assigned on the real run, and routing is consulted only then" };
+}
+
+export type AbandonResult = { abandoned: string; pane_id: string; tab_id: string | null; task_id: string | null; dispatch_id: string | null; worktree: WorktreeInfo | null; execution_host: string | null };
+
+/**
+ * Stop supervising a worker without claiming its agent stopped. Nothing touches herdr,
+ * the process or the filesystem: its open task fails as abandoned, its dispatch settles,
+ * undelivered followups go, and the worker leaves the run (its name is free again). The
+ * pane, the agent in it and its checkout stay as they are; a checkout Pack Leader made
+ * stays protected from cleanup, since that agent may still be using it.
+ */
+export async function abandonWorker(run: Run, name: string): Promise<AbandonResult> {
+  const r = await update((state) => {
+    const w = state.workers[name];
+    if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
+    const t = w.task_id ? state.tasks[w.task_id] : null;
+    if (t?.status === "dispatched" && t.dispatch_id === w.dispatch_id) {
+      t.status = "failed";
+      t.updated_at = now();
+      t.outcome = { summary: `abandoned by the orchestrator; the agent in pane ${w.pane_id} may still be running`, files_modified: [], report_path: null };
+      settleDispatch(state, w.dispatch_id, "failed");
+    }
+    const wt = w.worktree ? state.worktrees?.[w.worktree.path] : undefined;
+    if (wt && wt.worker === w.name && wt.run_id === w.run_id && wt.dispatch_id === w.worktree_dispatch_id) {
+      delete wt.released_at;
+      wt.cleanup_protection = "abandoned";
+    }
+    dropUndelivered(state, w);
+    delete state.workers[name];
+    return { abandoned: name, pane_id: w.pane_id, tab_id: w.tab_id ?? null, task_id: t?.id ?? null, dispatch_id: w.dispatch_id, worktree: w.worktree ?? null, execution_host: w.execution_host?.name ?? null };
+  });
+  log({ event: "worker.abandoned", run: run.id, worker: name, pane: r.pane_id, task: r.task_id });
+  return r;
+}
+
 export async function releaseWorker(run: Run, name: string, opts: { force?: boolean; keepPane?: boolean; removeWorktree?: boolean; keepWorktree?: boolean }): Promise<ReleaseResult> {
   const known = load().workers[name];
   if (!known || known.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
@@ -1061,7 +1171,7 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
  * worktree API does it and the checkout shows up as a workspace, recorded on `wt`;
  * a herdr without that API falls back to `git worktree add`.
  */
-async function materializeWorktree(wt: WorktreeInfo, label: string, viaHerdr: boolean): Promise<{ shellTab: string | null }> {
+export async function materializeWorktree(wt: WorktreeInfo, label: string, viaHerdr: boolean): Promise<{ shellTab: string | null }> {
   if (viaHerdr) {
     try {
       const r = wt.created_by_pack
@@ -1122,6 +1232,7 @@ export async function sweepWorktrees(o: { dryRun?: boolean } = {}): Promise<Swee
         pane_kept: "worker pane was kept open; checkout cleanup remains protected",
         pane_close_failed: "pane closure failed or is uncertain; inspect the pane before manual recovery",
         forgotten: "run close forgot this worker; its pane may still be open",
+        abandoned: "the worker was abandoned; its agent may still be using the checkout",
       }[rec.cleanup_protection];
       out.kept.push({ ...id, reason });
       continue;
@@ -1293,6 +1404,9 @@ function assertStartAuthority(state: State, a: StartAuthority): void {
       ? !w || w.run_id !== a.runId || w.task_id !== a.taskId || w.dispatch_id !== a.dispatchId || t.status !== "dispatched" || t.dispatch_id !== a.dispatchId
       : Boolean(w?.run_id === a.runId && w.dispatch_id === a.dispatchId))
   ) throw startRevoked(a.runId, a.dispatchId);
+  if (!a.registered && (!startClaimIsFresh(d, START_CLAIM_MS) ||
+      (w && state.runs[w.run_id]?.status === "active") || t.status === "succeeded" || t.status === "dispatched")) throw startRevoked(a.runId, a.dispatchId);
+  assertTaskGatesApproved(state, a.taskId);
 }
 
 async function requireStartAuthority(runId: string, name: string, taskId: string, dispatchId: string, registered = true): Promise<void> {
@@ -1361,7 +1475,7 @@ export function refuseStartInFlight(state: State, name: string, taskId: string |
  * orchestrator picked the folder, so accept it and wait for the prompt. Returns true when
  * the agent is still blocked on something else.
  */
-async function clearStartupDialog(paneId: string): Promise<boolean> {
+export async function clearStartupDialog(paneId: string): Promise<boolean> {
   // The dialog can render a moment after `agent start` returns: look for it briefly.
   let a = await getAgent(paneId).catch(() => null);
   for (let i = 0; i < 6 && a && a.agent_status !== "blocked"; i++) {
@@ -1541,6 +1655,7 @@ export const workerSummary = (w: Worker, state: State) => ({
   started_at: w.started_at,
   retained: w.retained,
   last_seen: w.last_seen,
+  phase: w.phase ?? null,
   liveness: w.liveness ?? null,
   liveness_reason: w.liveness_reason ?? null,
   ...(w.missing_since ? { missing_since: w.missing_since } : {}),
@@ -1555,7 +1670,7 @@ export const workerSummary = (w: Worker, state: State) => ({
 
 /** The worker's unacked questions and alerts for the orchestrator, oldest first. */
 const openFor = (state: State, w: Worker) =>
-  state.messages.filter((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && m.task_id === w.task_id && m.dispatch_id === w.dispatch_id && !m.acked && (m.type === "ask" || m.type === "attention"));
+  state.messages.filter((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && m.task_id === w.task_id && m.dispatch_id === w.dispatch_id && !m.acked && (m.type === "ask" || m.type === "escalation" || m.type === "attention"));
 
 /**
  * What is waiting on the orchestrator for this worker: "ask", an attention
@@ -1564,7 +1679,7 @@ const openFor = (state: State, w: Worker) =>
  */
 export function workerAttention(state: State, w: Worker): { categories: string[]; requires_action: boolean } {
   const open = openFor(state, w);
-  const categories = [...new Set(open.map((m) => (m.type === "ask" ? "ask" : m.status ?? "attention")))];
+  const categories = [...new Set(open.map((m) => (m.type === "ask" || m.type === "escalation" ? m.type : m.status ?? "attention")))];
   const noted = state.messages.some((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && m.task_id === w.task_id && m.dispatch_id === w.dispatch_id && !m.acked && m.type === "note");
   return { categories: noted ? [...categories, "note"] : categories, requires_action: open.length > 0 };
 }
@@ -1579,6 +1694,7 @@ export function nextAction(state: State, w: Worker): string[] | null {
   const open = openFor(state, w);
   const q = open.find((m) => m.type === "ask");
   if (q) return ["pack-leader", "reply", q.id, "--body", q.options?.length ? `<one of: ${q.options.join(" | ")}>` : "<answer>"];
+  if (open.some((m) => m.type === "escalation")) return ["pack-leader", "send", w.name, "<what to do about it>"];
   const t = w.task_id ? state.tasks[w.task_id] : null;
   const owing = t?.status === "dispatched" || (t?.status === "failed" && t.outcome?.summary === EXITED_SUMMARY);
   if (w.liveness === "exited" && owing) return ["pack-leader", "worker", "release", w.name, "--force"];

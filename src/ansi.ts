@@ -3,6 +3,7 @@ const esc = (n: string) => `\x1b[${n}m`;
 export const reset = esc("0");
 export const bold = (s: string) => `${esc("1")}${s}${esc("22")}`;
 export const dim = (s: string) => `${esc("2")}${s}${esc("22")}`;
+export const italic = (s: string) => `${esc("3")}${s}${esc("23")}`;
 export const inverse = (s: string) => `${esc("7")}${s}${esc("27")}`;
 /** 24-bit foreground from `#rrggbb`; closes with the default foreground like `fg.*`. */
 export const fgRgb = (hex: string) => {
@@ -58,6 +59,8 @@ export function width(s: string): number {
 
 /** Closes everything this module can open: bold/dim, inverse, and a foreground colour. Not a full reset. */
 export const closeStyles = `${esc("22")}${esc("27")}${esc("39")}`;
+/** `closeStyles` plus italic, for cutting a line that may hold italic text. */
+export const closeWithItalic = `${closeStyles}${esc("23")}`;
 
 /**
  * Cut a (possibly styled) line to `max` printable cells, keeping escape sequences.

@@ -130,6 +130,30 @@ test("check: an ask comes with its options and a ready-to-paste reply_hint", asy
   assert.ok(p.result === "message" && !("options" in p) && p.reply_hint === 'pack-leader reply m8 --body "..."');
 });
 
+test("check hands over the whole backlog oldest first, each ask with its hint, and --types narrows it", async () => {
+  const s = base();
+  const msg = (id: string, type: Message["type"], extra: Partial<Message> = {}): Message => ({ id, run_id: "r1", ts: "t", type, from: "bob", to: "orchestrator", task_id: null, dispatch_id: null, body: id, acked: false, ...extra });
+  s.messages.push(msg("m1", "note"), msg("m2", "ask", { options: ["a", "b"] }), msg("m3", "done", { acked: true }), msg("m4", "done"));
+  save(s);
+  const r = await check(run(), { wait: false, timeoutMs: 0 });
+  assert.ok(r.result === "message");
+  if (r.result !== "message") return;
+  assert.equal(r.message.id, "m1", "message is the oldest");
+  assert.deepEqual(r.messages.map((m) => m.id), ["m1", "m2", "m4"], "acked m3 left out");
+  assert.equal(r.pending, 0);
+  assert.deepEqual(r.messages[1]!.options, ["a", "b"]);
+  assert.equal(r.messages[1]!.reply_hint, 'pack-leader reply m2 --body "a"');
+  assert.ok(!("reply_hint" in r.messages[0]!), "only asks carry a hint");
+  const done = await check(run(), { wait: false, timeoutMs: 0, types: ["done"] });
+  assert.ok(done.result === "message" && done.messages.map((m) => m.id).join() === "m4");
+
+  const many = base();
+  for (let i = 0; i < 53; i++) many.messages.push(msg(`n${i}`, "note"));
+  save(many);
+  const capped = await check(run(), { wait: false, timeoutMs: 0 });
+  assert.ok(capped.result === "message" && capped.messages.length === 50 && capped.pending === 3);
+});
+
 test("CLI: ask --options, check, reply by prefix; the waiting ask prints reply, answer and option_index", async () => {
   const waiting = cli("ask", "Which db?", "--options", "postgres,sqlite,mysql", "--worker", "bob", "--run", "r1", "--timeout", "10000");
   const a = await askStored();

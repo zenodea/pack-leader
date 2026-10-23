@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { agentPrompt, getAgent, type HerdrError, isRemotePromptReceiptError, listAgents, listPanes, logHerdrError, observePromptReceipt, promptLanded, type AgentStatus, subscribe } from "./herdr.ts";
 import { stateFile } from "./paths.ts";
 import { DEFAULT_SETTINGS, loadConfig, settingsOf } from "./config.ts";
-import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load } from "./state.ts";
+import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load, childRuns } from "./state.ts";
 import { settleDispatch } from "./dispatch.ts";
 import { withExecutionHost } from "./remote.ts";
 
@@ -71,7 +71,7 @@ export async function nudgeOrchestrator(run: Run, text: string): Promise<boolean
 
 /** Unread done/ask/note older than this, with the orchestrator idle, earns one more nudge. PACK_RENUDGE_MS=0 disables. */
 export const renudgeMs = () => envMs("PACK_RENUDGE_MS", 60_000);
-const RENUDGE_TYPES: readonly string[] = ["done", "ask", "note"];
+const RENUDGE_TYPES: readonly string[] = ["done", "ask", "note", "escalation"];
 
 /**
  * Whether a message was sent during this worker incarnation. Replies use the
@@ -257,6 +257,8 @@ export async function done(ctx: WorkerContext, o: { outcome: "succeeded" | "fail
     const { run, worker: w, task: t } = requireCurrentWorker(state, { ...ctx, task_id: taskId, dispatch_id: dispatch });
     if (!t) throw new Error(`no task ${taskId}`);
     if (t.status !== "dispatched") throw new Error(`task ${t.id} is already ${t.status} (${t.outcome?.summary ?? "no summary"}); nothing more to report for this dispatch`);
+    const open = childRuns(state, run.id, w.name);
+    if (open.length) throw new Error(`you still coordinate sub-run${open.length > 1 ? "s" : ""} ${open.map((r) => r.id).join(", ")}: settle ${open.length > 1 ? "their" : "its"} workers and close ${open.length > 1 ? "them" : "it"} with \`pack-leader run close --run <id>\` (or --release) before you report`);
     t.status = o.outcome;
     t.updated_at = now();
     t.outcome = { summary: o.summary, files_modified: o.files, report_path: o.reportPath };
@@ -270,11 +272,13 @@ export async function done(ctx: WorkerContext, o: { outcome: "succeeded" | "fail
   return msg;
 }
 
-export async function heartbeat(ctx: WorkerContext, body: string): Promise<Message> {
+export async function heartbeat(ctx: WorkerContext, body: string, phase?: string): Promise<Message> {
+  const p = phase?.replace(/\s+/g, " ").trim().slice(0, 40) || undefined;
   return update((state) => {
     const { run, worker } = requireCurrentWorker(state, ctx);
     touch(worker);
-    return message(state, { run_id: run.id, type: "heartbeat", from: worker.name, to: "orchestrator", task_id: worker.task_id, dispatch_id: worker.dispatch_id, body, acked: true });
+    if (p) worker.phase = p;
+    return message(state, { run_id: run.id, type: "heartbeat", from: worker.name, to: "orchestrator", task_id: worker.task_id, dispatch_id: worker.dispatch_id, body, acked: true, ...(p ? { phase: p } : {}) });
   });
 }
 
@@ -292,6 +296,24 @@ export async function note(ctx: WorkerContext, body: string): Promise<Message> {
   });
   log({ event: "worker.note", run: run.id, worker: ctx.worker, id: msg.id });
   await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} left a note (${msg.id}); it is not waiting on you. Run \`pack-leader check --wait --timeout 540000\` and ack it with \`--ack ${msg.id}\`.`);
+  return msg;
+}
+
+/**
+ * Something the orchestrator must act on while the worker carries on (a wrong
+ * assumption in the spec, a conflict with another worker, a risk to stop on):
+ * like a note, but it requires action and leads the worker's attention. For a
+ * question the worker cannot continue without, it uses `ask` instead.
+ */
+export async function escalate(ctx: WorkerContext, body: string): Promise<Message> {
+  const { msg, run } = await update((state) => {
+    const { run, worker } = requireCurrentWorker(state, ctx);
+    touch(worker);
+    const msg = message(state, { run_id: run.id, type: "escalation", from: worker.name, to: "orchestrator", task_id: worker.task_id, dispatch_id: worker.dispatch_id, body });
+    return { msg, run };
+  });
+  log({ event: "worker.escalation", run: run.id, worker: ctx.worker, id: msg.id });
+  await nudgeOrchestrator(run, `Pack Leader: worker ${ctx.worker} escalates (${msg.id}) and needs you to act: ${body.replace(/\s+/g, " ").trim().slice(0, 200)}. Run \`pack-leader check --wait --timeout 540000\`, act on it, and ack it with \`--ack ${msg.id}\`.`);
   return msg;
 }
 
@@ -573,10 +595,18 @@ function deliveryClaimIsActive(claim: NonNullable<Message["delivery_claim"]>, at
   }
 }
 
-const followupPrompt = (id: string, body: string, from = "orchestrator") =>
-  from === "orchestrator"
+/**
+ * A worker that still owes a report is reminded to carry on: without it, workers
+ * answer the follow-up, end their turn unreported, and cost the orchestrator an
+ * attention round trip (most "idle without having reported" alerts came this way).
+ */
+const CONTINUE_REMINDER = "[Then carry on with your task. When it is finished, report with `pack-leader done` as your dispatch preamble says; do not end your turn without reporting.]";
+
+const followupPrompt = (id: string, body: string, from = "orchestrator", owesReport = false) =>
+  (from === "orchestrator"
     ? `[Pack Leader follow-up from the orchestrator] ${body}\n[Pack Leader message id: ${id}]`
-    : `[pack-leader follow-up from worker ${from}] ${body}\n[Pack Leader message id: ${id}]`;
+    : `[pack-leader follow-up from worker ${from}] ${body}\n[Pack Leader message id: ${id}]`) +
+  (owesReport ? `\n${CONTINUE_REMINDER}` : "");
 
 type RemoteDeliveryEvidence = NonNullable<Message["delivery_unknown"]>;
 type ReceiptPending = { evidence: RemoteDeliveryEvidence; source: "unknown" | "claim"; claimToken?: string };
@@ -685,10 +715,11 @@ async function deliver(id: string, worker: string, body: string, from = "orchest
       execution_host: w.execution_host ?? null,
       ...(seqBefore !== undefined ? { seq_before: seqBefore } : {}),
     };
-    return { token, target, workerStartedAt: w.started_at, executionHost: w.execution_host ?? undefined };
+    const owesReport = Boolean(w.task_id && state.tasks[w.task_id]?.status === "dispatched");
+    return { token, target, workerStartedAt: w.started_at, executionHost: w.execution_host ?? undefined, owesReport };
   });
   if (!claim) return false;
-  const { token, target, workerStartedAt, executionHost } = claim;
+  const { token, target, workerStartedAt, executionHost, owesReport } = claim;
   const matchesClaim = (state: State, m: Message) => {
     const w = state.workers[worker];
     return Boolean(w && meantFor(state, w, m) && w.started_at === workerStartedAt && deliveryTarget(w, worker) === target &&
@@ -713,7 +744,7 @@ async function deliver(id: string, worker: string, body: string, from = "orchest
     if (m?.delivery_claim?.token === token) delete m.delivery_claim;
   }).catch(() => {});
   try {
-    await withExecutionHost(executionHost, () => agentPrompt(target, followupPrompt(id, body, from)));
+    await withExecutionHost(executionHost, () => agentPrompt(target, followupPrompt(id, body, from, owesReport)));
     return await finalize();
   } catch (err) {
     if (isRemotePromptReceiptError(err, Boolean(executionHost))) {
@@ -991,7 +1022,7 @@ export async function sync(o: { skipLocal?: boolean } = {}): Promise<Message[]> 
 export const EXITED_SUMMARY = "worker exited before reporting";
 
 /** What `check` can return; also the default filter. */
-export const CHECK_TYPES = ["done", "ask", "attention", "note", "user"] as const;
+export const CHECK_TYPES = ["done", "ask", "attention", "note", "user", "escalation"] as const;
 
 /** `--types` as given, checked against CHECK_TYPES. */
 export function checkTypes(given: string[]): string[] {
@@ -1001,8 +1032,14 @@ export function checkTypes(given: string[]): string[] {
   return given;
 }
 
+/** A message as `check` hands it over: an ask carries its options and a reply command to paste. */
+export type Delivered = Message & { options?: string[]; reply_hint?: string };
+
+/** The most messages one `check` hands over; the rest stay for the next one. */
+export const CHECK_BATCH = 50;
+
 export type CheckResult = (
-  | { result: "message"; message: Message; pending: number; options?: string[]; reply_hint?: string }
+  | { result: "message"; message: Message; messages: Delivered[]; pending: number; options?: string[]; reply_hint?: string }
   | { result: "empty"; pending: 0 }
   | { result: "timeout"; pending: 0 }
 ) & { warning?: string };
@@ -1020,8 +1057,11 @@ export function waitHeartbeat(state: State, runId: string, elapsedMs: number): R
 }
 
 /**
- * The oldest unacknowledged delivery for the orchestrator, optionally waiting
- * for one. While waiting, a heartbeat line goes to stderr every `heartbeatMs`
+ * Every unacknowledged message for the orchestrator, oldest first and at most
+ * CHECK_BATCH, optionally waiting for one: one wake handles the whole backlog
+ * instead of one model call per message. `message` (with its ask `options` and
+ * `reply_hint`) is the oldest, kept for callers that read one; `pending` counts
+ * matching messages left beyond the batch. `types` decides what is returned. While waiting, a heartbeat line goes to stderr every `heartbeatMs`
  * (PACK_WAIT_HEARTBEAT_MS, default 15 s; 0 disables); stdout stays the single result.
  */
 export async function check(run: Run, o: { wait: boolean; timeoutMs: number; types?: string[]; heartbeatMs?: number }): Promise<CheckResult> {
@@ -1032,8 +1072,9 @@ export async function check(run: Run, o: { wait: boolean; timeoutMs: number; typ
     const m = all[0];
     if (!m) return null;
     // An ask comes with its options and a reply command to paste.
-    const extra = m.type === "ask" ? { ...(m.options?.length ? { options: m.options } : {}), reply_hint: replyHint(m) } : {};
-    return { result: "message", message: m, pending: all.length - 1, ...extra };
+    const extra = (x: Message) => x.type === "ask" ? { ...(x.options?.length ? { options: x.options } : {}), reply_hint: replyHint(x) } : {};
+    const messages = all.slice(0, CHECK_BATCH).map((x) => ({ ...x, ...extra(x) }));
+    return { result: "message", message: m, messages, pending: all.length - messages.length, ...extra(m) };
   };
   const warned = (r: CheckResult): CheckResult => {
     const warning = herdrWarning(load().runs[run.id]);

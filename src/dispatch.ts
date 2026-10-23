@@ -10,12 +10,47 @@ import type { HostProfile } from "./hosts.ts";
 
 export const archiveDir = (runId: string) => join(stateDir, "archive", runId);
 
+/** Failed attempts in a row after which a task takes no new dispatch (`PACK_MAX_FAILED_ATTEMPTS`, 0 off). */
+export const MAX_FAILED_ATTEMPTS = 3;
+
+export class RetryLimitError extends Error {
+  readonly code = "retry_limit";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "RetryLimitError";
+  }
+}
+
+/** The task's failed dispatches since it was last reset to pending: the attempts that count toward the limit. */
+export function failedStreak(state: State, task: Task): string[] {
+  const since = task.retry_reset_at ? Date.parse(task.retry_reset_at) : -Infinity;
+  return Object.values(state.dispatches ?? {})
+    .filter((d) => d.task_id === task.id && d.settled_at && d.outcome === "failed" && Date.parse(d.started_at) >= since)
+    .map((d) => d.id);
+}
+
+/**
+ * A task that failed MAX_FAILED_ATTEMPTS times in a row takes no further dispatch: a
+ * fourth try of the same spec rarely goes differently. A coordinator decision resets it.
+ */
+export function assertRetryBudget(state: State, task: Task): void {
+  const raw = process.env.PACK_MAX_FAILED_ATTEMPTS;
+  const limit = raw !== undefined && Number.isInteger(Number(raw)) && Number(raw) >= 0 ? Number(raw) : MAX_FAILED_ATTEMPTS;
+  if (limit === 0) return;
+  const failed = failedStreak(state, task);
+  if (failed.length >= limit) {
+    throw new RetryLimitError(`task ${task.id} failed ${failed.length} attempts in a row (${failed.join(", ")}); no further dispatch. Rewrite the work as a new task, or reset the count deliberately with \`pack-leader task update ${task.id} --status pending\``);
+  }
+}
+
 /**
  * Record a dispatch where its id was minted. A dispatch of a task that failed
  * before is a retry of that task's last dispatch.
  */
 export function createDispatch(state: State, d: { id: string; task: Task; worker: string; preamble: string; cwd: string; worktreePath?: string; paneId?: string; executionHost?: HostProfile }): Dispatch {
   assertTaskGatesApproved(state, d.task.id);
+  assertRetryBudget(state, d.task);
   const prev = d.task.status === "failed" && d.task.dispatch_id && d.task.dispatch_id !== d.id ? d.task.dispatch_id : undefined;
   const rec: Dispatch = {
     id: d.id,
@@ -28,6 +63,11 @@ export function createDispatch(state: State, d: { id: string; task: Task; worker
     ...(d.worktreePath ? { worktree_path: d.worktreePath } : {}),
     ...(d.paneId ? { pane_id: d.paneId } : {}),
     ...(d.executionHost ? { execution_host: { ...d.executionHost } } : {}),
+    // Reusing a registered session never routes it again.
+    ...(state.workers[d.worker]?.run_id === d.task.run_id ? {
+      runtime: { kind: state.workers[d.worker]!.kind, model: state.workers[d.worker]!.model ?? null, thinking: state.workers[d.worker]!.thinking ?? null },
+      routing: { provider: "off" as const, status: "bypass" as const, reason: "session_reused" as const, elapsed_ms: 0 },
+    } : {}),
     started_at: now(),
     ...(prev ? { retry_of: prev } : {}),
   };

@@ -1,4 +1,4 @@
-import { bold, dim, fg, truncate, width } from "./ansi.ts";
+import { bold, closeWithItalic, dim, fg, italic, truncate, width } from "./ansi.ts";
 import { unacked, type Message, type State } from "./state.ts";
 
 export type MessageView = "unread" | "user";
@@ -12,7 +12,7 @@ export type MessagePanel = {
   detailScroll: number;
 };
 
-const AGENT_TYPES = new Set<Message["type"]>(["done", "ask", "note", "attention"]);
+const AGENT_TYPES = new Set<Message["type"]>(["done", "ask", "note", "escalation", "attention"]);
 const segmenter = new Intl.Segmenter();
 
 /** The two queues exposed by the sidebar. Results are oldest first; equal/invalid timestamps keep state-file order. */
@@ -138,56 +138,93 @@ export function wrapMessageText(text: string, cols: number): string[] {
   return out.length ? out : [""];
 }
 
+/** Agent messages are bold yellow, yours italic cyan; an empty queue is dim, so a count that matters stands out. */
+const unreadStyle = (n: number) => (s: string) => (n ? bold(fg.yellow(s)) : dim(s));
+const userStyle = (n: number) => (s: string) => (n ? italic(fg.cyan(s)) : dim(s));
+
 export function messageCounterLines(unread: number, user: number, cols: number): string[] {
   const left = `[u] Unread ${unread}`;
   const right = `[y] From you ${user}`;
-  if (width(left) + 3 + width(right) <= cols) return [fg.yellow(`${left}   ${right}`)];
-  return [...wrapMessageText(left, cols), ...wrapMessageText(right, cols)].map(fg.yellow);
+  const gap = "    ";
+  if (width(left) + gap.length + width(right) <= cols) return [unreadStyle(unread)(left) + gap + userStyle(user)(right)];
+  return [...wrapMessageText(left, cols).map(unreadStyle(unread)), ...wrapMessageText(right, cols).map(userStyle(user))];
+}
+
+/** One colour per message type, so a list reads at a glance: questions and alerts warm, reports green, yours cyan. */
+function typeStyle(message: Message): (s: string) => string {
+  switch (message.type) {
+    case "ask":
+      return (s) => bold(fg.yellow(s));
+    case "escalation":
+      return (s) => bold(fg.red(s));
+    case "done":
+      return message.outcome === "failed" ? fg.red : fg.green;
+    case "attention":
+      return fg.magenta;
+    case "user":
+      return fg.cyan;
+    default:
+      return fg.blue;
+  }
+}
+
+/**
+ * A message's header: sender in bold, type in its colour, age dim and italic. When it does
+ * not fit on one line (a narrow pane, a long sender), it wraps as plain text in the sender style.
+ */
+function metaLines(message: Message, cols: number, nowMs: number, prefix = "", senderStyle: (s: string) => string = bold): string[] {
+  const age = messageAge(message.ts, nowMs);
+  const plain = `${message.from} · ${message.type} · ${age}`;
+  if (width(prefix) + width(plain) <= cols) return [prefix + [senderStyle(message.from), typeStyle(message)(message.type), dim(italic(age))].join(dim(" · "))];
+  const indent = " ".repeat(width(prefix));
+  return wrapMessageText(plain, Math.max(1, cols - width(prefix))).map((line, i) => (i === 0 ? prefix : indent) + senderStyle(line));
 }
 
 export type MessageListLayout = { lines: string[]; spans: { start: number; end: number }[] };
 
-/** Sender, type, age and a bounded preview for every list item. */
+/**
+ * Sender, type, age and a bounded preview for every list item, with a blank line between
+ * items. The selected one gets a cyan marker and sender and an upright preview; the
+ * others' previews are dim italic, so the selection and the headers carry the eye.
+ */
 export function messageListLayout(messages: Message[], selectedId: string | null, cols: number, nowMs = Date.now()): MessageListLayout {
   const max = Math.max(1, cols);
   const lines: string[] = [];
   const spans: { start: number; end: number }[] = [];
   for (const message of messages) {
+    if (lines.length) lines.push("");
     const start = lines.length;
     const selected = message.id === selectedId;
-    const marker = selected ? "▶ " : "  ";
-    const meta = `${message.from} · ${message.type} · ${messageAge(message.ts, nowMs)}`;
-    const metaLines = wrapMessageText(meta, Math.max(1, max - width(marker)));
-    for (let i = 0; i < metaLines.length; i++) {
-      const text = (i === 0 ? marker : "  ") + metaLines[i]!;
-      lines.push(selected ? fg.cyan(bold(truncate(text, max))) : dim(truncate(text, max)));
-    }
+    const marker = selected ? fg.cyan("▶ ") : "  ";
+    for (const line of metaLines(message, max, nowMs, marker, selected ? (s) => bold(fg.cyan(s)) : bold)) lines.push(truncate(line, max, closeWithItalic));
     const preview = message.body.replace(/\s+/g, " ").trim() || "(empty message)";
     const previewLines = wrapMessageText(preview, Math.max(1, max - 2));
     const shown = previewLines.slice(0, 2);
     if (previewLines.length > shown.length && shown.length) shown[shown.length - 1] = truncate(shown.at(-1)! + "…", Math.max(1, max - 2), "");
-    for (const line of shown) lines.push(truncate(`  ${line}`, max));
+    for (const line of shown) lines.push(truncate(`  ${selected ? line : dim(italic(line))}`, max, closeWithItalic));
     spans.push({ start, end: lines.length });
   }
   return { lines, spans };
 }
 
-function labeled(label: string, value: string, cols: number): string[] {
-  return wrapMessageText(`${label}: ${value}`, cols);
+/** `Label: value` wrapped on plain text; the label is bold where it lands on the first line. */
+function labeled(label: string, value: string, cols: number, style: (s: string) => string = (s) => s): string[] {
+  return wrapMessageText(`${label}: ${value}`, cols).map((line, i) => (i === 0 && line.startsWith(`${label}:`) ? bold(`${label}:`) + style(line.slice(label.length + 1)) : style(line)));
 }
 
 /** The complete selected message. Nothing is height-capped; runSidebar scrolls these lines to the viewport. */
 export function messageDetailLines(message: Message, cols: number, nowMs = Date.now()): string[] {
   const max = Math.max(1, cols);
   const lines = [
-    ...wrapMessageText(`${message.from} · ${message.type} · ${messageAge(message.ts, nowMs)}`, max).map(bold),
+    ...metaLines(message, max, nowMs),
+    dim("─".repeat(Math.min(max, 24))),
     "",
     ...wrapMessageText(message.body, max),
   ];
-  if (message.type === "ask" && message.options?.length) lines.push("", ...labeled("Options", `[${message.options.join(" | ")}]`, max).map(fg.yellow));
-  if (message.type === "attention" && message.status) lines.push("", ...labeled("Status", message.status, max).map(fg.yellow));
+  if (message.type === "ask" && message.options?.length) lines.push("", ...labeled("Options", `[${message.options.join(" | ")}]`, max, fg.yellow));
+  if (message.type === "attention" && message.status) lines.push("", ...labeled("Status", message.status, max, fg.yellow));
   if (message.type === "done") {
-    if (message.outcome) lines.push("", ...labeled("Outcome", message.outcome, max).map(message.outcome === "failed" ? fg.red : fg.green));
+    if (message.outcome) lines.push("", ...labeled("Outcome", message.outcome, max, message.outcome === "failed" ? fg.red : fg.green));
     if (message.files_modified?.length) lines.push(...labeled("Files", message.files_modified.join(", "), max));
     if (message.report_path) lines.push(...labeled("Report", message.report_path, max));
   }

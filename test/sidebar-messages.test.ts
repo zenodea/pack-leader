@@ -77,7 +77,12 @@ test("sidebarMessages partitions current agent and user queues, isolates the run
 });
 
 test("zero-count header keeps both shortcuts visible and stacks in a narrow pane", () => {
-  assert.equal(plain(messageCounterLines(0, 0, 40)[0]!), "[u] Unread 0   [y] From you 0");
+  assert.equal(plain(messageCounterLines(0, 0, 40)[0]!), "[u] Unread 0    [y] From you 0");
+  const zero = messageCounterLines(0, 0, 40)[0]!;
+  assert.ok(zero.includes("\x1b[2m[u] Unread 0") && zero.includes("\x1b[2m[y] From you 0"), "empty queues are dim");
+  const busy = messageCounterLines(2, 1, 40)[0]!;
+  assert.ok(busy.includes("\x1b[1m\x1b[33m[u] Unread 2"), "agent messages: bold yellow");
+  assert.ok(busy.includes("\x1b[3m\x1b[36m[y] From you 1"), "yours: italic cyan");
   const narrow = messageCounterLines(12, 3, 13).map(plain);
   assert.deepEqual(narrow, ["[u] Unread 12", "[y] From you", "3"]);
   assert.ok(narrow.every((line: string) => width(line) <= 13));
@@ -160,6 +165,11 @@ test("list rows include sender, type, age and preview, remain bounded when narro
   assert.match(text, /▶ amy/);
   assert.match(text, /done/);
   assert.equal(layout.spans.length, 2);
+  assert.equal(layout.lines[layout.spans[1]!.start - 1], "", "a blank line separates items");
+  assert.equal(layout.spans[0]!.end, layout.spans[1]!.start - 1, "the gap is outside both spans");
+  const wide = messageListLayout(messages, "two", 60, now);
+  assert.ok(wide.lines.some((l: string) => l.includes("\x1b[3m") && plain(l).includes("first line")), "unselected previews are italic");
+  assert.ok(wide.lines.some((l: string) => l.includes("\x1b[1m\x1b[33mask")), "an ask's type is bold yellow");
   const selected = layout.spans[1]!;
   const offset = scrollFor(0, selected.start, selected.end, 4, layout.lines.length);
   assert.ok(selected.start >= offset || selected.end - selected.start >= 4);

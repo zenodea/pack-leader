@@ -2,7 +2,7 @@
 // questions about the run from Pack Leader's state, the orchestrator's recent turns and
 // members' live or archived activity, and relays the human's words (`pack-leader say`).
 // It never acts on the run itself.
-import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultsFor, loadConfig } from "./config.ts";
@@ -166,21 +166,44 @@ export function claudeSessionDir(cwd: string, home = homedir()): string {
   return join(home, ".claude", "projects", cwd.replace(/[\\/:]/g, "-"));
 }
 
-/** The orchestrator's transcript file: what herdr reports for its pane (pi), else the newest Claude Code session for its cwd. */
-export async function transcriptPath(run: Run): Promise<string | null> {
-  if (run.orchestrator.pane_id) {
+/** The first `bytes` of a file as text; a session file's opening prompt is there. */
+function head(file: string, bytes = 256 * 1024): string {
+  const fd = openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(bytes);
+    return buf.subarray(0, readSync(fd, buf, 0, bytes, 0)).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * An agent's session file: what herdr reports for its pane (pi), else the newest Claude Code
+ * session for its cwd, written since `since` and, with `marker`, opening with that text.
+ */
+export async function sessionPath(o: { paneId: string | null; cwd: string; since?: string; marker?: string }): Promise<string | null> {
+  if (o.paneId) {
     try {
-      const p = (await getPane(run.orchestrator.pane_id)) as { agent_session?: { value?: string } | null; agent?: string | null };
+      const p = (await getPane(o.paneId)) as { agent_session?: { value?: string } | null; agent?: string | null };
       if (p.agent_session?.value && existsSync(p.agent_session.value)) return p.agent_session.value;
     } catch {}
   }
-  const dir = claudeSessionDir(run.orchestrator.cwd);
+  const dir = claudeSessionDir(o.cwd);
   if (!existsSync(dir)) return null;
-  const newest = readdirSync(dir)
+  const since = o.since ? Date.parse(o.since) : -Infinity;
+  const candidates = readdirSync(dir)
     .filter((f) => f.endsWith(".jsonl"))
     .map((f) => ({ f: join(dir, f), t: statSync(join(dir, f)).mtimeMs }))
-    .sort((a, b) => b.t - a.t)[0];
-  return newest?.f ?? null;
+    .filter((c) => c.t >= since)
+    .sort((a, b) => b.t - a.t);
+  return candidates.find((c) => !o.marker || head(c.f).includes(o.marker))?.f ?? null;
+}
+
+/** The orchestrator's transcript file. */
+export async function transcriptPath(run: Run): Promise<string | null> {
+  return sessionPath({ paneId: run.orchestrator.pane_id, cwd: run.orchestrator.cwd });
 }
 
 const oneLine = (s: string, max = 240) => {

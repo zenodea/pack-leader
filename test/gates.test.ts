@@ -129,6 +129,25 @@ test("pending and rejected gates block admission until every gate is approved", 
   assert.equal(load().gates![rejectedGate.id]!.resolution_reason, "needs changes");
 });
 
+// GATE-2b: a decision gate asks between options; approving it records the choice.
+test("a decision gate is approved by choosing one of its options, by unique prefix, and the choice is immutable", async () => {
+  save(base());
+  await assert.rejects(createGate("r1", "t1", "pick one", ["only"]), (err: any) => err.code === "gate_options_invalid");
+  const g = await createGate("r1", "t1", "Which storage?", [" postgres ", "sqlite", "postgres", ""]);
+  assert.deepEqual(g.options, ["postgres", "sqlite"]);
+  await assert.rejects(resolveGate("r1", g.id, "approve"), (err: any) => err.code === "gate_choice_required" && /postgres \| sqlite/.test(err.message));
+  await assert.rejects(resolveGate("r1", g.id, "approve", undefined, "mysql"), (err: any) => err.code === "gate_choice_invalid");
+  await assert.rejects(resolveGate("r1", g.id, "reject", undefined, "sqlite"), (err: any) => err.code === "gate_choice_invalid");
+  const done = await resolveGate("r1", g.id, "approve", "smaller footprint", "SQ");
+  assert.deepEqual([done.status, done.choice, done.resolution_reason], ["approved", "sqlite", "smaller footprint"]);
+  assert.equal(ready(load(), load().tasks.t1!), true);
+  assert.equal((await resolveGate("r1", g.id, "approve", undefined, "sqlite")).resolved_at, done.resolved_at, "same choice: idempotent");
+  await assert.rejects(resolveGate("r1", g.id, "approve", undefined, "postgres"), (err: any) => err.code === "gate_decision_immutable");
+
+  const plain = await createGate("r1", "t1", "plain");
+  await assert.rejects(resolveGate("r1", plain.id, "approve", undefined, "x"), (err: any) => err.code === "gate_choice_invalid");
+});
+
 // GATE-3: the central dispatch factory prevents starts, retries, and redispatches
 // even when a caller skipped the ready() convenience check.
 test("createDispatch enforces gate approval independently of task status", async () => {

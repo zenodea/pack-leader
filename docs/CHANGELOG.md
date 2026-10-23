@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased: orchestration parity with Orca
+
+- `check` returns the whole backlog in `messages` (oldest first, up to 50), so one
+  wake handles every waiting report; `message` still holds the oldest.
+- `pack-leader spawn NAME --prompt "..."`: an unsupervised full handoff (new tab,
+  optional worktree, prompt verbatim, no run or tracking).
+- `--retry-request ID` on mutating commands and `request show ID`: a retried
+  command replays its recorded result instead of acting twice.
+- `worker abandon`: stop supervising without claiming the agent stopped.
+- Retry limit: three failed attempts in a row block further dispatch of a task
+  (`retry_limit`; `PACK_MAX_FAILED_ATTEMPTS`; reset with `task update --status pending`).
+- `task list --ready --status --brief`, and a read-only `check --all [--limit N]`.
+- Decision gates: `gate create --options`, resolved with `gate resolve --choice`.
+- `escalate`: an escalation message that requires the orchestrator to act;
+  heartbeats take `--phase`, shown on worker rows.
+- Sub-runs: a worker can lead workers of its own from its pane (`run create`),
+  depth-limited by `PACK_MAX_RUN_DEPTH` (default 1).
+- `run use ID [--takeover]`, `worker start|prompt --dry-run`, and
+  `worker read --source transcript`.
+
+## Unreleased: fewer unreported idles
+
+- A follow-up (from the orchestrator or another worker) delivered into a worker
+  that still owes a report now ends with a reminder to carry on and report with
+  `pack-leader done`. Most "idle without having reported" attention alerts came
+  from workers answering a follow-up and then ending their turn.
+
+## Unreleased: opt-in model routing
+
+- New workers can use **OpenAI Decisions** or **TypeSafe Jev** to select a model
+  and effort from approved per-harness profiles. Routing is off by default;
+  explicit model/native model or effort selections bypass it, and an explicit
+  `--thinking` is preserved.
+- `config set --routing-config FILE` imports profiles; `config set --router
+  off|openai|jev` selects the active provider. `worker start --router` overrides
+  it for one new session. Existing sessions are never rerouted.
+- Bounded leader-side requests use a configured fallback for unavailable,
+  malformed, refused, timed-out, or low-confidence decisions. Admission and
+  approval gates remain authoritative, including while a decision is pending.
+- Optional dispatch `runtime` and `routing` fields preserve per-attempt choices
+  and fallback/bypass reasons without changing state version 1.
+- See [Automatic model routing](model-routing.md) for credentials, configuration,
+  limits, privacy, and examples. Live provider calls remain unverified; provider
+  contracts and local/remote dispatch behavior are tested with fixtures.
+- Vercel fx support was deferred: Herdr 0.9.1 does not recognize its agent kind.
+
 ## Unreleased: dispatch records, liveness, run hygiene, structured asks, group messaging, worktrees
 
 Six feature branches merged together. Each branch's own decisions are in

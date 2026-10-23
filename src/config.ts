@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { configDir, ensureDir } from "./paths.ts";
+import { validateRouting, type RoutingConfig } from "./routing.ts";
 
 export type KindDefaults = { model?: string | null; thinking?: string | null; [key: string]: unknown };
 export type Placement = "tab" | "split";
@@ -12,6 +13,7 @@ export type HandoffSettings = { enabled: boolean; at_tokens: number };
 export type Settings = { placement: Placement; worktree: WorktreeMode; observer: boolean; stall_minutes: number; handoff: HandoffSettings };
 export type Config = {
   kind?: string | null;
+  routing?: RoutingConfig;
   kinds: Record<string, KindDefaults>;
   placement?: Placement;
   worktree?: WorktreeMode;
@@ -90,7 +92,12 @@ function validateConfig(value: unknown): Config {
   }
 
   validateSettings(value);
-  return { ...value, kind: value.kind ?? null, kinds } as Config;
+  let routing: RoutingConfig | undefined;
+  if (Object.hasOwn(value, "routing")) {
+    try { routing = validateRouting(value.routing); }
+    catch { throw invalidConfig("invalid routing configuration"); }
+  }
+  return { ...value, kind: value.kind ?? null, kinds, ...(routing ? { routing } : {}) } as Config;
 }
 
 function validateSettings(value: Record<string, unknown>): void {
@@ -130,6 +137,7 @@ export function loadConfig(): Config {
 }
 
 export function saveConfig(config: Config): Config {
+  validateConfig(config);
   ensureDir(configDir);
   writeFileSync(configFile, JSON.stringify(config, null, 2) + "\n");
   return config;

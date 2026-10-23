@@ -76,14 +76,18 @@ an agent's claims.
 | Capability | How it works |
 | --- | --- |
 | **Plan work** | Tasks carry specs, titles and outcomes. Use `--depends-on` for ordering, `worker start --retry` for failed tasks, and `--parent` / `task tree` for hierarchy. Parent links are not dependencies. |
-| **Require approval** | `gate create --task TASK_ID --reason "…"` blocks dispatch. Resolve with `gate resolve GATE_ID --decision approve\|reject`. Decisions are durable, coordinator-owned and immutable—not worker questions. |
+| **Require approval** | `gate create --task TASK_ID --reason "…"` blocks dispatch. Resolve with `gate resolve GATE_ID --decision approve\|reject`, or give a decision gate `--options` and resolve it with `--choice`. Decisions are durable, coordinator-owned and immutable—not worker questions. |
+| **Hand off without supervising** | `spawn NAME --prompt "…"` starts an agent in its own tab (optionally `--worktree new`) and types the prompt verbatim: no run, reports or tracking. |
 | **Choose defaults** | `pack-leader settings` opens a settings page: harness, model, effort, placement, worktrees (on, off or leader decides), observer, stall alert and handoff. `config set` writes the same values from scripts. Override `--kind`, `--model` and `--thinking` per worker; pass native agent arguments after `--`. |
+| **Route models** | Opt-in [automatic model routing](docs/model-routing.md) uses OpenAI Decisions or TypeSafe Jev to select an approved model profile for each new worker. Explicit overrides win, uncertain decisions use a configured fallback, and dispatch history records the choice. |
 | **Hand off long runs** | With handoff on, a Claude Code or pi coordinator whose context passes the limit writes a note; Pack Leader clears its session (`/clear` or `/new`) once it is idle and resumes the run from the note and `pack-leader status`. |
 | **Isolate changes** | `--worktree new` creates a branch and checkout; `--worktree PATH` reuses one. `--base` / `--branch` customize new checkouts. Ordinary `--cwd` execution needs no Git repository. |
 | **Prepare checkouts** | `--setup-command "npm ci"` runs before a local worktree agent launches, with bounded logs and `--setup-timeout` in milliseconds. Failure blocks launch; reuse does not rerun setup. |
 | **Adopt sessions** | `worker adopt NAME --spec "…"` attaches to an existing named idle/done local agent without restarting it. `--target-pane` disambiguates names. Release never closes adopted sessions. |
 | **Send followups** | Address one worker, `@all`, `@idle` or a kind such as `@pi`. Delivery waits for readiness or `inbox`; `--now` requests immediate delivery. Workers can message same-run peers. |
-| **Supervise explicitly** | Workers use `ask` (optionally with choices), `note`, `heartbeat` and `done --outcome succeeded\|failed`. Status shows liveness, attention and next actions. Idle is not completion. |
+| **Supervise explicitly** | Workers use `ask` (optionally with choices), `note`, `escalate`, `heartbeat --phase` and `done --outcome succeeded\|failed`. One `check` hands over every waiting message. Status shows liveness, attention and next actions. Idle is not completion. |
+| **Recover safely** | `--retry-request ID` makes a retried command replay its result instead of acting twice (`request show ID`). `worker abandon` stops supervising without claiming the agent stopped. Three failed attempts in a row stop a task's retries. `run use` moves a run to a new coordinator pane. |
+| **Nest runs** | A worker whose task asks for it leads a sub-run of its own from its pane, depth-limited by `PACK_MAX_RUN_DEPTH`. |
 | **Audit handoffs** | `dispatch list` and `dispatch show ID --preamble` expose attempts and exact instructions. Outcomes carry summaries, changed-file lists and report paths; release archives screens for later `worker read`. |
 | **Run remotely** | SSH host profiles route launch, messaging, observation and release while keeping run state on the leader. See [Remote workers](#remote-workers). |
 

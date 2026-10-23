@@ -225,3 +225,11 @@ test("boundRunFor: only an active run binds a sidebar pane; a closed run that re
   assert.equal(boundRunFor(state, "w5:p7")?.id, "cur");
   assert.equal(boundRunFor(state, null), undefined);
 });
+
+test("a worker's runtime stops when its task settles and keeps counting while it is open", () => {
+  const started = new Date(Date.now() - 10 * 60_000).toISOString();
+  const w = { name: "api", run_id: "r1", kind: "claude", pane_id: "w1:p2", cwd: "/", task_id: "t1", dispatch_id: "d1", started_at: started, last_status: "done", last_seq: 1, last_seen: "t", owns_pane: true, retained: false } as any;
+  const t = { id: "t1", run_id: "r1", title: "api", spec: "s", status: "succeeded", depends_on: [], worker: "api", dispatch_id: "d1", attempts: 1, created_at: "t", updated_at: new Date(Date.parse(started) + 4 * 60_000 + 5_000).toISOString(), outcome: null } as any;
+  assert.match(boxLines(w, t, null, "done", 60).map(plain).join("\n"), /runtime 4m05s/);
+  assert.match(boxLines(w, { ...t, status: "dispatched" }, null, "working", 60).map(plain).join("\n"), /runtime 10m0\ds/);
+});

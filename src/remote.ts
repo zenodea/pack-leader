@@ -19,7 +19,7 @@ const REMOTE_METHODS = new Set([
   "agent.list", "agent.get", "agent.start", "agent.prompt", "agent.read", "agent.send_keys", "agent.wait", "agent.focus",
   "pane.get", "pane.list", "pane.close", "pane.report_metadata", "tab.create", "tab.close",
 ]);
-const CALLBACK_COMMANDS = new Set(["done", "ask", "note", "heartbeat", "send", "inbox"]);
+const CALLBACK_COMMANDS = new Set(["done", "ask", "note", "escalate", "heartbeat", "send", "inbox"]);
 
 export class RemoteError extends Error {
   readonly code: string;

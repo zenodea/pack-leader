@@ -14,8 +14,8 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
 
 const { emptyState, load, save } = await import("../src/state.ts");
-const { check, checkTypes, inbox, note, sendTo, sync, workerSend } = await import("../src/inbox.ts");
-const { workerSummary } = await import("../src/workers.ts");
+const { check, checkTypes, escalate, heartbeat, inbox, note, sendTo, sync, workerSend } = await import("../src/inbox.ts");
+const { nextAction, workerSummary } = await import("../src/workers.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };
@@ -127,6 +127,16 @@ test("@idle uses live herdr status, not the recorded one, and delivers at once",
   assert.ok(prompts().every((p) => p.params.text.startsWith("[Pack Leader follow-up from the orchestrator] ")));
 });
 
+test("a follow-up reminds a worker that owes a report to carry on and report, but not a settled one", async () => {
+  save(base());
+  handler = live({ "w1:p2": "idle", "w1:p4": "idle" });
+  await sendTo(load().runs.r1!, "api", "use the helper in src/net.ts", false);
+  await sendTo(load().runs.r1!, "docs", "thanks", false);
+  const text = (target: string) => prompts().find((p) => p.params.target === target)!.params.text as string;
+  assert.match(text("api"), /^\[Pack Leader follow-up from the orchestrator\] use the helper in src\/net\.ts\n\[Pack Leader message id: m\w+\]\n\[Then carry on with your task\. When it is finished, report with `pack-leader done`/);
+  assert.match(text("docs"), /^\[Pack Leader follow-up from the orchestrator\] thanks\n\[Pack Leader message id: m\w+\]$/, "docs settled t3: no reminder");
+});
+
 test("@<kind> selects by Worker.kind within the run", async () => {
   save(base());
   handler = live({});
@@ -197,7 +207,7 @@ test("worker-to-worker send is delivered with a from-worker prefix", async () =>
   const r = await workerSend(context("api"), "web", "the /users route is ready", false);
   assert.deepEqual(r.recipients.map((x) => [x.worker, x.delivered]), [["web", true]]);
   assert.equal(prompts().length, 1);
-  assert.match(prompts()[0]!.params.text, /^\[pack-leader follow-up from worker api\] the \/users route is ready\n\[Pack Leader message id: m\w+\]$/);
+  assert.match(prompts()[0]!.params.text, /^\[pack-leader follow-up from worker api\] the \/users route is ready\n\[Pack Leader message id: m\w+\]\n\[Then carry on with your task\. .*`pack-leader done`.*\]$/);
   const stored = followups()[0]!;
   assert.equal(stored.from, "api");
   assert.equal(stored.to, "web");
@@ -212,7 +222,7 @@ test("a queued worker-to-worker followup keeps its prefix when sync delivers it,
   handler = live({ "w1:p2": "working", "w1:p3": "idle", "w1:p4": "working" });
   await sync();
   assert.equal(prompts().length, 1);
-  assert.match(prompts()[0]!.params.text, /^\[pack-leader follow-up from worker api\] later\n\[Pack Leader message id: m\w+\]$/);
+  assert.match(prompts()[0]!.params.text, /^\[pack-leader follow-up from worker api\] later\n\[Pack Leader message id: m\w+\]\n\[Then carry on with your task\. .*\]$/);
 
   save(base());
   handler = live({ "w1:p3": "working" });
@@ -257,6 +267,29 @@ test("a note is a sign of life and shows in the worker row's attention without r
   const row = workerSummary(w, load());
   assert.deepEqual(row.attention, { categories: ["note"], requires_action: false });
   assert.equal(row.next_action, null);
+});
+
+test("an escalation requires action, leads the worker's next_action to a send, and surfaces in check", async () => {
+  save(base());
+  handler = live({ "w1:p1": "working" });
+  const m = await escalate(context("api"), "the spec says REST but t2 already shipped gRPC");
+  assert.equal(m.type, "escalation");
+  assert.equal(m.acked, false);
+  const row = workerSummary(load().workers.api!, load());
+  assert.deepEqual(row.attention, { categories: ["escalation"], requires_action: true });
+  assert.deepEqual(nextAction(load(), load().workers.api!), ["pack-leader", "send", "api", "<what to do about it>"]);
+  const r = await check(load().runs.r1!, { wait: false, timeoutMs: 0, types: ["escalation"] });
+  assert.equal(r.result === "message" && r.message.id, m.id);
+});
+
+test("a heartbeat --phase is stored on the message and shown on the worker row", async () => {
+  save(base());
+  handler = live({});
+  const m = await heartbeat(context("api"), "tests green", "  reviewing   changes ");
+  assert.equal(m.phase, "reviewing changes");
+  assert.equal(workerSummary(load().workers.api!, load()).phase, "reviewing changes");
+  await heartbeat(context("api"), "still going");
+  assert.equal(load().workers.api!.phase, "reviewing changes", "a heartbeat without a phase keeps the last one");
 });
 
 test("a worker cannot send within a closed run", async () => {

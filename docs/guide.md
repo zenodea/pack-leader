@@ -23,12 +23,33 @@ failures.
 | Your situation                                                       | Role         | What to do                                                       |
 | -------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------- |
 | The user asks to delegate, fan out, supervise, or coordinate workers | Orchestrator | Run the supervised loop below                                    |
+| The user asks to hand work off to another agent, with no supervision | Handoff      | `pack-leader spawn` (below); create no run, task or dispatch     |
 | Your prompt starts with `[pack-leader dispatch]`                            | Worker       | Follow the preamble and the worker obligations below             |
 | Neither                                                              | Plain agent  | Do not run pack-leader lifecycle commands                               |
 
 Never substitute a built-in subagent tool for Pack Leader when the user asked for
 Pack Leader, a pack, or supervised workers: those run inside your context and leave
 no state the user can see in the sidebar.
+
+## Full handoff
+
+A handoff gives the work away: a new agent owns it, and you neither wait for it
+nor hear back. It is much cheaper than a supervised worker (no preamble, reports,
+questions or wake-ups), so prefer it whenever nobody needs to track the result,
+for example when the user says "hand this off", "give this to another agent" or
+"start an agent on X", and does not ask to supervise, monitor or collect results:
+
+```bash
+pack-leader spawn fix-login --prompt "<self-contained brief>" [--worktree new] [--kind codex] [--model M]
+```
+
+It opens a tab in this herdr workspace (or, with `--worktree new`, a checkout on
+branch `pack/spawn/<name>`, with its own workspace), starts the agent and types the
+prompt verbatim. It needs no run. The handoff is done when the result shows
+`prompted: true`; report the tab and branch and stop. A `warning` (exit 1) means
+the prompt did not go in: say so. Pack Leader never releases a spawned tab or
+removes its worktree. Write the prompt like a task spec (below), since nothing
+else reaches the agent.
 
 ## Authority and safety floor
 
@@ -109,7 +130,7 @@ read-only views: opening or reading a message never acknowledges it or sends
 a reply. Continue processing and acknowledging messages through `check` and
 `reply` as normal.
 
-`pack-leader check --wait` blocks until the oldest unread message arrives, so give
+`pack-leader check --wait` blocks until an unread message arrives, so give
 the shell tool a timeout at least as long (10 minutes is the usual ceiling).
 A `timeout` result is a checkpoint: look at `pack-leader status`, then wait again.
 
@@ -125,17 +146,20 @@ While it waits, `check --wait` writes one JSON line to stderr every 15 s,
 (`pending` counts dispatched tasks still owing a report); stdout stays the single
 final result. `PACK_WAIT_HEARTBEAT_MS` sets the interval, `0` turns it off.
 
-Process every message as the Messaging section below says, acknowledge it, and
-wait for the next:
+A `message` result carries the whole backlog in `messages` (oldest first, up to
+50; `pending` counts any left beyond them). Process every one as the Messaging
+section below says, then acknowledge them all in the next wait:
 
 ```bash
 pack-leader reply m7 --body "Use the existing helper in src/net.ts; do not add a dependency."
-pack-leader check --ack m7 --wait --timeout 540000
+pack-leader check --ack m7,m8,m9 --wait --timeout 540000
 ```
 
 Use `pack-leader task create` with `--depends-on` for planned fan-out with ordering,
-then `pack-leader worker start <name> --task <id>` when `pack-leader task list` shows the
-task ready. A dependency that is already `failed` or `blocked` is accepted with a
+then `pack-leader worker start <name> --task <id>` when the task is ready.
+`pack-leader task list --ready --brief` is the compact ready view: only tasks you can
+dispatch now, each with its spec collapsed and capped at 160 characters
+(`spec_truncated` marks shortened ones); `--status S` filters by status instead. A dependency that is already `failed` or `blocked` is accepted with a
 `warning`: the new task waits until it succeeds. Prefer parallel waves over chains deeper than three steps.
 
 Task parent links are provenance and tree organization only: they do not block readiness,
@@ -212,12 +236,16 @@ failed handoff is reported to the user and not retried for that run.
 
 ## Messaging
 
-`pack-leader check` returns the oldest unacked message for you; `--ack ID[,ID]`
-acknowledges, and `--types` filters by `done`, `ask`, `attention`, `note` (the
-default is all four; any other value is an error, raised before anything is
-acked). An `--ack` that matches nothing adds `acked: 0` and `ack_warning` to the same result.
+`pack-leader check` returns every unacked message for you, oldest first, in
+`messages` (`message` repeats the oldest, and an `ask` row carries its `options`
+and `reply_hint`); `--ack ID[,ID]`
+acknowledges, and `--types` filters by `done`, `ask`, `attention`, `note`,
+`escalation` and `user` (the default is all of them; any other value is an error,
+raised before anything is acked). An `--ack` that matches nothing adds `acked: 0` and `ack_warning` to the same result.
 A bare `--ack` with no ids is an error; ids that are no message of the run are
-listed in `ack_unknown`.
+listed in `ack_unknown`. A `check` without `--wait` never consumes anything either:
+only `--ack` does. `check --all [--limit N]` lists the last N (50) messages to you,
+read or not, for looking back; it is read-only and takes no `--wait`.
 
 | `type`      | Meaning                                                   | Your move                                                                                |
 | ----------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -225,6 +253,7 @@ listed in `ack_unknown`.
 | `ask`       | The worker is blocked on a question. With `options`, `check` adds them and a `reply_hint` to paste | `pack-leader reply <id> --body "<answer>"`; with `options`, name one (exactly or by a unique case-insensitive prefix) or add `--free` to answer outside them |
 | `attention` | The worker settled, vanished, or went quiet without reporting; `status` says which: `idle`/`done`, `blocked`, `exited` (pane gone), `unverifiable` (agent gone, pane alive), `stalled` (owes a report, no sign of life for `PACK_STALL_MS`, default 20 min, `0` off; never while its question is open) | `pack-leader worker read <name>`; re-prompt it to run `pack-leader done`, or release with `--force` |
 | `note`      | A non-blocking line from a worker that keeps working      | Read it, act if needed (a `send`, a new task), then ack it                               |
+| `escalation`| The worker keeps working but you must act (the spec is wrong, it conflicts with another worker, a risk to decide) | Act (a `send`, a spec change, a gate, a stop), then ack it; `next_action` points at a `send` |
 | `user`      | A line from the human (`pack-leader say`, often relayed by the observer) | It is an instruction, not a report: act on it, then ack it                   |
 
 A reply to an ask with options must name one of them; anything else is an
@@ -244,6 +273,8 @@ follow-up, and the result lists every recipient with its `delivered` flag.
 A recipient released while a group send was going out is listed with an `error` and nothing is
 sent to it; the others still get theirs. A worker that has not yet received its dispatch prompt
 (still starting, or its prompt failed) gets followups only afterwards, even with `--now`.
+A follow-up prompted into a worker that still owes a report ends with a line telling it to
+carry on and report with `pack-leader done`, so you need not repeat that yourself.
 
 | Address    | Recipients (in this run)                                  |
 | ---------- | --------------------------------------------------------- |
@@ -279,6 +310,25 @@ pack-leader gate list [--task t4]
 pack-leader gate show g5
 pack-leader gate resolve g5 --decision approve|reject [--reason "..."]
 ```
+
+A gate with `--options` is a decision gate: it asks a question with fixed answers,
+and approving it means choosing one. Use it for a coordinator-owned choice the
+task waits on, never to answer a worker's `ask`. The gate records the choice;
+the worker does not see it, so put what was chosen into the task spec (or the
+`--spec` of the dispatch) yourself:
+
+```text
+pack-leader gate create --task t4 --reason "Which storage for the import?" --options "postgres,sqlite"
+pack-leader gate resolve g6 --choice sqlite [--reason "..."]   # a unique prefix works; --decision reject still blocks
+```
+
+A task that failed three attempts in a row takes no further dispatch: `worker
+start --retry`, `worker prompt --task` and `worker adopt --task` fail with code
+`retry_limit` and name the failed dispatches. A fourth try of the same spec
+rarely goes differently, so rewrite the work as a new task (smaller, or with what
+the failures taught you). Only when you have a concrete reason the next attempt
+will differ, reset the count with `pack-leader task update <id> --status pending`.
+`PACK_MAX_FAILED_ATTEMPTS` changes the limit; `0` turns it off.
 
 A pending or rejected gate blocks every new dispatch, including a failed-task retry and a redispatch; all gates on the task must be approved. Task readiness, task summaries, worker views, and run status show gate blockers. Approval releases only that gate. Rejection remains a blocker and does not change the task's status. `task update` cannot bypass a gate: returning a task to pending leaves the gate in place. A task already dispatched, or accepted for start but not yet registered, cannot receive a new gate; gate creation and start admission serialize under the state lock.
 
@@ -354,6 +404,13 @@ After an accepted `done` report, do exactly one:
 2. Record user-requested retention: `pack-leader worker retain <name>`.
 3. Clean up: `pack-leader worker release <name>`.
 
+When you must stop supervising a worker whose state you cannot prove (its host
+is unreachable, its pane is in an unknown state, the user takes it over), use
+`pack-leader worker abandon <name>` instead of a forced release: it fails the open
+task as abandoned and settles its dispatch, but touches nothing in herdr, the
+process or the filesystem. The pane and agent stay as they are, the name is free
+again, and a checkout Pack Leader made stays protected from cleanup.
+
 Release is post-settlement cleanup, not cancellation. It saves the worker's
 screen to the state dir first, then closes the tab or pane Pack Leader created,
 and prints `closed_pane`, `closed_tab` (a hidden worker's whole tab goes),
@@ -364,6 +421,14 @@ naming what may still be open. Followups and replies the worker never received
 are dropped with it (the same on `run close`). To interrupt a
 worker mid-turn use `pack-leader worker stop <name>`, inspect it, and decide.
 When the run is finished, `pack-leader run close --release` releases what is left.
+
+## Before a dispatch: dry run
+
+`pack-leader worker start NAME ... --dry-run` and `pack-leader worker prompt NAME ...
+--dry-run` print what would be handed over (the task, or the one `--spec` would
+create, the cwd, the planned worktree and the exact preamble) and change nothing.
+Admission checks (a taken name, readiness, gates, the retry limit) apply as they
+would on the real start; ids show as `t?`/`d?` and routing is not consulted.
 
 ## Dispatch records
 
@@ -376,7 +441,58 @@ dispatches; `pack-leader dispatch show ID --preamble` prints exactly what a
 worker was told. Both work on a closed run until it is pruned. Release saves
 the worker's screen before closing its tab, so `pack-leader worker read <name>`
 still works afterwards: it answers with `source: "archive"` (`--dispatch ID`
-picks a specific one). `task show` lists a task's `dispatch_ids`.
+picks a specific one). `pack-leader worker read <name> --source transcript [--turns
+N]` reads a live local worker's own session file instead of its screen: its last N
+(20) turns as text, tool calls and results included (pi's file comes from herdr,
+Claude Code's is found by its dispatch prompt). `task show` lists a task's `dispatch_ids`.
+
+## Sub-runs
+
+A worker whose task is itself a fan-out can lead workers of its own. Ask for it in
+the spec ("split this into parallel workers and coordinate them"); otherwise
+workers do their task themselves. From its own pane the worker runs the same
+commands an orchestrator does:
+
+```bash
+pack-leader run create --objective "<its part of the work>"   # a sub-run, led from this pane
+pack-leader worker start parser --spec "..."
+pack-leader check --wait --timeout 540000
+pack-leader run close --run <sub-run id>                     # before its own done
+```
+
+The sub-run records its `parent` (run, worker, task, dispatch) and `depth`. From
+that pane, orchestrator commands (`task`, `worker`, `gate`, `check`, `reply`, a
+`send` to its own workers or a group) act on the sub-run, while the worker's own
+`done`, `ask`, `note`, `escalate`, `heartbeat` and `inbox` still go to the run that
+dispatched it. A sub-run opens no sidebar or observer. Its worker cannot report
+`done` while the sub-run is open, and the parent cannot lose track of it: `run
+close` refuses while a worker's sub-run is open unless `--release` or `--force`
+(which close the sub-runs first, releasing their workers), `worker release --force`
+does the same for that worker's sub-runs, and `worker abandon` lists the ones it
+leaves open. Depth is limited by `PACK_MAX_RUN_DEPTH` (default 1: workers of a
+top-level run may lead a sub-run, their workers may not; 0 forbids sub-runs); past
+it, `run create` fails with `nested_depth_exceeded`.
+
+## Retrying a command safely
+
+A command whose result you never saw (the shell timed out, the session dropped)
+may already have acted. Do not just run it again: give each mutating command a
+request id of your own, and repeat the exact command with the same id:
+
+```bash
+pack-leader worker start api --spec "..." --retry-request start-api-1
+```
+
+A request that finished prints its recorded result again with
+`replayed_request` and does nothing else, including a recorded error. The same
+id on a different command is refused (`request_conflict`); one still running is
+refused (`request_running`); one whose process died before recording a result
+is `request_outcome_unknown`: inspect the run, and use a new id only if it did
+not take effect. `pack-leader request show ID` reports `completed` (with its
+receipt), `pending`, or `absent`, and absent is not proof that nothing happened.
+Accepted by `run create|close`, `task create|update`, `gate create|resolve`,
+`worker start|adopt|prompt|resend|stop|retain|release|abandon`, `reply`, `send`,
+`say`, `done`, `note` and `spawn`. Records are kept for a week.
 
 ## Closing and pruning runs
 
@@ -409,6 +525,12 @@ never pruned, nor is a run closed less than an hour ago whose workers a `run clo
 listed under `skipped` with the command to finish it (`pack-leader run close --run <id> --force`). `run prune` also removes eligible released, clean checkouts Pack Leader created; live, forgotten, protected, existing, or dirty checkouts are left in place. Its dry run classifies dirty checkouts as kept without writing state or lock files. `pack-leader status` counts closed runs;
 `status --all` lists them.
 
+A session that must lead a run it did not create (the coordinator's pane
+crashed, or the user hands the run to you) binds it with `pack-leader run use
+<id>` from its own pane. While the old coordinator's pane is still open that is
+refused: pass `--takeover` only when that coordinator is gone or hands over.
+Workers, tasks and messages stay as they are; nudges come to the new pane.
+
 Commands that name a task or worker (`task show`, `task tree`, `task update`,
 `worker show`, `read`, `focus`, `stop`, `retain`) only find it in the current run.
 
@@ -417,7 +539,8 @@ Commands that name a task or worker (`task show`, `task tree`, `task update`,
 Your `[pack-leader dispatch]` preamble is authoritative. You must:
 
 1. Do only the current task, in the given directory. Do not start or steer
-   other agents.
+   other agents, unless your task spec asks you to coordinate workers of your
+   own: then lead a sub-run (see "Sub-runs").
 2. Ask the orchestrator blocking questions with `pack-leader ask "<question>"`. It
    waits for the answer; after a timeout, `pack-leader ask --id <id>` keeps waiting
    (only your own ask; an id that is not yours fails at once, and if you already
@@ -429,10 +552,13 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
    `reply`), so branch on those.
 3. Read follow-ups at natural checkpoints (before starting a new file, after a
    test run) and once more right before reporting: `pack-leader inbox`.
-4. During long work, about every ten minutes: `pack-leader heartbeat "<one line>"`.
+4. During long work, about every ten minutes: `pack-leader heartbeat "<one line>" --phase <phase>`.
    For a blocker you can work around, a finding the orchestrator should know,
    or "I am taking longer because ...", use `pack-leader note "<text>"`: it reaches
-   the orchestrator's inbox without stopping you. Use `ask` only when you
+   the orchestrator's inbox without stopping you. When the orchestrator must act
+   (the spec is wrong, you conflict with another worker, a risk it must decide),
+   use `pack-leader escalate "<text>"` and keep working on what you can. Give a
+   heartbeat its phase: `--phase investigating|implementing|reviewing|waiting`. Use `ask` only when you
    cannot continue without the answer. When another worker of the run needs
    to know something, `pack-leader send <worker> "<text>"` reaches it as a
    follow-up. In a worktree of your own, commit on the branch the preamble names.
@@ -450,30 +576,37 @@ Your `[pack-leader dispatch]` preamble is authoritative. You must:
 ```text
 # runs
 pack-leader run create --objective "..." [--no-sidebar] [--no-observer] [--left] [--another] [--cwd D] | show | list
+pack-leader run use ID [--takeover] [--another]
 pack-leader run close [--release] [--force]
 pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
 pack-leader status [--json] [--all]
 pack-leader COMMAND ... [--run ID]
 # tasks
 pack-leader task create --spec "..." [--title T] [--depends-on a,b] [--parent ID]
-pack-leader task list | show ID | tree [ID] | update ID [--status S] [--parent ID|none] [--summary S] [--force]
+pack-leader task list [--ready] [--status S] [--brief] | show ID | tree [ID] | update ID [--status S] [--parent ID|none] [--summary S] [--force]
 # approval gates (coordinator only)
-pack-leader gate create --task ID --reason TEXT
+pack-leader gate create --task ID --reason TEXT [--options a,b,c]
 pack-leader gate list [--task ID] | show ID
-pack-leader gate resolve ID --decision approve|reject [--reason TEXT]
+pack-leader gate resolve ID --decision approve|reject | --choice OPTION [--reason TEXT]
+# full handoff (no run)
+pack-leader spawn NAME --prompt "..." [--kind K] [--model M] [--thinking L] [--cwd D] [--worktree new|PATH [--base REF] [--branch B]] [--no-default-args] [--timeout MS] [-- agent args]
 # workers
-pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--cwd D] [--placement tab|split] [--host NAME]
+pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--router off|openai|jev] [--cwd D] [--placement tab|split] [--host NAME]
                          [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [--setup-command STRING [--setup-timeout MS]] [--title T] [--target-pane P]
                          [--ratio R] [--no-default-args] [--timeout MS] [-- agent args]
 pack-leader worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]
 pack-leader worker prompt NAME --spec "..." [--title T] | --task ID | resend NAME
-pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
+pack-leader worker start|prompt ... --dry-run
+pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] [--source screen|transcript] [--turns N] | focus NAME | stop NAME | retain NAME
 pack-leader worker release NAME [--force] [--keep-pane] [--remove-worktree] [--keep-worktree]
+pack-leader worker abandon NAME
 pack-leader host add NAME --ssh-target ALIAS_OR_USER@HOST --workspace-id ID --leader-ssh-target TARGET [--herdr-socket PATH] [--pack-leader BIN] [--leader-pack-leader BIN]
 pack-leader host list | show NAME | remove NAME
 pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
+pack-leader request show ID
+pack-leader MUTATING-COMMAND ... --retry-request ID
 # messaging
-pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
+pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note] | check --all [--limit N]
 pack-leader reply ASK_ID --body "..." [--free]
 pack-leader say "text" | --body "..."
 pack-leader send NAME|@all|@idle|@KIND "text" | --body "..." [--now]
@@ -481,10 +614,10 @@ pack-leader handoff --body "<note>"
 # worker side (adopted sessions use the explicit context prefix in their preamble)
 pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
 pack-leader ask "question" | --body "..." [--options a,b,c] [--timeout MS] | ask --id ID
-pack-leader note "text" | --body "..." | send WORKER "text" | --body "..." [--now] | heartbeat "note" | --body "..." | inbox
+pack-leader note "text" | --body "..." | escalate "text" | --body "..." | send WORKER "text" | --body "..." [--now] | heartbeat "note" | --body "..." [--phase P] | inbox
 pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]
 # either
-pack-leader config [show] | pick | set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
+pack-leader config [show] | pick | set [--routing-config FILE] [--router off|openai|jev] [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
                    [--placement tab|split] [--worktree-mode on|off|leader] [--observer on|off] [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
 pack-leader settings | skill [--install] | sidebar | leader [--run ID] | observe [--turns N] | observer [--close] | help
 ```
@@ -511,6 +644,11 @@ What the less obvious flags do:
   `run create`, `--stall-minutes N` (0 is off; `PACK_STALL_MS` still wins), and
   `--handoff`/`--handoff-at` (a token count such as `200000`, `200k` or `1m`).
   Flags on the command itself still win over the stored values.
+  `--routing-config FILE` imports approved per-harness model profiles from a JSON
+  routing object; `--router off|openai|jev` selects its active provider without
+  deleting those profiles. Routing is off by default. See
+  [Automatic model routing](model-routing.md) for configuration, credentials,
+  confidence thresholds, privacy, and fallback behavior.
 - `worker start`: `--title T` (task title for `--spec`), `--target-pane P` and
   `--ratio R` (with `--placement split`), `--no-default-args` (no
   `--allowedTools` for the agent), `--timeout MS` (agent start, default 45000), and
@@ -522,6 +660,10 @@ What the less obvious flags do:
   half; with any of them it splits that one pane (right unless `--direction`).
   `--direction` with `--placement tab` is an error. `--host NAME --cwd /remote/path` starts in an existing remote
   workspace; it accepts tab placement only and rejects worktree/setup options before dispatch.
+  `--router off|openai|jev` overrides routing for this new worker only. An explicit
+  model or native model/effort flags bypass routing; explicit `--thinking` is
+  preserved. The router selects an approved model profile, never a harness or a
+  replacement model for an existing session. Dispatch records keep its decision.
 - `worker adopt NAME`: attach to one existing named herdr agent only when it is
   idle or done. `--target-pane P` selects the exact pane when names are duplicated;
   without it, the name must match one live agent. The session is never restarted,
@@ -530,10 +672,10 @@ What the less obvious flags do:
   includes a shell-quoted `env PACK_ROLE=worker ... pack-leader` prefix with the
   current run, worker, task, dispatch, and state-directory values; use it before
   each worker command.
-- `WORKER-COMMAND` is `done`, `ask`, `heartbeat`, `note`, `send` or `inbox`:
+- `WORKER-COMMAND` is `done`, `ask`, `heartbeat`, `note`, `escalate`, `send` or `inbox`:
   `--run`, `--worker`, `--task`, `--dispatch` override the IDs from the environment
-  (orchestrator `send` accepts `--run` only); `ask`, `heartbeat`, `note` and
-  `send` also take the text as `--body "..."`.
+  (orchestrator `send` accepts `--run` only); `ask`, `heartbeat`, `note`,
+  `escalate` and `send` also take the text as `--body "..."`.
 - `host add NAME`: stores a trusted SSH profile in `hosts.json` under Pack Leader
   configuration. `--ssh-target` is an SSH config alias or `user@host`, and
   `--leader-ssh-target` is the reciprocal target the remote worker uses to call

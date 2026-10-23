@@ -4,7 +4,7 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { getPane, renamePane, logHerdrError, paneClose, tabRename } from "./herdr.ts";
 import { closeObserver } from "./observer.ts";
-import { activeRuns, acquire, log, now, release, runWorkers, START_CLAIM_MS, type Run, type State, update } from "./state.ts";
+import { activeRuns, acquire, load, log, now, release, runWorkers, START_CLAIM_MS, type Run, type State, update } from "./state.ts";
 import { archiveDir, settleDispatch, startClaimIsFresh } from "./dispatch.ts";
 import { stateDir } from "./paths.ts";
 import { type ReleaseResult, releaseWorker } from "./workers.ts";
@@ -115,6 +115,16 @@ export function removeArchives(runIds: string[]): string[] {
   return gone;
 }
 
+export class SubRunError extends Error {
+  readonly code: "nested_depth_exceeded" | "sub_run_open";
+
+  constructor(code: SubRunError["code"], message: string) {
+    super(message);
+    this.name = "SubRunError";
+    this.code = code;
+  }
+}
+
 export type CloseResult = {
   closed: string;
   /** Released workers; each one's screen is archived first, as `worker release` does. */
@@ -124,6 +134,8 @@ export type CloseResult = {
   failed_tasks: string[];
   closed_sidebar: string | null;
   closed_observer: string | null;
+  /** Sub-runs coordinated by this run's workers, closed (with their workers released) first. */
+  sub_runs?: CloseResult[];
 };
 
 /**
@@ -134,6 +146,14 @@ export type CloseResult = {
  * unless another active run shows the same one.
  */
 export async function closeRun(runId: string, o: { release?: boolean; force?: boolean } = {}): Promise<CloseResult> {
+  // A sub-run cannot outlive the run whose worker coordinates it: close those first, releasing their workers.
+  const subRuns: CloseResult[] = [];
+  if (o.release || o.force) {
+    for (const child of activeRuns(load()).filter((r) => r.parent?.run_id === runId)) subRuns.push(await closeRun(child.id, { release: true, force: true }));
+  } else {
+    const open = activeRuns(load()).filter((r) => r.parent?.run_id === runId);
+    if (open.length) throw new SubRunError("sub_run_open", `workers of run ${runId} still coordinate sub-runs: ${open.map((r) => `${r.id} (${r.parent!.worker})`).join(", ")}; pass --release to close them too, or --force`);
+  }
   const { run, workers, failed } = await withRunStartFence(runId, () => update((state) => {
     const run = state.runs[runId];
     if (!run) throw new Error(`no run ${runId}`);
@@ -223,5 +243,5 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
   if (run.orchestrator.pane_id) await renamePane(run.orchestrator.pane_id, null);
   if (run.orchestrator.tab_id && run.orchestrator.tab_label) await tabRename(run.orchestrator.tab_id, run.orchestrator.tab_label).catch(() => {});
   log({ event: "run.closed", run: runId, released: released.map((r) => r.worker), forgotten: forgotten.map((f) => f.worker), failed_tasks: failed, closed_sidebar, closed_observer });
-  return { closed: runId, released, forgotten, failed_tasks: failed, closed_sidebar, closed_observer };
+  return { closed: runId, released, forgotten, failed_tasks: failed, closed_sidebar, closed_observer, ...(subRuns.length ? { sub_runs: subRuns } : {}) };
 }
