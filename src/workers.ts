@@ -8,7 +8,7 @@ import { dropUndelivered, envMs, EXITED_SUMMARY, touch } from "./inbox.ts";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { herdrSocketPath, stateDir } from "./paths.ts";
-import { acquire, load, log, nextId, now, ready, release, START_CLAIM_MS, taskGateBlockers, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
+import { acquire, addTask, load, log, newTask, nextId, now, ready, release, START_CLAIM_MS, withRunStartFence, taskGateBlockers, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
 import { assertTaskGatesApproved } from "./gates.ts";
 import { archiveScreen, assertRetryBudget, createDispatch, settleDispatch, startClaimIsFresh, taskDispatchIds } from "./dispatch.ts";
 import { gitWorktreeAdd, gitWorktreeRemove, isUnknownMethod, planWorktree, worktreeIdentityPath, type WorktreeInfo } from "./worktree.ts";
@@ -201,6 +201,21 @@ async function resolveStartRuntime(o: StartOptions, task: Task, dispatchId: stri
   return { extraArgs, runtime, routing: selected.routing };
 }
 
+function admitTask(state: State, o: { run: Run; taskId?: string; spec?: string; title?: string; retry?: boolean }, create: (spec: string, title?: string) => Task = (spec, title) => addTask(state, o.run.id, spec, title)): Task {
+  if (!o.taskId) {
+    if (!o.spec) throw new Error("pass --spec \"<task>\" or --task <id>");
+    return create(o.spec, o.title);
+  }
+  const t = state.tasks[o.taskId];
+  if (!t || t.run_id !== o.run.id) throw new Error(`no task ${o.taskId} in run ${o.run.id}`);
+  if (t.status === "dispatched") throw new Error(`task ${t.id} is already dispatched to ${t.worker}`);
+  if (t.status === "succeeded") throw new Error(`task ${t.id} already succeeded`);
+  if (t.status === "failed" && !o.retry) throw new Error(`task ${t.id} failed; pass --retry to try again`);
+  assertTaskGatesApproved(state, t.id);
+  if (!o.retry && !ready(state, t)) throw new Error(`task ${t.id} waits on ${t.depends_on.filter((d) => state.tasks[d]?.status !== "succeeded").join(", ")}`);
+  return t;
+}
+
 export async function startWorker(o: StartOptions): Promise<StartResult> {
   o = { ...o, ...(o.routing !== undefined ? { routing: validateRouting(o.routing) } : {}) };
   if (o.router !== undefined) routerProvider(o.router);
@@ -230,34 +245,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       );
       if (other) throw new Error(`worker "${other.name}" already works in ${wt.path}; two workers never share a working tree`);
     }
-    let task: Task;
-    if (o.taskId) {
-      const t = state.tasks[o.taskId];
-      if (!t || t.run_id !== o.run.id) throw new Error(`no task ${o.taskId} in run ${o.run.id}`);
-      if (t.status === "dispatched") throw new Error(`task ${t.id} is already dispatched to ${t.worker}`);
-      if (t.status === "succeeded") throw new Error(`task ${t.id} already succeeded`);
-      if (t.status === "failed" && !o.retry) throw new Error(`task ${t.id} failed; pass --retry to try again`);
-      assertTaskGatesApproved(state, t.id);
-      if (!o.retry && !ready(state, t)) throw new Error(`task ${t.id} waits on ${t.depends_on.filter((d) => state.tasks[d]?.status !== "succeeded").join(", ")}`);
-      task = t;
-    } else {
-      if (!o.spec) throw new Error("pass --spec \"<task>\" or --task <id>");
-      task = {
-        id: nextId(state, "t"),
-        run_id: o.run.id,
-        title: o.title ?? firstLine(o.spec),
-        spec: o.spec,
-        status: "pending",
-        depends_on: [],
-        worker: null,
-        dispatch_id: null,
-        attempts: 0,
-        created_at: now(),
-        updated_at: now(),
-        outcome: null,
-      };
-      state.tasks[task.id] = task;
-    }
+    const task = admitTask(state, o);
     const dispatchId = nextId(state, "d");
     const text = preamble({ worker: o.name, run: o.run, task, dispatchId, cwd, worktree: wt });
     const dispatch = createDispatch(state, { id: dispatchId, task, worker: o.name, preamble: text, cwd, worktreePath: wt?.path });
@@ -523,21 +511,7 @@ async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
     if (state.runs[o.run.id]?.status !== "active") throw new Error(`run ${o.run.id} is closed or no longer exists`);
     if (state.workers[o.name] && state.runs[state.workers[o.name]!.run_id]?.status === "active") throw new Error(`worker "${o.name}" exists; release it first`);
     refuseStartInFlight(state, o.name, o.taskId);
-    let task: Task;
-    if (o.taskId) {
-      const t = state.tasks[o.taskId];
-      if (!t || t.run_id !== o.run.id) throw new Error(`no task ${o.taskId} in run ${o.run.id}`);
-      if (t.status === "dispatched") throw new Error(`task ${t.id} is already dispatched to ${t.worker}`);
-      if (t.status === "succeeded") throw new Error(`task ${t.id} already succeeded`);
-      if (t.status === "failed" && !o.retry) throw new Error(`task ${t.id} failed; pass --retry to try again`);
-      assertTaskGatesApproved(state, t.id);
-      if (!o.retry && !ready(state, t)) throw new Error(`task ${t.id} waits on ${t.depends_on.filter((d) => state.tasks[d]?.status !== "succeeded").join(", ")}`);
-      task = t;
-    } else {
-      if (!o.spec) throw new Error("pass --spec \"<task>\" or --task <id>");
-      task = { id: nextId(state, "t"), run_id: o.run.id, title: o.title ?? firstLine(o.spec), spec: o.spec, status: "pending", depends_on: [], worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
-      state.tasks[task.id] = task;
-    }
+    const task = admitTask(state, o);
     const dispatchId = nextId(state, "d");
     const text = preamble({ worker: o.name, run: o.run, task, dispatchId, cwd, remoteHost: profile });
     createDispatch(state, { id: dispatchId, task, worker: o.name, preamble: text, cwd, executionHost: profile });
@@ -715,21 +689,7 @@ async function redispatchUnlocked(run: Run, name: string, taskId: string | undef
       if (task.status !== "failed" && !ready(state, task)) throw new Error(`task ${task.id} waits on ${task.depends_on.filter((d) => state.tasks[d]?.status !== "succeeded").join(", ")}`);
     } else {
       if (!spec) throw new Error("pass --spec or --task");
-      task = {
-        id: nextId(state, "t"),
-        run_id: run.id,
-        title: title ?? firstLine(spec),
-        spec,
-        status: "pending",
-        depends_on: [],
-        worker: null,
-        dispatch_id: null,
-        attempts: 0,
-        created_at: now(),
-        updated_at: now(),
-        outcome: null,
-      };
-      state.tasks[task.id] = task;
+      task = addTask(state, run.id, spec, title);
     }
     const before = taskId ? { status: task.status, worker: task.worker, dispatch_id: task.dispatch_id, attempts: task.attempts, updated_at: task.updated_at } : null;
     const prev = { task_id: w.task_id, dispatch_id: w.dispatch_id };
@@ -898,20 +858,8 @@ export function previewDispatch(state: State, o: { run: Run; name: string; taskI
   const w = state.workers[o.name];
   if (o.redispatch && (!w || w.run_id !== o.run.id)) throw new Error(`no worker "${o.name}" in run ${o.run.id}`);
   if (!o.redispatch && w && state.runs[w.run_id]?.status === "active") throw new Error(`worker "${o.name}" exists; release it first`);
-  let task: Task;
-  if (o.taskId) {
-    const t = state.tasks[o.taskId];
-    if (!t || t.run_id !== o.run.id) throw new Error(`no task ${o.taskId} in run ${o.run.id}`);
-    if (t.status === "dispatched" || t.status === "succeeded") throw new Error(`task ${t.id} is ${t.status}`);
-    if (t.status === "failed" && !o.retry && !o.redispatch) throw new Error(`task ${t.id} failed; pass --retry to try again`);
-    if (!o.retry && t.status !== "failed" && !ready(state, t)) throw new Error(`task ${t.id} waits on ${t.depends_on.filter((d) => state.tasks[d]?.status !== "succeeded").join(", ") || "a gate"}`);
-    assertTaskGatesApproved(state, t.id);
-    assertRetryBudget(state, t);
-    task = t;
-  } else {
-    if (!o.spec) throw new Error("pass --spec \"<task>\" or --task <id>");
-    task = { id: "t?", run_id: o.run.id, title: o.title ?? firstLine(o.spec), spec: o.spec, status: "pending", depends_on: [], worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
-  }
+  const task = admitTask(state, { ...o, retry: o.retry || o.redispatch }, (spec, title) => newTask("t?", o.run.id, spec, title));
+  if (o.taskId) assertRetryBudget(state, task);
   if (o.redispatch && w!.task_id && state.tasks[w!.task_id]?.status === "dispatched") throw new Error(`${o.name} is still on task ${w!.task_id}; wait for its report`);
   const baseCwd = o.cwd ?? o.run.orchestrator.cwd;
   const wt = !o.redispatch && o.worktree ? planWorktree({ spec: o.worktree, cwd: baseCwd, runId: o.run.id, worker: o.name, base: o.base, branch: o.branch }) : o.redispatch ? w!.worktree ?? null : null;
@@ -1284,19 +1232,6 @@ async function requireStartAuthority(runId: string, name: string, taskId: string
   await update((state) => assertStartAuthority(state, { runId, name, taskId, dispatchId, registered }));
 }
 
-const RUN_START_FENCE_TIMEOUT_MS = 120_000;
-const runStartFencePath = (runId: string) => join(stateDir, "run-start-fences", `${encodeURIComponent(runId)}.lock`);
-
-export async function withRunStartFence<T>(runId: string, fn: () => Promise<T>): Promise<T> {
-  const path = runStartFencePath(runId);
-  await acquire(path, RUN_START_FENCE_TIMEOUT_MS);
-  try {
-    return await fn();
-  } finally {
-    release(path);
-  }
-}
-
 async function rollbackStartClaim(o: StartOptions, taskId: string, dispatchId: string): Promise<{ dropped: boolean; revoked: boolean }> {
   return update((state) => {
     const d = state.dispatches?.[dispatchId];
@@ -1470,10 +1405,6 @@ export async function promptWithRetry(target: string, text: string, seqBefore?: 
   }
 }
 
-export function firstLine(s: string): string {
-  const line = s.trim().split("\n")[0] ?? "";
-  return line.length > 60 ? line.slice(0, 57) + "..." : line;
-}
 
 export const taskSummary = (t: Task, state?: State) => ({ id: t.id, title: t.title, status: t.status, parent_id: t.parent_id ?? null, worker: t.worker, dispatch_id: t.dispatch_id, depends_on: t.depends_on, attempts: t.attempts, outcome: t.outcome, ...(state ? { gate_blockers: taskGateBlockers(state, t.id).map((g) => ({ id: g.id, status: g.status, reason: g.reason })) } : {}) });
 export const workerSummary = (w: Worker, state: State) => ({

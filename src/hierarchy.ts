@@ -1,14 +1,7 @@
 import { idSeq, type State, type Task, type TaskStatus } from "./state.ts";
+import { CodedError } from "./errors.ts";
 
-export class TaskHierarchyError extends Error {
-  readonly code: string;
-
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "TaskHierarchyError";
-    this.code = code;
-  }
-}
+export class TaskHierarchyError extends CodedError {}
 
 export function assertTaskParentMutable(state: State, task: Task): void {
   if (task.status === "dispatched") {

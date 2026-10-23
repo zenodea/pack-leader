@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import type { Args } from "./args.ts";
-import { load, now, update } from "./state.ts";
+import { load, now, processAlive, update } from "./state.ts";
+import { CodedError } from "./errors.ts";
 
 export type RequestRecord = {
   id: string;
@@ -24,24 +25,7 @@ export function fingerprint(command: string, args: Args): string {
   return createHash("sha256").update(JSON.stringify({ command, positional: args.positional, flags, rest: args.rest })).digest("hex");
 }
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err: any) {
-    return err?.code === "EPERM";
-  }
-}
-
-export class RequestError extends Error {
-  readonly code: "request_conflict" | "request_running" | "request_outcome_unknown";
-
-  constructor(code: RequestError["code"], message: string) {
-    super(message);
-    this.name = "RequestError";
-    this.code = code;
-  }
-}
+export class RequestError extends CodedError {}
 
 export async function beginRequest(id: string, command: string, fp: string): Promise<RequestRecord | null> {
   if (!REQUEST_ID.test(id)) throw new Error("--retry-request takes 1-128 letters, digits, or . _ : -");
@@ -53,7 +37,7 @@ export async function beginRequest(id: string, command: string, fp: string): Pro
     if (r) {
       if (r.command !== command || r.fingerprint !== fp) throw new RequestError("request_conflict", `request ${id} was used for a different command (${r.command}); use a new id`);
       if (r.status === "completed") return r;
-      if (r.host === hostname() && alive(r.pid)) throw new RequestError("request_running", `request ${id} is still running (pid ${r.pid}); wait for it, then check \`pack-leader request show ${id}\``);
+      if (r.host === hostname() && processAlive(r.pid)) throw new RequestError("request_running", `request ${id} is still running (pid ${r.pid}); wait for it, then check \`pack-leader request show ${id}\``);
       throw new RequestError("request_outcome_unknown", `request ${id} started at ${r.started_at} but its process ended before recording a result; it may have taken effect. Inspect the run (\`pack-leader status\`, \`task list\`, \`worker list\`) and retry with a new id only if it did not`);
     }
     requests[id] = { id, command, fingerprint: fp, status: "pending", pid: process.pid, host: hostname(), started_at: now() };
@@ -75,5 +59,5 @@ export function requestShow(id: string): { request: string; status: "completed" 
   const base = { request: id, status: r.status, command: r.command, started_at: r.started_at };
   return r.status === "completed"
     ? { ...base, completed_at: r.completed_at, exit_code: r.exit_code, receipt: r.receipt }
-    : { ...base, process_alive: r.host === hostname() && alive(r.pid) };
+    : { ...base, process_alive: r.host === hostname() && processAlive(r.pid) };
 }

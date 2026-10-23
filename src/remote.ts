@@ -6,6 +6,7 @@ import type { HostProfile } from "./hosts.ts";
 import { validateHostSnapshot, validateSshTarget } from "./hosts.ts";
 import { herdrSocketPath } from "./paths.ts";
 import { TEXT_FLAGS } from "./args.ts";
+import { CodedError } from "./errors.ts";
 
 const MAX_STDOUT = 1_000_000;
 const MAX_STDERR = 128_000;
@@ -18,14 +19,7 @@ const REMOTE_METHODS = new Set([
 ]);
 const CALLBACK_COMMANDS = new Set(["done", "ask", "note", "escalate", "heartbeat", "send", "inbox"]);
 
-export class RemoteError extends Error {
-  readonly code: string;
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "RemoteError";
-    this.code = code;
-  }
-}
+export class RemoteError extends CodedError {}
 
 const hostContext = new AsyncLocalStorage<HostProfile | undefined>();
 export const currentExecutionHost = (): HostProfile | undefined => hostContext.getStore();

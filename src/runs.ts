@@ -1,26 +1,12 @@
 import { existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { getPane, renamePane, logHerdrError, paneClose, tabRename } from "./herdr.ts";
 import { closeObserver } from "./observer.ts";
-import { activeRuns, acquire, load, log, now, release, runWorkers, START_CLAIM_MS, type Run, type State, update } from "./state.ts";
+import { activeRuns, load, log, now, runWorkers, START_CLAIM_MS, type Run, type State, update, withRunStartFence } from "./state.ts";
 import { archiveDir, settleDispatch, startClaimIsFresh } from "./dispatch.ts";
-import { stateDir } from "./paths.ts";
 import { type ReleaseResult, releaseWorker } from "./workers.ts";
+import { CodedError } from "./errors.ts";
 
 const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
-const RUN_START_FENCE_TIMEOUT_MS = 120_000;
-const runStartFencePath = (runId: string) => join(stateDir, "run-start-fences", `${encodeURIComponent(runId)}.lock`);
-
-async function withRunStartFence<T>(runId: string, fn: () => Promise<T>): Promise<T> {
-  const path = runStartFencePath(runId);
-  await acquire(path, RUN_START_FENCE_TIMEOUT_MS);
-  try {
-    return await fn();
-  } finally {
-    release(path);
-  }
-}
-
 export function parseDuration(s: string): number {
   const m = /^(\d+(?:\.\d+)?)(ms|s|m|h|d|w)$/.exec(s.trim());
   if (!m) throw new Error(`bad duration "${s}": use a number and a unit, like 30m, 12h, 2d, 1w`);
@@ -98,15 +84,7 @@ export function removeArchives(runIds: string[]): string[] {
   return gone;
 }
 
-export class SubRunError extends Error {
-  readonly code: "nested_depth_exceeded" | "sub_run_open";
-
-  constructor(code: SubRunError["code"], message: string) {
-    super(message);
-    this.name = "SubRunError";
-    this.code = code;
-  }
-}
+export class SubRunError extends CodedError {}
 
 export type CloseResult = {
   closed: string;

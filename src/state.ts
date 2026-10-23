@@ -1,7 +1,7 @@
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { ensureDir, lockDir, logFile, stateDirDivergence, stateFile } from "./paths.ts";
+import { ensureDir, lockDir, logFile, stateDir, stateDirDivergence, stateFile } from "./paths.ts";
 import type { AgentStatus } from "./herdr.ts";
 import type { WorktreeInfo, WorktreeRecord } from "./worktree.ts";
 import type { SetupMetadata } from "./setup.ts";
@@ -309,7 +309,7 @@ function lockOwner(dir: string): LockOwner | null {
   }
 }
 
-function alive(pid: number): boolean {
+export function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -327,7 +327,7 @@ export function lockIsStale(dir: string, at = Date.now()): boolean {
   }
   if (age > LOCK_ABANDONED_MS) return true;
   const owner = lockOwner(dir);
-  if (owner && owner.host === hostname()) return !alive(owner.pid);
+  if (owner && owner.host === hostname()) return !processAlive(owner.pid);
   return age > LOCK_STALE_MS;
 }
 
@@ -462,3 +462,31 @@ export function unacked(state: State, runId: string): Message[] {
 }
 
 export const WORKER_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
+
+const RUN_START_FENCE_TIMEOUT_MS = 120_000;
+const runStartFencePath = (runId: string) => join(stateDir, "run-start-fences", `${encodeURIComponent(runId)}.lock`);
+
+export async function withRunStartFence<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+  const path = runStartFencePath(runId);
+  await acquire(path, RUN_START_FENCE_TIMEOUT_MS);
+  try {
+    return await fn();
+  } finally {
+    release(path);
+  }
+}
+
+export function firstLine(s: string): string {
+  const line = s.trim().split("\n")[0] ?? "";
+  return line.length > 60 ? line.slice(0, 57) + "..." : line;
+}
+
+export function newTask(id: string, runId: string, spec: string, title?: string, dependsOn: string[] = []): Task {
+  return { id, run_id: runId, title: title ?? firstLine(spec), spec, status: "pending", depends_on: dependsOn, worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
+}
+
+export function addTask(state: State, runId: string, spec: string, title?: string): Task {
+  const task = newTask(nextId(state, "t"), runId, spec, title);
+  state.tasks[task.id] = task;
+  return task;
+}

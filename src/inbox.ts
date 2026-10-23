@@ -4,7 +4,7 @@ import { hostname } from "node:os";
 import { agentPrompt, getAgent, type HerdrError, isRemotePromptReceiptError, listAgents, listPanes, logHerdrError, observePromptReceipt, promptLanded, type AgentStatus, subscribe } from "./herdr.ts";
 import { stateFile } from "./paths.ts";
 import { DEFAULT_SETTINGS, loadConfig, settingsOf } from "./config.ts";
-import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load, childRuns } from "./state.ts";
+import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load, childRuns, processAlive } from "./state.ts";
 import { settleDispatch } from "./dispatch.ts";
 import { withExecutionHost } from "./remote.ts";
 
@@ -471,13 +471,7 @@ function deliveryClaimIsActive(claim: NonNullable<Message["delivery_claim"]>, at
   const leaseUntil = Date.parse(claim.lease_until);
   if (!Number.isFinite(leaseUntil) || leaseUntil <= at) return false;
   if (claim.host !== hostname()) return true;
-  if (!Number.isInteger(claim.pid) || claim.pid <= 0) return false;
-  try {
-    process.kill(claim.pid, 0);
-    return true;
-  } catch (err: any) {
-    return err?.code === "EPERM";
-  }
+  return Number.isInteger(claim.pid) && claim.pid > 0 && processAlive(claim.pid);
 }
 
 const CONTINUE_REMINDER = "[Then carry on with your task. When it is finished, report with `pack-leader done` as your dispatch preamble says; do not end your turn without reporting.]";

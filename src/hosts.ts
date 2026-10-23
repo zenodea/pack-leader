@@ -2,6 +2,7 @@ import { closeSync, openSync, readFileSync, renameSync, writeFileSync, fsyncSync
 import { dirname, join } from "node:path";
 import { acquire, lockFor, release } from "./state.ts";
 import { configDir, ensureDir } from "./paths.ts";
+import { CodedError } from "./errors.ts";
 
 export type HostProfile = {
   name: string;
@@ -17,11 +18,9 @@ export const hostsFile = join(configDir, "hosts.json");
 const HOST_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
-export class HostProfileError extends Error {
-  readonly code = "invalid_host_profile";
+export class HostProfileError extends CodedError {
   constructor(message: string) {
-    super(message);
-    this.name = "HostProfileError";
+    super("invalid_host_profile", message);
   }
 }
 

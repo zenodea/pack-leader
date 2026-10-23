@@ -1,6 +1,6 @@
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { commandName, validateCommandArgs } from "./command-args.ts";
-import { beginRequest, finishRequest, fingerprint, RequestError, requestShow } from "./requests.ts";
+import { beginRequest, finishRequest, fingerprint, requestShow } from "./requests.ts";
 import { fg, bold, dim } from "./ansi.ts";
 import { HerdrError, agentFocus, agentRead, getPane, listAgents, renamePane, notify, paneFocus, tabGet, tabRename } from "./herdr.ts";
 import { spawnSync } from "node:child_process";
@@ -10,15 +10,15 @@ import { ack, ask, check, checkTypes, done, envMs, escalate, heartbeat, herdrWar
 import { claudeSessionDir, closeObserver, digest, OBSERVER_TURNS, sessionPath, startObserver, transcriptPath, transcriptTail } from "./observer.ts";
 import { readFileSync } from "node:fs";
 import { herdrBin, pluginRoot } from "./paths.ts";
-import { activeRuns, childRuns, load, log, maxRunDepth, nextId, now, resolveRun, ready, TASK_STATUSES, runDispatches, runMessages, runTasks, runWorkers, taskGateBlockers, type Message, type Run, type State, type Task, type TaskStatus, unacked, update } from "./state.ts";
+import { activeRuns, childRuns, load, log, maxRunDepth, newTask, nextId, now, resolveRun, ready, TASK_STATUSES, runDispatches, runMessages, runTasks, runWorkers, taskGateBlockers, type Message, type Run, type State, type Task, type TaskStatus, unacked, update } from "./state.ts";
 import { createGate, GateError, resolveGate, runGates } from "./gates.ts";
-import { dispatchView, findArchive, readArchive, RetryLimitError, taskDispatchIds } from "./dispatch.ts";
+import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
 import { assertTaskParentMutable, taskTree, TaskHierarchyError, validateTaskParent } from "./hierarchy.ts";
 import { worktreeForMode } from "./worktree.ts";
 import { spawnAgent } from "./spawn.ts";
 import { handoffGate, resumeAfterHandoff, saveHandoff, spawnResume } from "./handoff.ts";
 import { closeRun, parseDuration, type PruneOptions, pruneRuns, removeArchives, SubRunError } from "./runs.ts";
-import { AdoptionError, adoptWorker } from "./adoption.ts";
+import { adoptWorker } from "./adoption.ts";
 import { resolveLeaderRun } from "./leader.ts";
 import { abandonWorker, DEFAULT_KIND, nextAction, previewDispatch, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, sweepWorktrees, taskSummary, workerSummary } from "./workers.ts";
 import { SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS } from "./setup-policy.ts";
@@ -26,8 +26,9 @@ import { guide, installSkill } from "./skill.ts";
 import { configFile, defaultsFor, loadConfig, parseTokens, PLACEMENTS, saveConfig, settingsOf, WORKTREE_MODES, type Config, type Placement, type WorktreeMode } from "./config.ts";
 import { routerProvider, validateRouting } from "./routing.ts";
 import { describeSettings, runSettings, settingsInForce } from "./settings.ts";
-import { addHost, getHost, HostProfileError, listHosts, removeHost } from "./hosts.ts";
+import { addHost, getHost, listHosts, removeHost } from "./hosts.ts";
 import { callbackFlagValues, executeRemoteRpc, forwardWorkerCallback, readStdinJson, RemoteError, validateCallbackRequest, withExecutionHost } from "./remote.ts";
+import { CodedError } from "./errors.ts";
 
 let lastOut: unknown = null;
 const out = (v: unknown) => {
@@ -76,10 +77,12 @@ function guideSettings(): string {
   }
 }
 
+const routingOf = (config: Config) => config.routing ?? { provider: "off", kinds: {} };
+
 async function openSettings(fromAction: boolean): Promise<void> {
   const config = await runSettings();
   if (fromAction) await notify("Pack Leader", describeSettings(config));
-  out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds, routing: config.routing ?? { provider: "off", kinds: {} }, settings: settingsOf(config) });
+  out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds, routing: routingOf(config), settings: settingsOf(config) });
 }
 
 export type Here = { paneId: string | null; workspaceId: string | null; tabId: string | null; cwd: string };
@@ -138,13 +141,17 @@ function coordinatesSubRun(run: Run): boolean {
   return Boolean(run.parent && paneId && run.orchestrator.pane_id === paneId);
 }
 
+const contextFrom = (args: Args) => workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+
+function actsAsWorker(state: State, run: Run): boolean {
+  if (coordinatesSubRun(run)) return false;
+  const paneId = here().paneId;
+  return process.env.PACK_ROLE === "worker" || Boolean(process.env.PACK_WORKER) || Boolean(paneId && Object.values(state.workers).some((w) => !w.execution_host && w.pane_id === paneId));
+}
+
 function requireGateCoordinator(state: State, run: Run): void {
   if (run.status !== "active") throw new GateError("gate_run_closed", `run ${run.id} is closed`);
-  const paneId = here().paneId;
-  if (coordinatesSubRun(run)) return;
-  if (process.env.PACK_ROLE === "worker" || process.env.PACK_WORKER || (paneId && Object.values(state.workers).some((w) => !w.execution_host && w.pane_id === paneId))) {
-    throw new GateError("gate_coordinator_only", "task gates can only be changed by the run coordinator");
-  }
+  if (actsAsWorker(state, run)) throw new GateError("gate_coordinator_only", "task gates can only be changed by the run coordinator");
 }
 
 function requireHerdr(): void {
@@ -152,14 +159,7 @@ function requireHerdr(): void {
 }
 
 function requireCoordinatorParentMutation(state: State, run: Run): void {
-  if (coordinatesSubRun(run)) return;
-  const paneId = here().paneId;
-  const isWorker = process.env.PACK_ROLE === "worker" || Boolean(process.env.PACK_WORKER) || Boolean(
-    paneId && Object.values(state.workers).some((worker) => !worker.execution_host && worker.pane_id === paneId),
-  );
-  if (isWorker) {
-    throw new TaskHierarchyError("TASK_PARENT_COORDINATOR_ONLY", "only the coordinator may change task parent provenance");
-  }
+  if (actsAsWorker(state, run)) throw new TaskHierarchyError("TASK_PARENT_COORDINATOR_ONLY", "only the coordinator may change task parent provenance");
 }
 
 async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> {
@@ -346,7 +346,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
           if (has(args, "parent")) requireCoordinatorParentMutation(state, run);
           const deps = list(args, "depends-on");
           for (const d of deps) if (!state.tasks[d] || state.tasks[d]!.run_id !== run.id) throw new Error(`no task ${d} in run ${run.id}`);
-          const t: Task = { id: nextId(state, "t"), run_id: run.id, title: str(args, "title") ?? spec.split("\n")[0]!.slice(0, 60), spec, status: "pending", depends_on: deps, worker: null, dispatch_id: null, attempts: 0, created_at: now(), updated_at: now(), outcome: null };
+          const t = newTask(nextId(state, "t"), run.id, spec, str(args, "title") ?? spec.split("\n")[0]!.slice(0, 60), deps);
           if (has(args, "parent")) validateTaskParent(state, run.id, t.id, str(args, "parent")!);
           if (has(args, "parent")) t.parent_id = str(args, "parent")!;
           state.tasks[t.id] = t;
@@ -719,7 +719,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       const sub = process.env.PACK_WORKER ? activeRuns(load()).find((r) => coordinatesSubRun(r)) : undefined;
       if (sub && (name.startsWith("@") || load().workers[name]?.run_id === sub.id)) out(await sendTo(sub, name, body, has(args, "now")));
       else if (process.env.PACK_WORKER) {
-        const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+        const ctx = contextFrom(args);
         out(await workerSend(ctx, name, body, has(args, "now")));
       } else out(await sendTo(currentRun(args), name, body, has(args, "now")));
       return;
@@ -750,7 +750,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
     }
 
     case "done": {
-      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const ctx = contextFrom(args);
       const outcome = str(args, "outcome");
       const summary = str(args, "summary");
       if ((outcome !== "succeeded" && outcome !== "failed") || !summary) throw new Error("usage: pack-leader done --outcome succeeded|failed --summary \"...\" [--files-modified a,b] [--report-path P]");
@@ -759,20 +759,20 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
     case "ask": {
-      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const ctx = contextFrom(args);
       const r = await ask(ctx, { body: args.positional.join(" ") || str(args, "body"), options: list(args, "options"), resumeId: str(args, "id"), timeoutMs: num(args, "timeout", 600_000) });
       if (r.result === "timeout") out({ ...r, next: `No answer yet. Run \`pack-leader ask --id ${r.ask_id}\` to keep waiting.` });
       else out(askReply(r.ask_id, r.reply!, r.options));
       return;
     }
     case "heartbeat": {
-      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const ctx = contextFrom(args);
       const m = await heartbeat(ctx, args.positional.join(" ") || str(args, "body") || "working", str(args, "phase"));
       out({ heartbeat: m.id });
       return;
     }
     case "note": {
-      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const ctx = contextFrom(args);
       const body = args.positional.join(" ") || str(args, "body");
       if (!body) throw new Error("usage: pack-leader note \"<blocker, finding, or why this takes longer>\"");
       const m = await note(ctx, body);
@@ -780,7 +780,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
     case "escalate": {
-      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const ctx = contextFrom(args);
       const body = args.positional.join(" ") || str(args, "body");
       if (!body) throw new Error("usage: pack-leader escalate \"<what the orchestrator must act on>\"");
       const m = await escalate(ctx, body);
@@ -788,7 +788,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
     case "inbox": {
-      const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
+      const ctx = contextFrom(args);
       const msgs = await inbox(ctx);
       out({
         messages: msgs.map((m) => ({
@@ -844,7 +844,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       const [sub = "show"] = args.positional;
       const config = loadConfig();
       if (sub === "show") {
-        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds, routing: config.routing ?? { provider: "off", kinds: {} }, settings: settingsOf(config) });
+        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, kinds: config.kinds, routing: routingOf(config), settings: settingsOf(config) });
         return;
       }
       if (sub === "set") {
@@ -872,7 +872,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
           if (has(args, "default") || has(args, "kind")) config.kind = kind;
         }
         saveConfig(config);
-        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, ...(next ? { [kind]: next } : {}), routing: config.routing ?? { provider: "off", kinds: {} }, settings: settingsOf(config) });
+        out({ file: configFile, kind: config.kind ?? DEFAULT_KIND, ...(next ? { [kind]: next } : {}), routing: routingOf(config), settings: settingsOf(config) });
         return;
       }
       if (sub === "pick") {
@@ -1292,8 +1292,7 @@ Plugin root: ${pluginRoot}
 
 export function cliErrorPayload(err: unknown): { error: string; code?: string } {
   const error = err instanceof Error ? err.message : typeof err === "string" ? err : "unknown error";
-  const known = err instanceof HerdrError || err instanceof TaskHierarchyError || err instanceof GateError || err instanceof AdoptionError || err instanceof RemoteError || err instanceof HostProfileError || err instanceof RequestError || err instanceof RetryLimitError || err instanceof SubRunError;
-  const code = known && typeof err.code === "string" ? err.code : undefined;
+  const code = err instanceof CodedError ? err.code : undefined;
   return { error, ...(code === undefined ? {} : { code }) };
 }
 

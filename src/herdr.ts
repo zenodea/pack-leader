@@ -3,15 +3,9 @@ import { StringDecoder } from "node:string_decoder";
 import { herdrSocketPath } from "./paths.ts";
 import { log } from "./state.ts";
 import { currentExecutionHost, remoteHerdr } from "./remote.ts";
+import { CodedError } from "./errors.ts";
 
-export class HerdrError extends Error {
-  readonly code: string;
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "HerdrError";
-    this.code = code;
-  }
-}
+export class HerdrError extends CodedError {}
 
 export function lineReader(onLine: (line: string) => void): (chunk: Buffer | string) => void {
   const decoder = new StringDecoder("utf8");

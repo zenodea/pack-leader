@@ -1,15 +1,8 @@
 import { nextId, now, START_CLAIM_MS, taskGateBlockers, update, type State, type TaskGate } from "./state.ts";
 import { startClaimIsFresh } from "./claims.ts";
+import { CodedError } from "./errors.ts";
 
-export class GateError extends Error {
-  readonly code: string;
-
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "GateError";
-    this.code = code;
-  }
-}
+export class GateError extends CodedError {}
 
 export function assertTaskGatesApproved(state: State, taskId: string): void {
   const blockers = taskGateBlockers(state, taskId);

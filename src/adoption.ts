@@ -2,15 +2,10 @@ import { HerdrError, getAgent, getPane, listAgents, type AgentInfo, type PaneInf
 import { createDispatch, settleDispatch, taskDispatchIds } from "./dispatch.ts";
 import { startClaimIsFresh } from "./claims.ts";
 import { assertTaskGatesApproved } from "./gates.ts";
-import { load, nextId, now, ready, update, WORKER_NAME, type Message, type Run, type State, type Task, type Worker } from "./state.ts";
-import { markPrompted, preamble, promptWithRetry, refuseStartInFlight, START_CLAIM_MS, withRunStartFence, firstLine } from "./workers.ts";
+import { addTask, load, nextId, now, ready, update, withRunStartFence, WORKER_NAME, type Message, type Run, type State, type Task, type Worker } from "./state.ts";
+import { markPrompted, preamble, promptWithRetry, refuseStartInFlight, START_CLAIM_MS } from "./workers.ts";
 
-export class AdoptionError extends HerdrError {
-  constructor(code: string, message: string) {
-    super(code, message);
-    this.name = "AdoptionError";
-  }
-}
+export class AdoptionError extends HerdrError {}
 
 export type AdoptOptions = {
   run: Run;
@@ -244,21 +239,7 @@ export async function adoptWorker(o: AdoptOptions): Promise<AdoptResult> {
       before = snapshot(found);
     } else {
       const spec = o.spec!;
-      task = {
-        id: nextId(state, "t"),
-        run_id: o.run.id,
-        title: o.title ?? firstLine(spec),
-        spec,
-        status: "pending",
-        depends_on: [],
-        worker: null,
-        dispatch_id: null,
-        attempts: 0,
-        created_at: now(),
-        updated_at: now(),
-        outcome: null,
-      };
-      state.tasks[task.id] = task;
+      task = addTask(state, o.run.id, spec, o.title);
       created = true;
     }
     const dispatchId = nextId(state, "d");
