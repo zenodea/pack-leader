@@ -1,4 +1,3 @@
-// Stale worker contexts must not affect supervision for a reused worker's current dispatch.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -141,7 +140,6 @@ test("old ask and attention do not block next_action, attention, or the current 
   const raised = await sync();
   assert.deepEqual(raised.filter((m) => m.status === "stalled").map((m) => [m.task_id, m.dispatch_id]), [["t2", "d2"]]);
 
-  // A current-dispatch ask still suppresses the stall and remains actionable.
   state = load();
   state.messages.find((m) => m.id === raised[0]!.id)!.acked = true;
   state.workers.bob!.stalled_since = null;

@@ -1,6 +1,3 @@
-// Structured questions: `ask --options`, `reply` matching (exact, prefix,
-// mismatch, --free), the check output, and the sidebar box. Runs without herdr:
-// the state dir is a temp dir and the herdr socket path points nowhere.
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -31,7 +28,6 @@ beforeEach(() => save(base()));
 const ctx = { run_id: "r1", worker: "bob", task_id: null, dispatch_id: null };
 const run = () => load().runs.r1!;
 
-/** The pack-leader CLI as a child process, with this pane's PACK_* identity stripped. */
 function cli(...argv: string[]): Promise<{ code: number; json: any; stderr: string }> {
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (k.startsWith("PACK_") || k.startsWith("HERDR_PANE") || k === "HERDR_PLUGIN_CONTEXT_JSON") delete env[k];
@@ -46,7 +42,6 @@ function cli(...argv: string[]): Promise<{ code: number; json: any; stderr: stri
   });
 }
 
-/** Wait until the worker's ask is in the state file; returns its id. */
 async function askStored(): Promise<Message> {
   for (let i = 0; i < 100; i++) {
     const a = load().messages.find((m) => m.type === "ask");
@@ -188,7 +183,6 @@ test("CLI: reply --free, in either flag order", async () => {
   const w = await waiting;
   assert.deepEqual(w.json, { result: "reply", ask_id: a.id, options: ["postgres", "sqlite"], reply: "none: use files", answer: "none: use files", option_index: null });
 
-  // --free before --body works the same way.
   save(base());
   const waiting2 = cli("ask", "Again?", "--options", "yes,no", "--worker", "bob", "--run", "r1", "--timeout", "10000");
   const a2 = await askStored();
@@ -197,8 +191,6 @@ test("CLI: reply --free, in either flag order", async () => {
   assert.equal(r2.json.reply.option_index, null);
   assert.equal((await waiting2).json.answer, "later");
 });
-
-// ---- sidebar box -------------------------------------------------------------
 
 const worker: Worker = base().workers.bob!;
 const task: Task = { id: "t1", run_id: "r1", title: "add structured questions", spec: "s", status: "dispatched", depends_on: [], worker: "bob", dispatch_id: "d1", attempts: 1, created_at: "t", updated_at: "t", outcome: null };
@@ -218,7 +210,6 @@ test("boxLines: an unanswered ask shows the question and [a | b | c] in yellow, 
   assert.match(text[6]!, /│ \[memory \| disk \| both\]\s+│/);
   for (const i of [4, 5, 6]) assert.ok(lines[i]!.includes(YELLOW), `line ${i} is yellow`);
 
-  // Options too long for the box are truncated, not wrapped.
   const many = boxLines(worker, task, m({ type: "ask", body: "pick", options: ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"] }), "working", 24);
   assert.equal(many.length, 7);
   assert.match(plain(many[5]!), /^│ \[alpha \| .*…\s*│$/);

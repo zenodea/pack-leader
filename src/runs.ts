@@ -1,5 +1,3 @@
-// A run's end of life: closing it (workers, tasks, sidebar) and, later,
-// pruning closed runs and everything that belongs to them out of the state.
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { getPane, renamePane, logHerdrError, paneClose, tabRename } from "./herdr.ts";
@@ -23,7 +21,6 @@ async function withRunStartFence<T>(runId: string, fn: () => Promise<T>): Promis
   }
 }
 
-/** "90s", "15m", "12h", "2d", "1w" in milliseconds. */
 export function parseDuration(s: string): number {
   const m = /^(\d+(?:\.\d+)?)(ms|s|m|h|d|w)$/.exec(s.trim());
   if (!m) throw new Error(`bad duration "${s}": use a number and a unit, like 30m, 12h, 2d, 1w`);
@@ -35,28 +32,17 @@ const closedAt = (r: Run): number => {
   return Number.isNaN(t) ? 0 : t;
 };
 
-/** How long after `run close` began its workers may still be being released. */
 export const CLOSE_GRACE_MS = 3_600_000;
 
 export type PruneOptions = {
-  /** Keep this many of the most recently closed runs (default 5, or 0 with `olderThanMs`). */
   keep?: number;
-  /** Only runs closed longer ago than this. */
   olderThanMs?: number;
-  /** Every closed run, whatever `keep` says. */
   all?: boolean;
   now?: number;
 };
 
-/** `skipped`: closed runs that still have worker records (a `run close` still releasing them, or one that died midway); only present when non-empty. */
 export type PruneResult = { runs: { id: string; objective: string; closed_at: string | null }[]; removed: Record<string, number>; skipped?: { id: string; reason: string }[] };
 
-/**
- * Delete closed runs and every record that carries their run_id, in place.
- * Generic over the state's shape: any top-level array, or map of records,
- * whose entries have a `run_id` is swept, so records other features add are
- * pruned with their run. Active runs are never touched.
- */
 export function pruneRuns(state: State, o: PruneOptions = {}): PruneResult {
   const at = o.now ?? Date.now();
   const closed = Object.values(state.runs)
@@ -64,8 +50,6 @@ export function pruneRuns(state: State, o: PruneOptions = {}): PruneResult {
     .sort((a, b) => closedAt(b) - closedAt(a));
   const keep = o.all ? 0 : (o.keep ?? (o.olderThanMs !== undefined ? 0 : 5));
   const old = closed.slice(Math.max(0, keep)).filter((r) => o.olderThanMs === undefined || at - closedAt(r) > o.olderThanMs);
-  // A run closed moments ago that still has worker records is mid-close: its releases still need
-  // those records (and its archive dir). Past CLOSE_GRACE_MS such a close is taken to have died.
   const skipped: { id: string; reason: string }[] = [];
   const doomed = old.filter((r) => {
     const names = Object.values(state.workers).filter((w) => w.run_id === r.id).map((w) => w.name);
@@ -103,7 +87,6 @@ export function pruneRuns(state: State, o: PruneOptions = {}): PruneResult {
   return { runs: doomed.map((r) => ({ id: r.id, objective: r.objective, closed_at: r.closed_at ?? null })), removed, ...extra };
 }
 
-/** Delete the screen archives of pruned runs (their dispatch records, which point at them, are gone). */
 export function removeArchives(runIds: string[]): string[] {
   const gone: string[] = [];
   for (const id of runIds) {
@@ -127,26 +110,15 @@ export class SubRunError extends Error {
 
 export type CloseResult = {
   closed: string;
-  /** Released workers; each one's screen is archived first, as `worker release` does. */
   released: ({ worker: string } & ReleaseResult)[];
-  /** Worker records dropped without releasing: their panes, if any, are still open. */
   forgotten: { worker: string; pane_id: string; tab_id: string | null }[];
   failed_tasks: string[];
   closed_sidebar: string | null;
   closed_observer: string | null;
-  /** Sub-runs coordinated by this run's workers, closed (with their workers released) first. */
   sub_runs?: CloseResult[];
 };
 
-/**
- * Close a run: refuse when it is already closed or still has dispatched
- * workers (unless `release` or `force`), fail its dispatched tasks and settle
- * their dispatch records, release
- * (with `release`) and then forget its workers, and close its sidebar pane
- * unless another active run shows the same one.
- */
 export async function closeRun(runId: string, o: { release?: boolean; force?: boolean } = {}): Promise<CloseResult> {
-  // A sub-run cannot outlive the run whose worker coordinates it: close those first, releasing their workers.
   const subRuns: CloseResult[] = [];
   if (o.release || o.force) {
     for (const child of activeRuns(load()).filter((r) => r.parent?.run_id === runId)) subRuns.push(await closeRun(child.id, { release: true, force: true }));
@@ -176,8 +148,6 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
       settleDispatch(state, t.dispatch_id, "failed");
       failed.push(t.id);
     }
-    // An accepted start has an unsettled dispatch but no registered worker/task commit yet.
-    // Revoke it with the same terminal task outcome; the resumed start will fail its authority check.
     for (const d of starting) {
       const t = state.tasks[d.task_id];
       if (!t || t.run_id !== runId || (t.status !== "pending" && t.status !== "failed")) continue;
@@ -189,13 +159,10 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
       t.outcome = { summary: "run closed", files_modified: [], report_path: null };
       if (!failed.includes(t.id)) failed.push(t.id);
     }
-    // Nothing of a closed run is still in flight: any dispatch left open is failed with it.
     for (const d of Object.values(state.dispatches ?? {})) if (d.run_id === runId) settleDispatch(state, d.id, "failed");
-    // Nor still owed to a worker: followups and replies nobody collected are dropped with the run.
     for (const m of state.messages) if (m.run_id === runId && !m.acked && (m.type === "followup" || m.type === "reply")) m.acked = true;
     run.status = "closed";
     run.closed_at = now();
-    // sync() only clears this on active runs; a closed run keeps no stale herdr warning.
     delete run.herdr_unreachable_since;
     return { run: { ...run }, workers, failed };
   }));
@@ -206,7 +173,6 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
       try {
         released.push({ worker: w.name, ...(await releaseWorker(run, w.name, { force: true })) });
       } catch (err) {
-        // The worker is forgotten below either way; its pane, if any, shows up in `forgotten`.
         log({ event: "worker.release_failed", run: runId, worker: w.name, error: (err as Error).message });
       }
     }

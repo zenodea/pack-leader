@@ -1,7 +1,3 @@
-// The observer: a second agent in a pane under the orchestrator that answers the human's
-// questions about the run from Pack Leader's state, the orchestrator's recent turns and
-// members' live or archived activity, and relays the human's words (`pack-leader say`).
-// It never acts on the run itself.
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +10,6 @@ import { DEFAULT_KIND, defaultAgentArgs, modelArgs, promptWithRetry, startWhenSh
 
 export const OBSERVER_TURNS = 8;
 
-/** The observer's standing orders: its system prompt where the harness takes one, else its first message. */
 export function observerPreamble(run: Run): string {
   return [
     `[pack-leader observer] You observe run ${run.id} of Pack Leader. Its orchestrator works in the pane above you; the human talks to you here.`,
@@ -41,31 +36,18 @@ export function observerPreamble(run: Run): string {
   ].join("\n");
 }
 
-/** The first message: an order to look, so the habit starts with a real `observe`. */
 export const observerKickoff = "Run `pack-leader observe` now and summarise the run in three lines: what the orchestrator is doing, what each worker is on, what is waiting.";
 
-/**
- * Harness arguments that pin the observer down: the brief as system prompt, no extensions, skills or
- * MCP servers, and only the shell (for `observe`, `worker read` and `say`) plus file reading. Kinds without such
- * flags get the brief as their first message instead.
- */
 export function observerArgs(kind: string, briefFile: string): { args: string[]; briefInPrompt: boolean } {
-  // herdr refuses a multi-line argument, so pi reads the brief from a file (its flag takes a path); claude's does not, so it gets the brief as its first message.
   if (kind === "pi") return { args: ["--append-system-prompt", briefFile, "--no-extensions", "--no-skills", "--no-mcp", "--no-prompt-templates", "--tools", "bash,read"], briefInPrompt: false };
   if (kind === "claude") return { args: ["--allowedTools", "Bash(pack-leader:*),Read"], briefInPrompt: true };
   return { args: [], briefInPrompt: true };
 }
 
-/** Where a run's observer brief is written for the harness to read. */
 export const briefPath = (runId: string) => join(stateDir, "observer", `${runId}.md`);
 
 export type ObserverStart = { pane_id: string; agent: string; kind: string; model: string | null; warning?: string };
 
-/**
- * Open the observer under the orchestrator: a split downwards (the sidebar, a sibling on the right,
- * keeps its full height), the configured harness started there with its default model and thinking
- * level, and the preamble as its first prompt. Recorded on the run as `observer`.
- */
 export async function startObserver(run: Run, o: { timeoutMs?: number } = {}): Promise<ObserverStart> {
   if (!run.orchestrator.pane_id) throw new Error(`run ${run.id} has no orchestrator pane to split`);
   const config = loadConfig();
@@ -84,8 +66,6 @@ export async function startObserver(run: Run, o: { timeoutMs?: number } = {}): P
   const args = [...(pinned.briefInPrompt ? defaultAgentArgs(kind) : []), ...pinned.args, ...modelArgs(kind, d.model ?? undefined, d.thinking ?? undefined)];
   try {
     await startWhenShellReady({ name: agent, kind, pane_id: pane.pane_id, args, timeout_ms: o.timeoutMs ?? 45_000 });
-    // herdr accepts a prompt only once it has seen the agent settle at its input, and the name it
-    // was started under can lag the pane by a few seconds: wait for both, then address it by name.
     const st = await agentWait(pane.pane_id, ["idle", "done"], 30_000);
     if (st === "timeout") throw new Error("the agent did not reach its prompt in 30 s");
     const deadline = Date.now() + 30_000;
@@ -101,7 +81,6 @@ export async function startObserver(run: Run, o: { timeoutMs?: number } = {}): P
   return { pane_id: pane.pane_id, agent, kind, model: d.model ?? null };
 }
 
-/** Close the observer's pane, if the run has one, and forget it. Best effort. */
 export async function closeObserver(run: Run): Promise<string | null> {
   const pane = run.observer?.pane_id ?? null;
   if (!pane) return null;
@@ -113,8 +92,6 @@ export async function closeObserver(run: Run): Promise<string | null> {
   await update((s) => void (s.runs[run.id] && (s.runs[run.id]!.observer = null)));
   return pane;
 }
-
-// ---- the transcript ----------------------------------------------------------
 
 export type Turn = { role: "user" | "assistant" | "tool"; text: string };
 
@@ -132,10 +109,6 @@ const text = (content: unknown): string => {
     .join(" ");
 };
 
-/**
- * The last `n` turns of a pi or Claude Code session file as role + text: user and assistant
- * messages, tool calls as `→ name args`, tool results cut short. Lines that are neither are skipped.
- */
 export function transcriptTail(jsonl: string, n = OBSERVER_TURNS): Turn[] {
   const turns: Turn[] = [];
   for (const line of jsonl.split("\n")) {
@@ -146,7 +119,6 @@ export function transcriptTail(jsonl: string, n = OBSERVER_TURNS): Turn[] {
     } catch {
       continue;
     }
-    // pi: {type:"message", message:{role, content}}; Claude Code: {type:"user"|"assistant", message:{role, content}}.
     const m = j?.message;
     if (!m || typeof m !== "object") continue;
     const role = m.role;
@@ -161,12 +133,10 @@ export function transcriptTail(jsonl: string, n = OBSERVER_TURNS): Turn[] {
   return turns.slice(-n);
 }
 
-/** Claude Code keeps a session per project directory, named after the cwd with slashes as dashes. */
 export function claudeSessionDir(cwd: string, home = homedir()): string {
   return join(home, ".claude", "projects", cwd.replace(/[\\/:]/g, "-"));
 }
 
-/** The first `bytes` of a file as text; a session file's opening prompt is there. */
 function head(file: string, bytes = 256 * 1024): string {
   const fd = openSync(file, "r");
   try {
@@ -179,10 +149,6 @@ function head(file: string, bytes = 256 * 1024): string {
   }
 }
 
-/**
- * An agent's session file: what herdr reports for its pane (pi), else the newest Claude Code
- * session for its cwd, written since `since` and, with `marker`, opening with that text.
- */
 export async function sessionPath(o: { paneId: string | null; cwd: string; since?: string; marker?: string }): Promise<string | null> {
   if (o.paneId) {
     try {
@@ -201,7 +167,6 @@ export async function sessionPath(o: { paneId: string | null; cwd: string; since
   return candidates.find((c) => !o.marker || head(c.f).includes(o.marker))?.f ?? null;
 }
 
-/** The orchestrator's transcript file. */
 export async function transcriptPath(run: Run): Promise<string | null> {
   return sessionPath({ paneId: run.orchestrator.pane_id, cwd: run.orchestrator.cwd });
 }
@@ -216,7 +181,6 @@ const ago = (iso: string): string => {
   return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m ago`;
 };
 
-/** What `pack-leader observe` prints: the run, its workers, what the orchestrator has not read yet, and its last turns. */
 export function digest(state: State, run: Run, live: ReadonlyMap<string, { status: AgentStatus }> | null, turns: Turn[], transcript: string | null): string {
   const lines: string[] = [];
   lines.push(`Run ${run.id} (${run.status}) · ${oneLine(run.objective)}`);

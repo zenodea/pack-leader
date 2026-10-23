@@ -1,5 +1,3 @@
-// The retry limit: a task that failed three attempts in a row takes no new
-// dispatch until the coordinator resets it. State only, no herdr.
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

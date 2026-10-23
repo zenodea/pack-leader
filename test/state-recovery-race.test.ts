@@ -19,8 +19,6 @@ test("stale corrupt reader cannot quarantine a healthy replacement committed by 
   const corruptBytes = '{"version":1,"runs":';
   writeFileSync(file, corruptBytes);
 
-  // Pause a real load immediately after its file read. The stdout line is a
-  // barrier, so the writer runs only after the reader has captured old bytes.
   const source = `
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
@@ -63,8 +61,6 @@ process.stdout.write(JSON.stringify(result) + '\\n');
     assert.equal(await pausedLine, "reader-paused");
     assert.equal(existsSync(paused), true);
 
-    // update() owns the writer lock, re-reads the still-corrupt path, preserves
-    // it under a .corrupt-* name, and atomically writes a healthy replacement.
     await update((state) => {
       state.seq = 42;
       state.runs.r1 = {
@@ -83,8 +79,6 @@ process.stdout.write(JSON.stringify(result) + '\\n');
     assert.ok(staleRead.error!.includes(file), staleRead.error);
     assert.match(staleRead.error!, /parse error:/);
 
-    // The delayed reader's stale corruption error is read-only: it cannot
-    // rename the healthy pathname or create a second backup.
     assert.equal(readFileSync(file, "utf8"), healthyBytes);
     assert.equal(load(file).seq, 42);
     assert.equal(load(file).runs.r1?.objective, "recovered run");

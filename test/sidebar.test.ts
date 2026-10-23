@@ -1,6 +1,3 @@
-// The sidebar's pure parts: the status a box shows before and after herdr
-// answers, key names from readline, scrolling to the selected box, and the
-// last-message line scoped to the current dispatch. No herdr, no TTY.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -81,7 +78,6 @@ test("scrollFor: no scroll when everything fits", () => {
 });
 
 test("scrollFor: scrolls down just enough to show a box below the fold, and back up for one above", () => {
-  // 40 lines, 10 visible.
   assert.equal(scrollFor(0, 2, 8, 10, 40), 0);
   assert.equal(scrollFor(0, 12, 18, 10, 40), 8);
   assert.equal(scrollFor(8, 14, 18, 10, 40), 8, "already visible: no movement");

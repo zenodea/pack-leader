@@ -1,12 +1,3 @@
-// Stage the landing-page screens: the three panes of a Pack Leader run (the orchestrator,
-// the observer, the pack) and one worker tab, as ANSI text to print inside real herdr panes.
-// The pack is drawn by the production sidebar renderer (src/sidebar.ts). The agent
-// transcripts are fictional, written to look like Claude Code's terminal UI. Nothing here
-// starts an agent, connects to herdr, or reads private state.
-//
-// Usage: node scripts/stage-demo.mjs OUTPUT_DIR [--leader COLSxROWS] [--observer COLSxROWS]
-//                                                [--pack COLSxROWS] [--worker COLSxROWS]
-// See site/assets/README.md for the capture steps around it.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,8 +12,6 @@ const size = (name, fallback) => {
 };
 const sizes = { leader: size("leader", "83x24"), observer: size("observer", "83x14"), pack: size("pack", "34x40"), worker: size("worker", "119x40") };
 
-// Colours follow herdr's own theme ([theme.custom] and [ui] accent in config.toml), read
-// before HOME is swapped for the sandbox. Missing keys fall back to Gruvbox Dark.
 const herdrConfig = join(process.env.XDG_CONFIG_HOME || join(process.env.HOME || "", ".config"), "herdr", "config.toml");
 const themeVals = {};
 try {
@@ -50,7 +39,6 @@ Object.assign(process.env, {
   HERDR_SOCKET_PATH: join(sandbox, "no-live-herdr.sock"),
 });
 
-// ── A small palette and the shapes Claude Code draws in a terminal ──────────────────────
 const sgr = (...c) => `\x1b[${c.join(";")}m`;
 const rgb = (hex, bg = false) => {
   const n = parseInt(hex.slice(1), 16);
@@ -76,13 +64,9 @@ function wrap(text, width) {
 const chunk = (text, width) => text.match(new RegExp(`.{1,${width}}`, "g")) ?? [""];
 const cut = (text, width) => (text.length > width ? text.slice(0, width - 1) + "…" : text);
 
-/** The human's prompt: a shaded block with ❯, wrapped, full width. */
 const you = (text, cols) => wrap(text, cols - 2).map((l, i) => sgr(rgb(c.box, true)) + sgr(rgb(c.dim)) + (i ? "  " : "❯ ") + sgr(rgb(c.text)) + l.padEnd(cols - 2) + sgr(0));
-/** A quoted block inside the prompt (the dispatch preamble): same shading, given lines. */
 const youLines = (lines, cols) => lines.map((l) => sgr(rgb(c.box, true)) + sgr(rgb(c.text)) + "  " + cut(l, cols - 2).padEnd(cols - 2) + sgr(0));
-/** The agent's own words. */
 const said = (text, cols) => wrap(text, cols - 2).map((l, i) => (i ? "  " : paint(c.text, "● ")) + l);
-/** A tool step: a dim bullet with its description, then the commands and output under ⎿. */
 function step(desc, items, cols) {
   const out = [dimmed("● ") + desc];
   for (const it of items) {
@@ -92,10 +76,8 @@ function step(desc, items, cols) {
   return out;
 }
 const spinner = (label, info) => paint(c.green, "✢ " + label) + " " + dimmed(info);
-/** Claude Code's input box at the bottom of the pane: rule, prompt, rule, mode line. */
 const inputBox = (cols, focused, mode) => [paint(c.rule, "─".repeat(cols)), dimmed("❯ ") + (focused ? sgr(7) + " " + sgr(0) : ""), paint(c.rule, "─".repeat(cols)), dimmed("  " + mode)];
 
-/** Exactly `rows` lines of at most `cols` cells, the tail pinned to the bottom. */
 function pane(name, body, tail, { cols, rows }) {
   const free = rows - tail.length;
   if (body.length > free) throw new Error(`${name}: ${body.length} lines of transcript, ${free} available`);
@@ -106,18 +88,15 @@ function pane(name, body, tail, { cols, rows }) {
 
 const realNow = Date.now;
 try {
-  // A fixed clock makes the sidebar's runtime labels reproducible.
   Date.now = () => Date.parse("2026-01-01T12:08:30Z");
   const { boxLines, goalLines } = await import("../src/sidebar.ts");
   const { dim, fg } = await import("../src/ansi.ts");
 
-  // ── The run everyone is looking at ────────────────────────────────────────────────────
   const run = "r-7f3a";
   const ask = "Reject invalid rows, or skip them?";
   const options = ["Reject import", "Skip rows"];
   const prompt = "Implement CSV import. Give parsing and validation to separate workers in isolated worktrees. Write tests, report back, then review the changes.";
 
-  // ── Pack Leader: the orchestrator's pane ──────────────────────────────────────────────
   const L = sizes.leader;
   const checkResult = JSON.stringify({ messages: [{ id: "m-2a", type: "done", from: "parser", outcome: "succeeded", body: "Parser + tests committed." }, { id: "m-3c", type: "ask", from: "tests", body: ask, options }] });
   const leader = pane("leader", [
@@ -136,7 +115,6 @@ try {
     spinner("Replying to tests…", "(4m 31s · ↓ 9.8k tokens)"),
   ], inputBox(L.cols, true, "⏵⏵ accept edits on (shift+tab to cycle) · 3 workers"), L);
 
-  // ── Observer: the second agent under the orchestrator ─────────────────────────────────
   const O = sizes.observer;
   const observer = pane("observer", [
     ...step("Read the run", [`$ pack-leader observe`], O.cols),
@@ -147,7 +125,6 @@ try {
     ...said(`Its spec left invalid-row handling open, so it asked instead of guessing. The leader just answered "Reject import"; tests should resume shortly.`, O.cols),
   ], inputBox(O.cols, false, "observer · read-only · say \"pass on: …\" to reach the leader"), O);
 
-  // ── Pack: the sidebar, drawn by the production renderer the way runSidebar() lays it out ──
   const P = sizes.pack;
   const base = {
     run_id: run, cwd: "~/code/ledger", started_at: "2026-01-01T12:04:00Z", last_status: "working", last_seq: 1,
@@ -168,7 +145,6 @@ try {
   ];
   const pack = pane("pack", [...head, ...boxes], [""], P);
 
-  // ── A worker's tab: parser, after reporting ───────────────────────────────────────────
   const W = sizes.worker;
   const worker = pane("worker", [
     ...you(`[pack-leader dispatch] You are worker "parser" in run ${run}, on task t-01 ("Parse CSV input"), dispatch d-01. An orchestrator agent coordinates several workers in parallel. It cannot see your screen; the only channel is the \`pack-leader\` CLI, which already knows your IDs from the environment.`, W.cols),

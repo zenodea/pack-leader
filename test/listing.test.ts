@@ -1,5 +1,3 @@
-// Read-only views: `task list --ready --status --brief` and `check --all`. The CLI as
-// a child process, without herdr.
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

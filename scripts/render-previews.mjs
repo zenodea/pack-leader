@@ -1,6 +1,3 @@
-// Render the production sidebar functions with fictional data. No agents or herdr
-// connections are started. The HTML is a capture surface, not a second UI implementation.
-// Usage: node scripts/render-previews.mjs /tmp/pack-leader-previews
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -22,8 +19,6 @@ Object.assign(process.env, {
 const escape = (s) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 const palette = { 31: "#f29d91", 32: "#b6d69b", 33: "#ead08f", 34: "#8eb9dc", 35: "#c1a4d4", 36: "#9bc9bf", 90: "#98a49b" };
 
-// Only SGR styles emitted by src/ansi.ts: colour, bold and dim. The text and
-// box layout come directly from src/sidebar.ts, including wrapping and choices.
 function ansiHtml(text) {
   const style = { color: "", bold: false, dim: false };
   return text.split(/(\x1b\[[0-9;]*m)/).map((part) => {
@@ -61,7 +56,6 @@ footer{padding:0 28px 15px;font:10px "DejaVu Sans Mono",monospace;letter-spacing
 
 const realNow = Date.now;
 try {
-  // A fixed clock makes runtime labels reproducible.
   Date.now = () => Date.parse("2026-01-01T12:08:00Z");
   const { boxLines, goalLines } = await import("../src/sidebar.ts");
   const { dim, fg } = await import("../src/ansi.ts");

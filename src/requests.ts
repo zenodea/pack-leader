@@ -1,7 +1,3 @@
-// Durable request identities for mutating commands (`--retry-request ID`). A
-// command whose response was lost (a shell timeout, a dropped SSH session) can be
-// run again with the same id: a finished request prints its recorded result
-// instead of acting twice, and `request show ID` says whether it took effect.
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import type { Args } from "./args.ts";
@@ -10,7 +6,6 @@ import { load, now, update } from "./state.ts";
 export type RequestRecord = {
   id: string;
   command: string;
-  /** Hash of the command, its positional arguments, flags and native arguments, without the id. */
   fingerprint: string;
   status: "pending" | "completed";
   pid: number;
@@ -18,11 +13,9 @@ export type RequestRecord = {
   started_at: string;
   completed_at?: string;
   exit_code?: number;
-  /** The JSON the command printed (or its error), replayed verbatim on a retry. */
   receipt?: unknown;
 };
 
-/** Records older than this are dropped on the next request. */
 const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -50,11 +43,6 @@ export class RequestError extends Error {
   }
 }
 
-/**
- * Claim `id` for this command, or hand back the finished record to replay. A
- * pending record whose process is gone is an unknown outcome: the command may
- * have acted before it died, so nothing is rerun blindly.
- */
 export async function beginRequest(id: string, command: string, fp: string): Promise<RequestRecord | null> {
   if (!REQUEST_ID.test(id)) throw new Error("--retry-request takes 1-128 letters, digits, or . _ : -");
   return update((state) => {
@@ -81,7 +69,6 @@ export async function finishRequest(id: string, receipt: unknown, exitCode: numb
   });
 }
 
-/** `completed` (with its receipt), `pending`, or `absent`: absent is not proof that nothing happened. */
 export function requestShow(id: string): { request: string; status: "completed" | "pending" | "absent"; command?: string; started_at?: string; completed_at?: string; exit_code?: number; receipt?: unknown; process_alive?: boolean } {
   const r = load().requests?.[id];
   if (!r) return { request: id, status: "absent" };

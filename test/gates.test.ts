@@ -1,6 +1,3 @@
-// Durable approval gates: state compatibility, admission enforcement, immutable
-// decisions, coordinator/run scoping, and pruning. Tests are written for the
-// integration verification phase; do not execute them before all feature work lands.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -84,7 +81,6 @@ const cliWith = (extra: Record<string, string>, ...argv: string[]) => {
 };
 const cli = (...argv: string[]) => cliWith({}, ...argv);
 
-// GATE-1: older v1 state still loads with the optional map defaulted.
 test("legacy v1 state without gates loads with a safe empty gate map", () => {
   const legacy = base() as any;
   delete legacy.gates;
@@ -93,7 +89,6 @@ test("legacy v1 state without gates loads with a safe empty gate map", () => {
   assert.deepEqual(load().gates, {});
 });
 
-// GATE-2: a gate is distinct from task status; each gate must be approved.
 test("pending and rejected gates block admission until every gate is approved", async () => {
   save(base());
   const first = await createGate("r1", "t1", "review one");
@@ -123,13 +118,11 @@ test("pending and rejected gates block admission until every gate is approved", 
     () => assert.fail("a different decision must not overwrite rejection"),
     (err: any) => assert.equal(err.code, "gate_decision_immutable"),
   );
-  // Same-decision retries are idempotent, but do not mutate the original reason/time.
   const rejected = load().gates![rejectedGate.id]!;
   assert.equal((await resolveGate("r1", rejectedGate.id, "reject", "different retry text")).resolved_at, rejected.resolved_at);
   assert.equal(load().gates![rejectedGate.id]!.resolution_reason, "needs changes");
 });
 
-// GATE-2b: a decision gate asks between options; approving it records the choice.
 test("a decision gate is approved by choosing one of its options, by unique prefix, and the choice is immutable", async () => {
   save(base());
   await assert.rejects(createGate("r1", "t1", "pick one", ["only"]), (err: any) => err.code === "gate_options_invalid");
@@ -148,8 +141,6 @@ test("a decision gate is approved by choosing one of its options, by unique pref
   await assert.rejects(resolveGate("r1", plain.id, "approve", undefined, "x"), (err: any) => err.code === "gate_choice_invalid");
 });
 
-// GATE-3: the central dispatch factory prevents starts, retries, and redispatches
-// even when a caller skipped the ready() convenience check.
 test("createDispatch enforces gate approval independently of task status", async () => {
   const s = base();
   s.gates = {
@@ -164,7 +155,6 @@ test("createDispatch enforces gate approval independently of task status", async
   assert.doesNotThrow(() => createDispatch(s, { id: "d4", task: s.tasks.t1!, worker: "api", preamble: "p", cwd: dir }));
 });
 
-// GATE-4: every admission and resend path checks the same gate guard before prompting.
 test("pending gates block initial starts, retries, redispatches, and resend", async () => {
   const s = base();
   save(s);
@@ -206,7 +196,6 @@ test("pending gates block initial starts, retries, redispatches, and resend", as
   assert.equal(calls.some((c) => c.method === "agent.prompt"), false);
 });
 
-// GATE-5: task status and run ownership do not provide a bypass.
 test("gate creation refuses dispatched/cross-run tasks and task update cannot clear a gate", async () => {
   const s = base();
   s.runs.r2 = run("r2");
@@ -223,8 +212,6 @@ test("gate creation refuses dispatched/cross-run tasks and task update cannot cl
   assert.equal(ready(load(), load().tasks.t1!), false);
 });
 
-// GATE-6: renewable setup-enabled start claims remain protected past the initial
-// start lease; only an expired claim can be revoked by gate creation.
 test("gate creation honors a renewed in-flight start claim lease", async () => {
   const s = base();
   s.dispatches = {
@@ -246,8 +233,6 @@ test("gate creation honors a renewed in-flight start claim lease", async () => {
   assert.equal(load().dispatches!.d1!.outcome, "failed");
 });
 
-// GATE-7: gate creation and accepted-but-not-yet-registered start claims share
-// update()'s lock. Once tab.create is reached, the claim must make gate creation fail.
 test("concurrent gate creation cannot race through an accepted start claim", async () => {
   const s = base();
   save(s);
@@ -278,8 +263,6 @@ test("concurrent gate creation cannot race through an accepted start claim", asy
   assert.equal(calls.filter((c) => c.method === "agent.prompt").length, 1);
 });
 
-// GATE-8: closed runs stay readable, but cannot be mutated; worker processes
-// cannot create or resolve gates, and pruning sweeps the records by run_id.
 test("closed-run reads, coordinator-only writes, and pruning are scoped", async () => {
   const s = base();
   s.runs.r2 = run("r2");

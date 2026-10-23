@@ -1,5 +1,3 @@
-// `worker abandon`: fence a worker without claiming its agent stopped. State only:
-// the herdr socket points nowhere, so any herdr call would fail the test.
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";

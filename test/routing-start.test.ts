@@ -213,7 +213,6 @@ for (const remote of [false, true]) {
     const rejected = assert.rejects(starting, /revoked/);
     await entered.promise;
     assert.equal(calls.some((c) => c.method === "tab.create"), false);
-    // Completion while fetch is held proves no state lock/run fence is held by routing.
     await closeRun("r1", { force: true });
     finish.resolve();
     await rejected;

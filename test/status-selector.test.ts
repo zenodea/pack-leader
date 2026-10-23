@@ -1,6 +1,3 @@
-// `status` run selection: explicit selectors are authoritative; only implicit
-// no-run/ambiguous selection falls back to the fleet overview. No herdr: a temp
-// state dir and a socket path nothing listens on.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

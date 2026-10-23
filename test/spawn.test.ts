@@ -1,5 +1,3 @@
-// `spawn`: an unsupervised full handoff. Same harness as worktree.test.ts: a temp
-// git repo, a temp state dir and a fake herdr socket.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

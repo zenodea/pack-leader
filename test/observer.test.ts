@@ -1,5 +1,3 @@
-// The observer's pure parts: the transcript tail for pi and Claude Code session files,
-// the Claude session directory, the digest, and `say` as a user message in the inbox.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

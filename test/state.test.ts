@@ -9,7 +9,6 @@ import { acquire, emptyState, load, lockFor, lockIsStale, log, nextId, release, 
 
 const stateModule = fileURLToPath(new URL("../src/state.ts", import.meta.url));
 
-/** A node child running `code` (an ES module body) with `st` bound to src/state.ts. */
 function child(code: string, env: NodeJS.ProcessEnv = process.env): ChildProcess {
   const body = `const st = await import(${JSON.stringify(stateModule)});\n${code}`;
   return spawn(process.execPath, ["--no-warnings", "--input-type=module", "-e", body], { env, stdio: ["pipe", "pipe", "inherit"] });
@@ -38,7 +37,6 @@ test("load: corruption reads are read-only; update quarantines corrupt and wrong
   const logTo = join(dir, "events.jsonl");
   const malformed = '{"version":1,"runs":{"r1":';
 
-  // Ordinary readers report path-specific corruption without renaming or logging the bad bytes.
   writeFileSync(file, malformed);
   assert.throws(() => load(file, logTo), (error: Error) =>
     error.message.includes(file) && error.message.includes("parse error:"),
@@ -47,7 +45,6 @@ test("load: corruption reads are read-only; update quarantines corrupt and wrong
   assert.equal(readFileSync(file, "utf8"), malformed);
   assert.deepEqual(readdirSync(dir), ["state.json"]);
 
-  // The writer rereads under lock, quarantines the original bytes, then saves its edit.
   await update((state) => { state.seq = 7; }, file);
   assert.equal(load(file).seq, 7);
   let corrupt = readdirSync(dir).filter((n) => n.startsWith("state.json.corrupt-"));
@@ -60,7 +57,6 @@ test("load: corruption reads are read-only; update quarantines corrupt and wrong
   assert.equal(events[0].renamed_to, join(dir, corrupt[0]!));
   assert.match(events[0].reason, /parse error/);
 
-  // Version mismatch is also reported to readers, then preserved by recovery.
   const wrongVersion = JSON.stringify({ version: 2, runs: {} });
   writeFileSync(file, wrongVersion);
   assert.throws(() => load(file, logTo), (error: Error) =>
@@ -76,7 +72,6 @@ test("load: corruption reads are read-only; update quarantines corrupt and wrong
   assert.equal(events.length, 2);
   assert.match(events[1].reason, /unsupported state version 2/);
 
-  // Missing files remain silently empty; reads create neither state nor log files.
   rmSync(file);
   rmSync(logTo);
   assert.deepEqual(load(file, logTo), emptyState());
@@ -86,7 +81,7 @@ test("load: corruption reads are read-only; update quarantines corrupt and wrong
 });
 
 test("resolveRun: explicit id, orchestrator pane, worker pane, workspace, single run", () => {
-  const env = {}; // isolate from the real PACK_RUN_ID of the pane running the tests
+  const env = {};
   const resolveRun = (state: State, opts: Parameters<typeof resolve>[1]) => resolve(state, opts, env);
   const s = emptyState();
   s.runs.r1 = run("r1", "w1:p1", "w1");
@@ -116,7 +111,6 @@ test("resolveRun: a closed run only by explicit id, only for read-only callers; 
   assert.throws(() => resolve(s, { runId: "r2" }, env), /run r2 is closed/);
   assert.throws(() => resolve(s, {}, { PACK_RUN_ID: "r2" }), /run r2 is closed/);
   assert.equal(resolve(s, { runId: "r2", allowClosed: true }, env).id, "r2");
-  // The closed run's worker pane and orchestrator pane no longer select it.
   assert.equal(resolve(s, { paneId: "w1:p7" }, env).id, "r1");
   assert.equal(resolve(s, { paneId: "w1:p2", allowClosed: true }, env).id, "r1");
   s.runs.r3 = run("r3", "w3:p1", "w3");
@@ -163,15 +157,13 @@ test("update: a lock held by a live process times out; once that process dies th
   assert.equal(await firstLine(holder), "held");
   assert.deepEqual(JSON.parse(readFileSync(join(lock, "owner"), "utf8")), { pid: holder.pid, host: hostname() });
   assert.equal(lockIsStale(lock), false);
-  // Even an old lock is not swept while its owner is alive (B3: a slow holder keeps its lock).
   old(lock, 60_000);
   assert.equal(lockIsStale(lock), false);
   await assert.rejects(acquire(lock, 200), /pack-leader state is locked by another command; try again/);
-  // Our release() does not remove a lock someone else holds.
   release(lock);
   assert.equal(existsSync(lock), true);
 
-  holder.kill("SIGKILL"); // dies holding the lock
+  holder.kill("SIGKILL");
   await exited(holder);
   assert.equal(lockIsStale(lock), true);
   await update((s) => { s.seq = 7; }, file);
@@ -191,7 +183,7 @@ test("lockIsStale: an ownerless lock after 30 s, a live owner only after 10 min,
   await assert.rejects(acquire(lock, 100), /locked by another command/);
   old(lock, 31_000);
   assert.equal(lockIsStale(lock), true);
-  await acquire(lock, 100); // swept, then taken
+  await acquire(lock, 100);
   assert.equal(JSON.parse(readFileSync(join(lock, "owner"), "utf8")).pid, process.pid);
   old(lock, 9 * 60_000);
   assert.equal(lockIsStale(lock), false, "our own live pid");
@@ -239,7 +231,7 @@ test("nextId: prefix plus base-36 counter, strictly increasing, survives save/lo
 test("save: creates the file's own dir, fsyncs through tmp+rename, sweeps only old orphaned tmp files", () => {
   const dir = mkdtempSync(join(tmpdir(), "pack-leader-"));
   const file = join(dir, "nested", "deeper", "state.json");
-  save(emptyState(), file); // S29: the custom file's dir, not the real state dir
+  save(emptyState(), file);
   assert.deepEqual(load(file), emptyState());
   const d = join(dir, "nested", "deeper");
   writeFileSync(join(d, "state.json.111.tmp"), "{}");
@@ -257,7 +249,7 @@ test("log: past the size limit events.jsonl is rotated to events.jsonl.1, not tr
   const file = join(dir, "events.jsonl");
   const events = (f: string) => readFileSync(f, "utf8").trim().split("\n").map((l) => JSON.parse(l).event);
   log({ event: "a" }, file, 50);
-  log({ event: "b" }, file, 50); // the file is still under 50 bytes before this
+  log({ event: "b" }, file, 50);
   assert.deepEqual(events(file), ["a", "b"]);
   log({ event: "c" }, file, 50);
   assert.deepEqual(events(`${file}.1`), ["a", "b"]);

@@ -1,4 +1,3 @@
-// Drive the actual Bash bar through a private PTY, never through a Herdr pane.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

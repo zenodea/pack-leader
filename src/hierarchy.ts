@@ -10,7 +10,6 @@ export class TaskHierarchyError extends Error {
   }
 }
 
-/** Refuse provenance edits while an accepted dispatch/adoption claim is unsettled. */
 export function assertTaskParentMutable(state: State, task: Task): void {
   if (task.status === "dispatched") {
     throw new TaskHierarchyError("TASK_PARENT_DISPATCHED", `cannot change parent of task ${task.id} while it is dispatched to ${task.worker ?? "a worker"}`);
@@ -23,7 +22,6 @@ export function assertTaskParentMutable(state: State, task: Task): void {
   }
 }
 
-/** Validate one proposed parent edge without changing execution dependencies. */
 export function validateTaskParent(state: State, runId: string, taskId: string, parentId: string | null): void {
   if (parentId === null) return;
   if (parentId === taskId) throw new TaskHierarchyError("TASK_PARENT_SELF", `task ${taskId} cannot be its own parent`);
@@ -71,11 +69,6 @@ const MAX_RENDER_DEPTH = 64;
 const emptyCounts = (): TaskCounts => ({ total: 0, pending: 0, dispatched: 0, succeeded: 0, failed: 0, blocked: 0 });
 const orderTasks = (a: Task, b: Task) => idSeq(a.id) - idSeq(b.id) || a.id.localeCompare(b.id);
 
-/**
- * Build a deterministic, bounded tree for CLI output. Bad legacy parent edges are
- * reported and detached; cycles are broken at their lowest ordered task id. Counts
- * still cover the complete underlying subtree when rendering is depth-limited.
- */
 export function taskTree(state: State, runId: string, selectedId?: string): TaskTree {
   const tasks = Object.values(state.tasks).filter((task) => task.run_id === runId).sort(orderTasks);
   const byId = new Map(tasks.map((task) => [task.id, task]));
@@ -106,8 +99,6 @@ export function taskTree(state: State, runId: string, selectedId?: string): Task
     parents.set(task.id, raw);
   }
 
-  // Parent links have at most one outgoing edge per task, so an iterative walk can
-  // find every cycle without recursion (even for legacy graphs with extreme depth).
   const complete = new Set<string>();
   for (const task of tasks) {
     if (complete.has(task.id)) continue;

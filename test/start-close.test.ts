@@ -1,5 +1,3 @@
-// REL-1: a start claim stays visible to run close until its worker is committed.
-// Every lifecycle action uses a temporary state directory and a fake herdr socket.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:net";
@@ -173,7 +171,6 @@ test("forced close is ordered after a task prompt already in flight", async () =
   const starting = start(run);
   await reachedPrompt;
   const closing = closeRun("r1", { force: true });
-  // Let the close attempt reach its fence wait; the held fake prompt keeps the run active.
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(load().runs.r1!.status, "active");
 

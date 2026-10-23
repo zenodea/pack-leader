@@ -1,6 +1,3 @@
-// Durable coordinator-owned approval gates for task admission. Gates are separate
-// from worker questions and task status: only an explicit persisted approval
-// releases that individual gate.
 import { nextId, now, START_CLAIM_MS, taskGateBlockers, update, type State, type TaskGate } from "./state.ts";
 import { startClaimIsFresh } from "./claims.ts";
 
@@ -14,7 +11,6 @@ export class GateError extends Error {
   }
 }
 
-/** Shared dispatch-admission guard. Pending and rejected gates both block. */
 export function assertTaskGatesApproved(state: State, taskId: string): void {
   const blockers = taskGateBlockers(state, taskId);
   if (!blockers.length) return;
@@ -22,7 +18,6 @@ export function assertTaskGatesApproved(state: State, taskId: string): void {
   throw new GateError("task_gate_blocked", `task ${taskId} is blocked by unapproved gate${blockers.length === 1 ? "" : "s"}: ${detail}; resolve every gate with \`pack-leader gate resolve\``);
 }
 
-/** The option a choice names: exact, case-insensitive, or a unique prefix. */
 function matchChoice(gate: TaskGate, choice: string): string {
   const options = gate.options ?? [];
   const c = choice.trim().toLowerCase();
@@ -33,7 +28,6 @@ function matchChoice(gate: TaskGate, choice: string): string {
   throw new GateError("gate_choice_invalid", `choice "${choice.trim()}" ${hits.length > 1 ? "is ambiguous" : "matches none of the options"} of gate ${gate.id}: ${options.join(" | ")}`);
 }
 
-/** Create a gate in the caller's state transaction; used to make admission atomic. */
 export function createGateInState(state: State, runId: string, taskId: string, reason: string, options?: string[]): TaskGate {
   if (typeof reason !== "string" || !reason.trim()) throw new GateError("gate_reason_required", "gate reason must not be empty");
   const choices = [...new Set((options ?? []).map((o) => o.trim()).filter(Boolean))];
@@ -44,16 +38,12 @@ export function createGateInState(state: State, runId: string, taskId: string, r
   if (!task || task.run_id !== runId) throw new GateError("gate_task_not_found", `no task ${taskId} in run ${runId}`);
   if (task.status === "dispatched") throw new GateError("gate_task_dispatched", `task ${taskId} is already dispatched; gates can only be created for non-dispatched tasks`);
 
-  // A start reserves its task when createDispatch records the claim, before a
-  // Worker exists. Check and revoke expired claims while holding the same state
-  // lock as dispatch admission, so neither operation can slip past the other.
   const registered = new Set(Object.values(state.workers).map((w) => w.dispatch_id).filter((id): id is string => Boolean(id)));
   for (const dispatch of Object.values(state.dispatches ?? {})) {
     if (dispatch.task_id !== taskId || dispatch.run_id !== runId || dispatch.settled_at || registered.has(dispatch.id)) continue;
     if (startClaimIsFresh(dispatch, START_CLAIM_MS)) {
       throw new GateError("gate_start_claim_active", `task ${taskId} is being started by worker "${dispatch.worker}" (dispatch ${dispatch.id}); wait for that start to finish`);
     }
-    // Match start admission's stale-claim policy and revoke a slow resumed start.
     dispatch.settled_at = now();
     dispatch.outcome = "failed";
     delete dispatch.claim_until;
@@ -74,15 +64,10 @@ export function createGateInState(state: State, runId: string, taskId: string, r
   return gate;
 }
 
-/** Create and persist a gate for a non-dispatched task in an active run. */
 export async function createGate(runId: string, taskId: string, reason: string, options?: string[]): Promise<TaskGate> {
   return update((state) => createGateInState(state, runId, taskId, reason, options));
 }
 
-/**
- * Resolve one gate exactly once; retrying the same decision is idempotent. A decision
- * gate (one with options) is approved by choosing one of them, or rejected.
- */
 export async function resolveGate(runId: string, gateId: string, decision: "approve" | "reject", reason?: string, choice?: string): Promise<TaskGate> {
   if (decision !== "approve" && decision !== "reject") throw new GateError("gate_decision_invalid", "gate decision must be approve or reject");
   if (choice !== undefined && decision !== "approve") throw new GateError("gate_choice_invalid", "--choice approves a decision gate; it does not go with --decision reject");
@@ -111,7 +96,6 @@ export async function resolveGate(runId: string, gateId: string, decision: "appr
   });
 }
 
-/** Read-only gate queries include closed runs until their records are pruned. */
 export function runGates(state: State, runId: string, taskId?: string): TaskGate[] {
   return Object.values(state.gates ?? {})
     .filter((gate) => gate.run_id === runId && (!taskId || gate.task_id === taskId))

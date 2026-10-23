@@ -1,5 +1,3 @@
-// The skill: a stub that agents discover, and the full guide the binary prints
-// so the two never drift apart (the stub only says "run `pack-leader skill`").
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { skillDirs, guideFile, localBin, skillStubFile, packLeaderBin } from "./paths.ts";
@@ -10,7 +8,6 @@ export function guide(): string {
 
 export type InstallReport = { skills: string[]; bin: string | null; note: string[] };
 
-/** Installs the skill stub into each harness that is set up here and puts `pack-leader` on PATH via ~/.local/bin. */
 export function installSkill(): InstallReport {
   const note: string[] = [];
   const stub = readFileSync(skillStubFile, "utf8");

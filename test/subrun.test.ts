@@ -1,5 +1,3 @@
-// Sub-runs: a worker coordinating workers of its own from its pane. The CLI as a
-// child process with a worker's environment; no herdr is needed for these paths.
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -28,7 +26,6 @@ function base(): State {
 }
 beforeEach(() => save(base()));
 
-/** The CLI from the lead worker's pane (w1:p2), with its PACK_* environment; `extra` overrides. */
 function lead(argv: string[], extra: Record<string, string> = {}): Promise<{ code: number; json: any; stderr: string }> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const k of Object.keys(env)) if (k.startsWith("PACK_") || k.startsWith("HERDR_PANE") || k === "HERDR_PLUGIN_CONTEXT_JSON" || k === "HERDR_PLUGIN_ID" || k === "HERDR_WORKSPACE_ID") delete env[k];

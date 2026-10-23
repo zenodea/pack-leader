@@ -1,8 +1,3 @@
-// `pack-leader spawn`: a full handoff. Start an agent in a herdr tab of its own
-// (optionally in a fresh worktree), give it the prompt verbatim, and stop. No
-// run, task, dispatch, preamble, report or supervision: the new agent owns the
-// work, and nothing in Pack Leader's state waits for it. Use a run when the
-// work needs reports, questions or tracking.
 import { agentPrompt, getAgent, labelPane, listAgents, logHerdrError, promptLanded, tabClose, tabCreate, HerdrError } from "./herdr.ts";
 import { log, WORKER_NAME } from "./state.ts";
 import { planWorktree, type WorktreeInfo } from "./worktree.ts";
@@ -12,12 +7,10 @@ export type SpawnOptions = {
   name: string;
   kind: string;
   prompt: string;
-  /** Where the command runs: the workspace for the tab and the default cwd. */
   workspaceId: string | null;
   cwd: string;
   model?: string;
   thinking?: string;
-  /** `new`: a fresh git worktree on branch pack/spawn/<name> (or --branch); a path: that existing checkout. */
   worktree?: string;
   base?: string;
   branch?: string;
@@ -81,7 +74,6 @@ export async function spawnAgent(o: SpawnOptions): Promise<SpawnResult> {
     await agentPrompt(pane, o.prompt);
   } catch (err) {
     const e = err as HerdrError;
-    // A timed-out prompt that the agent already took counts: resending would type it twice.
     if (!(e.code === "timeout" && seq !== undefined && (await promptLanded(pane, seq)))) {
       log({ event: "spawn.prompt_failed", agent: o.name, pane, error: e.message });
       return { ...base, prompted: false, warning: `${o.name} started but the prompt did not go in (${e.code ?? "error"}: ${e.message}); send it with \`herdr agent prompt ${o.name} "<prompt>"\`` };

@@ -1,5 +1,3 @@
-// Error-boundary regressions use the real CLI process, an isolated state dir,
-// and a fake herdr socket; the unreachable case uses a separate nonexistent socket.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

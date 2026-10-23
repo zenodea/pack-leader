@@ -1,6 +1,3 @@
-// Regression tests for the final review of the feature wave (docs/review/final-code-review.md).
-// Each test pins one finding; the finding's id (F1, F2, ...) is in the test name. Same
-// pattern as inbox.test.ts: a temp state dir and a fake herdr socket scripted per test.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
@@ -25,7 +22,6 @@ const { getAgent, getPane, herdr, labelPane, observePromptReceipt, promptLanded,
 const { baseline, preamble, promptWithRetry, redispatch, releaseWorker, startWorker } = await import("../src/workers.ts");
 const { closeRun, pruneRuns } = await import("../src/runs.ts");
 
-/** A handler's answer that is written as is (`""`: no answer at all), for transport tests. */
 type Raw = { __raw: string };
 type Handler = (method: string, params: any, req?: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };
@@ -82,7 +78,6 @@ function base(): State {
   return s;
 }
 
-/** A herdr that starts agents in new tabs and takes prompts; agent.get has no agent (no startup dialog). */
 const startHerdr: Handler = (method, params) => {
   switch (method) {
     case "agent.list": return { agents: [] };
@@ -102,8 +97,6 @@ const startHerdr: Handler = (method, params) => {
 
 const start = (name: string, extra: Partial<Parameters<typeof startWorker>[0]> = {}) =>
   startWorker({ run: load().runs.r1!, name, kind: "claude", placement: "tab", direction: "right", extraArgs: [], noDefaultArgs: true, timeoutMs: 1000, ...extra });
-
-// ---- F1: followups and replies reach only the run and incarnation they were sent to ------------
 
 test("F1: sync delivers only this run's followups sent to this incarnation of the worker", async () => {
   const s = base();
@@ -135,7 +128,7 @@ test("F1: inbox skips followups and replies meant for an earlier worker of the s
   s.messages.push(
     msg("old-f", { ts: iso(60_000) }),
     msg("old-ask", { type: "ask", from: "bob", to: "orchestrator", ts: iso(50_000), acked: true }),
-    msg("old-reply", { type: "reply", reply_to: "old-ask" }), // answered after the old bob was released
+    msg("old-reply", { type: "reply", reply_to: "old-ask" }),
     msg("new-ask", { type: "ask", from: "bob", to: "orchestrator", acked: true }),
     msg("new-reply", { type: "reply", reply_to: "new-ask" }),
     msg("new-f", {}),
@@ -145,8 +138,6 @@ test("F1: inbox skips followups and replies meant for an earlier worker of the s
   assert.deepEqual(got.map((m) => m.id).sort(), ["new-f", "new-reply"]);
 });
 
-// ---- F2: the idle baseline is taken before the prompt -------------------------------------------
-
 test("F2: a redispatched worker that finishes quickly without reporting raises an idle attention", async () => {
   const s = base();
   s.tasks.t0 = task("t0", "succeeded", "bob", "d0");
@@ -155,7 +146,6 @@ test("F2: a redispatched worker that finishes quickly without reporting raises a
   let prompted = false;
   handler = (method) => {
     switch (method) {
-      // herdr flips the agent to working the moment the prompt lands.
       case "agent.get": return { agent: { pane_id: "w1:p-bob", agent_status: prompted ? "working" : "idle", state_change_seq: prompted ? 6 : 5 } };
       case "agent.prompt": prompted = true; return {};
       case "agent.wait": return { agent: { agent_status: "idle" } };
@@ -166,7 +156,6 @@ test("F2: a redispatched worker that finishes quickly without reporting raises a
     }
   };
   const r = await redispatch(load().runs.r1!, "bob", undefined, "a quick one");
-  // No sync saw it working: idle at seq 7 is still two state changes past the pre-prompt seq 5.
   const created = await sync();
   assert.deepEqual(created.map((m) => [m.status, m.dispatch_id]), [["idle", r.dispatch_id]]);
 });
@@ -198,9 +187,6 @@ test("local timeout recognizes working without a sequence while remote receipt s
   }
 });
 
-// ---- F3: a redispatch whose prompt fails says how to recover -------------------------------------
-
-// Superseded by R19 (docs/review/findings-status.md): a prompt that did not go in is rolled back.
 test("F3/R19: a redispatch whose prompt fails is rolled back: --spec task removed, worker IDs restored, error names worker prompt", async () => {
   process.env.PACK_PROMPT_RETRY_MS = "0";
   const s = base();
@@ -223,14 +209,11 @@ test("F3/R19: a redispatch whose prompt fails is rolled back: --spec task remove
   assert.ok(Object.values(after.dispatches!).every((d) => d.outcome === "failed" && d.settled_at));
 });
 
-// ---- F4: a followup never overtakes the worker's first prompt ------------------------------------
-
 test("F4: a followup sent while a worker is starting waits for its preamble", async () => {
   save(base());
   let gets = 0;
   handler = async (method, params) => {
     if (method === "agent.start") {
-      // The orchestrator (another process) sends @all while this start is in flight.
       const r = await sendTo(load().runs.r1!, "@all", "heads up", false);
       assert.equal(r.recipients[0]!.delivered, false);
       return {};
@@ -249,8 +232,6 @@ test("F4: a followup sent while a worker is starting waits for its preamble", as
   assert.equal(queued.delivered, false, "queued for the next idle or inbox");
   assert.equal(load().workers.bob!.awaiting_prompt, false);
 });
-
-// ---- F5: two starts cannot claim the same task or the same name ----------------------------------
 
 test("F5: concurrent starts of the same task: one wins, the other is refused, no dispatch left open", async () => {
   const s = base();
@@ -297,8 +278,6 @@ test("F5: an abandoned start (killed before its worker was recorded) stops block
   assert.ok(d9.settled_at);
 });
 
-// ---- F6: a fresh worktree is not leaked when the worker's tab cannot be made ---------------------
-
 test("F6: a worktree created for a start that then fails is removed again", async () => {
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const repo = join(dir, "repo-f6");
@@ -320,8 +299,6 @@ test("F6: a worktree created for a start that then fails is removed again", asyn
   assert.doesNotMatch(git(repo, "worktree", "list"), /repo-f6-wt/);
 });
 
-// ---- F7: a release that cannot close the tab says so ---------------------------------------------
-
 test("F7: release reports close_error when herdr fails to close the tab, and nothing when the pane is already gone", async () => {
   const s = base();
   s.tasks.t1 = task("t1", "succeeded", "bob", "d1");
@@ -339,8 +316,6 @@ test("F7: release reports close_error when herdr fails to close the tab, and not
   const r2 = await releaseWorker(load().runs.r1!, "ann", {});
   assert.equal(r2.close_error, undefined);
 });
-
-// ---- F8: a herdr answer without the list is not "no panes" ---------------------------------------
 
 test("F8: pane.list answering without panes does not mark workers exited", async () => {
   const s = base();
@@ -360,14 +335,11 @@ test("F8: pane.list answering without panes does not mark workers exited", async
   assert.ok(after.runs.r1!.herdr_unreachable_since);
 });
 
-// ---- F9: a herdr snapshot older than the worker is no evidence about its pane --------------------
-
 test("F9: a worker recorded after sync took its herdr snapshot is not counted missing", async () => {
   save(base());
   handler = (method) => {
     if (method === "agent.list") return { agents: [] };
     if (method === "pane.list") {
-      // A `worker start` in another process records zed between this snapshot and sync's update.
       const s = load();
       s.tasks.tz ??= task("tz", "dispatched", "zed", "dz");
       s.workers.zed = { ...(s.workers.zed ?? worker("zed", { task_id: "tz", dispatch_id: "dz" })), started_at: new Date(Date.now() + 1).toISOString() };
@@ -384,8 +356,6 @@ test("F9: a worker recorded after sync took its herdr snapshot is not counted mi
   assert.equal(after.workers.zed!.missing_since ?? null, null);
 });
 
-// ---- F10: prune leaves a run whose close is still releasing workers ------------------------------
-
 test("F10: prune skips a run closed moments ago that still has worker records, and says why", () => {
   const s = base();
   s.runs.c1 = run("c1", { status: "closed", closed_at: iso(60_000) });
@@ -397,13 +367,10 @@ test("F10: prune skips a run closed moments ago that still has worker records, a
   assert.deepEqual(r.skipped?.map((x) => x.id), ["c1"]);
   assert.match(r.skipped![0]!.reason, /run close --run c1 --force/);
   assert.ok(s.runs.c1 && s.workers.bob && s.tasks.tc);
-  // An hour on, the close is taken to have died and the run is pruned with its records.
   const later = pruneRuns(s, { all: true, now: Date.now() + 2 * 3_600_000 });
   assert.deepEqual(later.runs.map((x) => x.id), ["c1"]);
   assert.equal(s.workers.bob, undefined);
 });
-
-// ---- F11: check --ack with nothing to ack prints one JSON document -------------------------------
 
 test("F11: check --ack with unknown ids prints a single JSON object", async () => {
   save(base());
@@ -413,8 +380,6 @@ test("F11: check --ack with unknown ids prints a single JSON object", async () =
   assert.equal(parsed.acked, 0);
   assert.equal(parsed.result, "empty");
 });
-
-// ---- F12: a group send survives a recipient released mid-send ------------------------------------
 
 test("F12: @all keeps sending when a recipient is released between expansion and its send", async () => {
   const s = base();
@@ -429,7 +394,7 @@ test("F12: @all keeps sending when a recipient is released between expansion and
       if (first) {
         first = false;
         const st = load();
-        delete st.workers.b; // released by the orchestrator in another process
+        delete st.workers.b;
         save(st);
       }
       return { agent: { agent_status: "working", state_change_seq: 1 } };
@@ -439,8 +404,6 @@ test("F12: @all keeps sending when a recipient is released between expansion and
   const r = await sendTo(load().runs.r1!, "@all", "x", false);
   assert.deepEqual(r.recipients.map((x) => [x.worker, Boolean(x.message_id), x.error ?? null]), [["a", true, null], ["b", false, 'no worker "b" in run r1']]);
 });
-
-// ---- F13: a redispatch preamble does not claim the environment has the IDs -----------------------
 
 test("F13: a redispatch preamble puts the --task/--dispatch rule up front and drops the environment claim", async () => {
   const s = base();
@@ -458,11 +421,8 @@ test("F13: a redispatch preamble puts the --task/--dispatch rule up front and dr
   const rule = text.indexOf(`--task ${r.task.id} --dispatch ${r.dispatch_id}`);
   assert.ok(rule !== -1 && rule < text.indexOf("Task spec:"), "the flags rule comes before the spec");
   assert.doesNotMatch(text, /already knows your IDs from the environment/);
-  // A first dispatch still says the environment has them.
   assert.match(preamble({ worker: "bob", run: run(), task: task("t0", "pending", null), dispatchId: "d0", cwd: "/repo" }), /already knows your IDs from the environment/);
 });
-
-// ---- F14: a tab.create answer without a pane is an error, not a crash after the claim ------------
 
 test("F14: tab.create without a root pane fails the start cleanly and closes the tab", async () => {
   save(base());
@@ -476,12 +436,9 @@ test("F14: tab.create without a root pane fails the start cleanly and closes the
   const ds = Object.values(after.dispatches!);
   assert.equal(ds.length, 1);
   assert.equal(ds[0]!.outcome, "failed");
-  // R2: the --spec task made for this start alone is taken back with it.
   assert.deepEqual(after.tasks, {});
   assert.ok(calls.some((c) => c.method === "tab.close" && c.params.tab_id === "w1:t9"));
 });
-
-// ---- F15: a herdr failure while clearing the startup dialog does not abort a recorded start -------
 
 test("F15: agent.wait failing during the folder-trust dialog returns the blocked warning instead of throwing", async () => {
   save(base());
@@ -497,8 +454,6 @@ test("F15: agent.wait failing during the folder-trust dialog returns the blocked
   assert.match(r.warning ?? "", /pack-leader worker resend bob/);
   assert.equal(load().tasks[r.task.id]!.status, "dispatched");
 });
-
-// ==== Runtime close-out: the R-, E- and V-items of docs/review/findings-status.md ===============
 
 const ctxBob = { run_id: "r1", worker: "bob", task_id: null, dispatch_id: null };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -597,7 +552,6 @@ test("R19: a --task redispatch whose prompt fails puts task and worker back; a t
   assert.deepEqual([t1.status, t1.worker, t1.dispatch_id, t1.attempts], ["failed", "ann", "d5", 1]);
   assert.deepEqual([after.workers.bob!.task_id, after.workers.bob!.dispatch_id, after.workers.bob!.awaiting_prompt], ["t0", "d0", false]);
 
-  // herdr slow to confirm a prompt the agent did get: not retried, not rolled back.
   calls.length = 0;
   let prompted = false;
   handler = (method) => {
@@ -798,7 +752,6 @@ test("R27: an agent booting before its dispatch prompt (working, then idle) rais
     st = { agent_status: status, state_change_seq: seq };
     assert.deepEqual(await sync(), [], `${status} at ${seq} before the prompt`);
   }
-  // The prompt goes in (baseline at 4); a real turn then ends idle without a report.
   await update((state) => {
     Object.assign(state.workers.bob!, { awaiting_prompt: false, worked: false, seq_at_dispatch: 4 });
   });
@@ -875,7 +828,6 @@ test("D1: a followup whose prompt timed out but visibly landed is not reverted, 
   const r = await send(load().runs.r1!, "bob", "hello", false);
   assert.equal(r.delivered, true);
   assert.equal(load().messages.find((m) => m.id === r.message.id)!.delivered, true);
-  // Nothing moved: the claim is reverted and a later pass retries.
   handler = (method) => {
     if (method === "agent.get") return { agent: { agent_status: "idle", state_change_seq: 1 } };
     if (method === "agent.prompt") throw herdrError("timeout", "herdr agent.prompt timed out");

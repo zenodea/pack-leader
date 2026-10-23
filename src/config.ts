@@ -1,6 +1,3 @@
-// Defaults for new workers: which harness, and per harness which model and
-// thinking level. `pack-leader config set` writes them; explicit flags on
-// `worker start` win over them.
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { configDir, ensureDir } from "./paths.ts";
@@ -85,8 +82,6 @@ function validateConfig(value: unknown): Config {
           throw invalidConfig(`"kinds.${kind}.${field}" must be a string or null`);
         }
       }
-      // Define rather than assign so a valid JSON key such as "__proto__" is data,
-      // not a special setter on Object.prototype.
       Object.defineProperty(kinds, kind, { value: rawDefaults, enumerable: true, writable: true, configurable: true });
     }
   }

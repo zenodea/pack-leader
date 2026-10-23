@@ -15,7 +15,6 @@ export type MessagePanel = {
 const AGENT_TYPES = new Set<Message["type"]>(["done", "ask", "note", "escalation", "attention"]);
 const segmenter = new Intl.Segmenter();
 
-/** The two queues exposed by the sidebar. Results are oldest first; equal/invalid timestamps keep state-file order. */
 export function sidebarMessages(state: State, runId: string, view: MessageView): Message[] {
   return unacked(state, runId)
     .map((message, order) => ({ message, order }))
@@ -38,7 +37,6 @@ export function newMessagePanel(view: MessageView, runId: string, state: State):
   return { view, runId, selectedId: first?.id ?? null, selectedIndex: 0, detail: false, listScroll: 0, detailScroll: 0 };
 }
 
-/** Keep selection by id across reloads. If a detailed message disappears, return to the list instead of showing another body. */
 export function reconcileMessagePanel(panel: MessagePanel, state: State): MessagePanel {
   const queue = sidebarMessages(state, panel.runId, panel.view);
   const same = panel.selectedId ? queue.findIndex((message) => message.id === panel.selectedId) : -1;
@@ -55,7 +53,6 @@ export function reconcileMessagePanel(panel: MessagePanel, state: State): Messag
 
 export type MessageKeyResult = { handled: boolean; panel: MessagePanel | null };
 
-/** Keyboard state used directly by runSidebar. It only returns new UI state and never mutates Pack Leader state. */
 export function messagePanelKey(panel: MessagePanel | null, key: string | undefined, state: State, dashboardRunId?: string): MessageKeyResult {
   if (key === "u" || key === "y") {
     const view: MessageView = key === "u" ? "unread" : "user";
@@ -83,7 +80,6 @@ export function messagePanelKey(panel: MessagePanel | null, key: string | undefi
       return { handled: true, panel: current.selectedId ? { ...current, detail: true, detailScroll: 0 } : current };
     case "escape":
       return { handled: true, panel: current.detail ? { ...current, detail: false, detailScroll: 0 } : null };
-    // Worker-only actions must not target the worker hidden behind the message view.
     case "o":
     case "r":
       return { handled: true, panel: current };
@@ -116,7 +112,6 @@ function chunks(s: string, max: number): string[] {
   return out;
 }
 
-/** Plain-text wrapping that preserves source newlines and hard-wraps long paths/URLs for narrow panes. */
 export function wrapMessageText(text: string, cols: number): string[] {
   const max = Math.max(1, cols);
   const out: string[] = [];
@@ -138,7 +133,6 @@ export function wrapMessageText(text: string, cols: number): string[] {
   return out.length ? out : [""];
 }
 
-/** Agent messages are bold yellow, yours italic cyan; an empty queue is dim, so a count that matters stands out. */
 const unreadStyle = (n: number) => (s: string) => (n ? bold(fg.yellow(s)) : dim(s));
 const userStyle = (n: number) => (s: string) => (n ? italic(fg.cyan(s)) : dim(s));
 
@@ -150,7 +144,6 @@ export function messageCounterLines(unread: number, user: number, cols: number):
   return [...wrapMessageText(left, cols).map(unreadStyle(unread)), ...wrapMessageText(right, cols).map(userStyle(user))];
 }
 
-/** One colour per message type, so a list reads at a glance: questions and alerts warm, reports green, yours cyan. */
 function typeStyle(message: Message): (s: string) => string {
   switch (message.type) {
     case "ask":
@@ -168,10 +161,6 @@ function typeStyle(message: Message): (s: string) => string {
   }
 }
 
-/**
- * A message's header: sender in bold, type in its colour, age dim and italic. When it does
- * not fit on one line (a narrow pane, a long sender), it wraps as plain text in the sender style.
- */
 function metaLines(message: Message, cols: number, nowMs: number, prefix = "", senderStyle: (s: string) => string = bold): string[] {
   const age = messageAge(message.ts, nowMs);
   const plain = `${message.from} · ${message.type} · ${age}`;
@@ -182,11 +171,6 @@ function metaLines(message: Message, cols: number, nowMs: number, prefix = "", s
 
 export type MessageListLayout = { lines: string[]; spans: { start: number; end: number }[] };
 
-/**
- * Sender, type, age and a bounded preview for every list item, with a blank line between
- * items. The selected one gets a cyan marker and sender and an upright preview; the
- * others' previews are dim italic, so the selection and the headers carry the eye.
- */
 export function messageListLayout(messages: Message[], selectedId: string | null, cols: number, nowMs = Date.now()): MessageListLayout {
   const max = Math.max(1, cols);
   const lines: string[] = [];
@@ -207,12 +191,10 @@ export function messageListLayout(messages: Message[], selectedId: string | null
   return { lines, spans };
 }
 
-/** `Label: value` wrapped on plain text; the label is bold where it lands on the first line. */
 function labeled(label: string, value: string, cols: number, style: (s: string) => string = (s) => s): string[] {
   return wrapMessageText(`${label}: ${value}`, cols).map((line, i) => (i === 0 && line.startsWith(`${label}:`) ? bold(`${label}:`) + style(line.slice(label.length + 1)) : style(line)));
 }
 
-/** The complete selected message. Nothing is height-capped; runSidebar scrolls these lines to the viewport. */
 export function messageDetailLines(message: Message, cols: number, nowMs = Date.now()): string[] {
   const max = Math.max(1, cols);
   const lines = [

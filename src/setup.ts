@@ -1,5 +1,3 @@
-// Explicit, bounded shell setup for a local worker worktree. Nothing in a
-// checkout is discovered or executed unless the caller supplied --setup-command.
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -14,7 +12,6 @@ const TIMEOUT_PIPE_CLOSE_GRACE_MS = 1_000;
 
 export type SetupStatus = "running" | "succeeded" | "failed" | "timeout" | "spawn_error";
 
-/** Optional durable metadata attached to the dispatch, including an in-progress record. */
 export type SetupMetadata = {
   command: string;
   cwd: string;
@@ -47,7 +44,6 @@ export function setupInProgress(command: string, cwd: string, dispatchId: string
   };
 }
 
-/** Run an explicitly-authorized shell command and keep only a bounded private log. */
 export async function runSetup(initial: SetupMetadata, timeoutMs: number): Promise<SetupMetadata> {
   let fd: number | null = null;
   let child: ChildProcess | null = null;
@@ -77,8 +73,6 @@ export async function runSetup(initial: SetupMetadata, timeoutMs: number): Promi
     const dirStat = lstatSync(dir);
     if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) throw new Error("setup log directory is not a real directory");
     chmodSync(dir, 0o700);
-    // Exclusive creation refuses collisions and symlinks; stateDir is private and
-    // dispatch ids are generated internally, not derived from a user-supplied path.
     fd = openSync(initial.log_path, "wx", 0o600);
     chmodSync(initial.log_path, 0o600);
   } catch (err) {
@@ -114,8 +108,6 @@ export async function runSetup(initial: SetupMetadata, timeoutMs: number): Promi
   };
 
   try {
-    // shell:true deliberately uses the platform shell: this flag is the explicit
-    // opt-in boundary for accepting shell syntax from the orchestrator.
     child = spawn(initial.command, {
       cwd: initial.cwd,
       shell: true,
@@ -176,12 +168,8 @@ export async function runSetup(initial: SetupMetadata, timeoutMs: number): Promi
   timer.unref?.();
   await Promise.race([closed, timeoutFinished]);
   clearTimeout(timer);
-  // `close` can win the race while the timeout handler is still waiting out its
-  // termination grace. Do not return or release the checkout fence before it ends.
   if (timedOut) await timeoutFinished;
 
-  // Even a successful shell can leave background descendants behind. Reap any
-  // members of its process tree before the caller releases the checkout fence.
   try {
     terminatePromise ??= terminateResidualTree(child);
     await terminatePromise;
@@ -205,7 +193,6 @@ export async function runSetup(initial: SetupMetadata, timeoutMs: number): Promi
   };
 }
 
-/** Wait for child/pipe closure without allowing an inherited escaped pipe to wait forever. */
 async function waitForClose(closed: Promise<void>, graceMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const grace = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), graceMs); });
@@ -214,7 +201,6 @@ async function waitForClose(closed: Promise<void>, graceMs: number): Promise<boo
   return result;
 }
 
-/** Drop local handles after the process-tree termination bound so inherited FDs cannot hold the caller. */
 function closeLocalProcessHandles(child: ChildProcess): void {
   for (const stream of [child.stdin, child.stdout, child.stderr]) {
     try { stream?.destroy(); } catch {}
@@ -223,14 +209,11 @@ function closeLocalProcessHandles(child: ChildProcess): void {
   try { child.unref(); } catch {}
 }
 
-/** Terminate an entire shell process group, escalating to SIGKILL after a bound. */
 async function terminateTree(child: ChildProcess): Promise<void> {
   const pid = child.pid;
   if (!pid) return;
   if (process.platform === "win32") {
     await killWindowsTree(pid);
-    // taskkill /T handles descendants; this direct fallback covers a missing or
-    // failed taskkill executable without leaving the shell itself alive.
     try { child.kill("SIGKILL"); } catch {}
     return;
   }
@@ -264,7 +247,6 @@ function processGroupAlive(pid: number): boolean {
   }
 }
 
-/** Windows has no POSIX process groups; taskkill /T is bounded and kills descendants. */
 async function killWindowsTree(pid: number): Promise<void> {
   let killer: ChildProcess;
   try {

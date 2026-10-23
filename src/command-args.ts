@@ -1,7 +1,6 @@
 import type { Args } from "./args.ts";
 import { SETUP_MAX_TIMEOUT_MS } from "./setup-policy.ts";
 
-/** Commands that change state or herdr and so accept `--retry-request`. */
 export const RETRYABLE = new Set([
   "run create", "run use", "run close", "task create", "task update", "gate create", "gate resolve",
   "worker start", "worker adopt", "worker prompt", "worker resend", "worker stop", "worker retain", "worker release", "worker abandon",
@@ -120,11 +119,6 @@ function baseFlagsFor(command: string, args: Args): FlagSchema {
   return ownValue(commandFlags, command) ?? schema();
 }
 
-/**
- * Validate the flags for the selected command before dispatching to any code that can
- * touch state, archives, herdr, or configuration. Positional arguments remain the
- * command's existing responsibility; native arguments after `--` never enter flags.
- */
 export function validateCommandArgs(command: string, args: Args): void {
   const allowed = allowedFor(command, args);
   const accepted = Object.keys(allowed);
@@ -167,13 +161,11 @@ function missingValueMessage(name: string): string {
   return `--${name} requires a value`;
 }
 
-/** `worker start`, `task list`, `check`: the command as RETRYABLE and error messages name it. */
 export function commandName(command: string, args: Args): string {
   const subcommands = ["run", "task", "worker", "dispatch", "gate", "host", "config", "request"];
   return subcommands.includes(command) ? `${command} ${args.positional[0] ?? (["task", "worker", "dispatch", "gate", "host"].includes(command) ? "list" : "show")}` : command;
 }
 
-/** Return a clear suggestion only for a single, reasonably close supported flag. */
 function suggest(unknown: string, candidates: string[]): string | undefined {
   let best: string | undefined;
   let bestDistance = Infinity;

@@ -1,5 +1,3 @@
-// Trusted SSH execution-host profiles. Only connection coordinates are stored here;
-// SSH authentication remains in the user's normal OpenSSH configuration/agent.
 import { closeSync, openSync, readFileSync, renameSync, writeFileSync, fsyncSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { acquire, lockFor, release } from "./state.ts";
@@ -7,13 +5,10 @@ import { configDir, ensureDir } from "./paths.ts";
 
 export type HostProfile = {
   name: string;
-  /** SSH config alias or user@host. Never a shell fragment or SSH option. */
   ssh_target: string;
-  /** Existing workspace on the remote herdr instance. */
   workspace_id: string;
   herdr_socket?: string;
   pack_leader?: string;
-  /** Reciprocal SSH destination on this (leader) machine, for worker-only callbacks. */
   leader_ssh_target: string;
   leader_pack_leader?: string;
 };
@@ -35,7 +30,6 @@ export function validateHostName(name: string): string {
   return name;
 }
 
-/** Conservative OpenSSH destination syntax: alias or user@host, never an option or command. */
 export function validateSshTarget(target: string, field = "SSH target"): string {
   if (!target || target.startsWith("-") || CONTROL.test(target) || !/^[A-Za-z0-9_][A-Za-z0-9_.@:%+\-\[\]]*$/.test(target)) {
     throw new HostProfileError(`${field} must be an SSH config alias or user@host (no leading dash, whitespace, or control characters)`);
@@ -104,7 +98,7 @@ function writeProfiles(profiles: Record<string, HostProfile>): void {
   try {
     const dirFd = openSync(dirname(hostsFile), "r");
     try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
-  } catch {} // some filesystems do not allow directory fsync; rename has still completed
+  } catch {}
 }
 
 export function listHosts(): HostProfile[] {
@@ -148,7 +142,6 @@ export async function removeHost(name: string): Promise<void> {
   }
 }
 
-/** Keep state-v1 snapshots usable while rejecting malformed snapshots before SSH effects. */
 export function validateHostSnapshot(value: HostProfile): HostProfile {
   if (!value || typeof value !== "object") throw new HostProfileError("worker has an invalid execution-host snapshot");
   const { name, ...rest } = value;

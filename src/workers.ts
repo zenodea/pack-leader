@@ -1,6 +1,3 @@
-// Starting a worker: a sibling pane next to the orchestrator, an agent in it,
-// and the task handed over as the first prompt with a preamble that tells the
-// worker how to report back. Also stopping and releasing one.
 import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, listPanes, logHerdrError, paneClose, paneSplit, paneSwap, pluginPaneOpen, promptLanded, PromptDeliveryUnknownError, isRemotePromptReceiptError, observePromptReceipt, setSplitRatio, tabClose, tabCreate, workspaceGet, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "./herdr.ts";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -28,13 +25,11 @@ function isRemoteUnavailable(err: unknown): boolean {
   return ["ssh_timeout", "ssh_unavailable", "ssh_failed", "ssh_output_limit", "unreachable", "disconnected", "timeout"].includes(String((err as any)?.code ?? ""));
 }
 
-/** Native arguments for a kind, so `pack-leader` calls don't stall on a permission prompt. */
 export function defaultAgentArgs(kind: string): string[] {
   if (kind === "claude") return ["--allowedTools", "Bash(pack-leader:*)"];
   return [];
 }
 
-/** `--model` / `--thinking` as the kind's own flags: claude takes --effort, codex -m and -c, pi --thinking. */
 export function modelArgs(kind: string, model?: string, thinking?: string): string[] {
   const args: string[] = [];
   if (kind === "codex") {
@@ -50,7 +45,6 @@ export function modelArgs(kind: string, model?: string, thinking?: string): stri
   return args;
 }
 
-/** What the agent was asked to run as, read back from its argv so the pack shows it. */
 export function modelFromArgs(kind: string, args: string[]): { model: string | null; thinking: string | null } {
   let model: string | null = null;
   let thinking: string | null = null;
@@ -78,13 +72,11 @@ export function modelFromArgs(kind: string, args: string[]): { model: string | n
   return { model, thinking };
 }
 
-/** A shell-safe command prefix for an adopted session, whose herdr pane cannot supply Pack Leader environment. */
 export function explicitWorkerContext(p: { worker: string; run: Run; task: Task; dispatchId: string }): string {
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
   return `env PACK_ROLE=worker HERDR_PLUGIN_STATE_DIR=${quote(stateDir)} PACK_RUN_ID=${quote(p.run.id)} PACK_WORKER=${quote(p.worker)} PACK_TASK_ID=${quote(p.task.id)} PACK_DISPATCH_ID=${quote(p.dispatchId)} pack-leader`;
 }
 
-/** `redispatch`: a new dispatch in a session that already had one and needs fresh dispatch context. */
 export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: string; cwd: string; worktree?: WorktreeInfo | null; remoteHost?: HostProfile; redispatch?: boolean; explicitContext?: boolean }): string {
   const channel = `An orchestrator agent coordinates several workers in parallel. It cannot see your screen; the only channel is the \`pack-leader\` CLI`;
   const context = p.explicitContext ? explicitWorkerContext(p) : null;
@@ -117,7 +109,6 @@ export function preamble(p: { worker: string; run: Run; task: Task; dispatchId: 
   ].join("\n");
 }
 
-/** The preamble line for a worker in its own worktree: where it is, and the branch its commits go on. */
 function worktreeRule(wt: WorktreeInfo): string {
   const where = wt.branch
     ? `You are in a git worktree of your own at ${wt.path}, on branch ${wt.branch}. Commit your work on that branch; do not switch branches.`
@@ -135,7 +126,6 @@ export type StartOptions = {
   taskId?: string;
   retry?: boolean;
   cwd?: string;
-  /** `tab`: a hidden tab of its own (default). `split`: a visible pane next to the orchestrator. */
   placement: "tab" | "split";
   packLayout?: boolean;
   direction: "right" | "down";
@@ -144,38 +134,25 @@ export type StartOptions = {
   extraArgs: string[];
   noDefaultArgs: boolean;
   timeoutMs: number;
-  /** Explicit top-level selections; defaults are separate so routing can outrank them. */
   model?: string;
   thinking?: string;
   defaultModel?: string;
   defaultThinking?: string;
   routing?: RoutingConfig;
   router?: RouterProvider;
-  /** Named trusted SSH profile; remote starts require an existing absolute POSIX cwd and tab placement. */
   host?: string;
-  /** `new`: create a git worktree for this worker; a path: use that existing checkout. */
   worktree?: string;
-  /** For `--worktree new`: the commit to branch from (default HEAD at cwd) and the branch name (default pack/<run>/<worker>). */
   base?: string;
   branch?: string;
-  /** Explicit platform-shell command run once in the materialized local worktree before agent launch. */
   setupCommand?: string;
-  /** Bounded timeout for the setup command; defaults to two minutes and is capped at five. */
   setupTimeoutMs?: number;
 };
 
-/**
- * The two-row "back to leader" bar above a worker's pane: a plugin pane split from it,
- * swapped on top and shrunk to herdr's minimum. Best effort: a herdr without plugin panes,
- * or any failure, means no bar and a logged event, never a failed start.
- */
 async function openLeaderBar(run: Run, name: string, paneId: string, info: { where: string; whereLabel: "Branch" | "Dir"; task: string }): Promise<string | null> {
   try {
     const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
     const env: Record<string, string> = {
       PACK_RUN_ID: run.id, PACK_WORKER: name, PACK_OBJECTIVE: oneLine(run.objective), PACK_WHERE: info.where, PACK_WHERE_LABEL: info.whereLabel, PACK_TASK: oneLine(info.task),
-      // Herdr replaces protected HERDR_* variables on plugin panes. Carry the
-      // creator's state/socket in private aliases for the bar's leader subprocess.
       PACK_LEADER_STATE_DIR: stateDir, PACK_LEADER_SOCKET_PATH: herdrSocketPath(),
       PACK_ROLE: "bar", PACK_REMOTE_CALLBACK_TARGET: "",
     };
@@ -198,11 +175,9 @@ export type StartResult = {
   pane_id: string;
   runtime: Runtime;
   routing: RoutingProvenance;
-  /** When the agent did not come up: what was left behind. */
   warning?: string;
 };
 
-/** Route outside all state/worktree fences, then revalidate and snapshot before effects. */
 async function resolveStartRuntime(o: StartOptions, task: Task, dispatchId: string) {
   const native = modelFromArgs(o.kind, o.extraArgs);
   const hasModel = native.model !== null || o.extraArgs.some((a) => /^(--model(?:=|$)|-m)/.test(a));
@@ -213,7 +188,6 @@ async function resolveStartRuntime(o: StartOptions, task: Task, dispatchId: stri
   const explicitModelThinking = modelFromArgs(o.kind, modelArgs(o.kind, o.model)).thinking;
   const profileModelThinking = modelFromArgs(o.kind, modelArgs(o.kind, profile?.model)).thinking;
   const thinking = o.thinking ?? explicitModelThinking ?? (profile?.thinking === null ? undefined : profile?.thinking ?? profileModelThinking ?? o.defaultThinking);
-  // Never append defaults (or top-level flags) over a native explicit selection.
   const extraArgs = [...o.extraArgs, ...modelArgs(o.kind, hasModel ? undefined : model, hasThinking ? undefined : thinking)];
   const runtime: Runtime = { kind: o.kind, ...modelFromArgs(o.kind, extraArgs) };
   await update((state) => {
@@ -228,8 +202,6 @@ async function resolveStartRuntime(o: StartOptions, task: Task, dispatchId: stri
 }
 
 export async function startWorker(o: StartOptions): Promise<StartResult> {
-  // Copy/validate before any state or resource effects. The five-minute admission
-  // lease already covers the router's hard maximum of thirty seconds.
   o = { ...o, ...(o.routing !== undefined ? { routing: validateRouting(o.routing) } : {}) };
   if (o.router !== undefined) routerProvider(o.router);
   if (!WORKER_NAME.test(o.name)) throw new Error(`worker name must match ${WORKER_NAME}`);
@@ -242,16 +214,11 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   }
   if (!o.worktree && (o.base || o.branch)) throw new Error("--base and --branch need --worktree new");
   const baseCwd = o.cwd ?? o.run.orchestrator.cwd;
-  // Planned before anything exists: a cwd outside git, a taken branch or an occupied path fails here.
   const wt = o.worktree ? planWorktree({ spec: o.worktree, cwd: baseCwd, runId: o.run.id, worker: o.name, base: o.base, branch: o.branch }) : null;
-  // Advisory: an agent of that name outside Pack Leader (or a pane kept open after a release) would make
-  // agent.start fail later. The name itself is reserved under the lock below: the unsettled dispatch record
-  // claims it (refuseStartInFlight) until the worker is recorded, so two starts cannot both pass.
   const live = await listAgents().catch((err) => (logHerdrError("agent.list", err, { worker: o.name }), []));
   if (live.some((a) => a.name === o.name)) throw new Error(`a live herdr agent is already named "${o.name}"`);
 
   const cwd = wt ? wt.path : baseCwd;
-  // The task: new from --spec, or an existing pending/ready one (or a failed one with --retry).
   const admit = () => update((state) => {
     if (state.runs[o.run.id]?.status !== "active") throw new Error(`run ${o.run.id} is closed or no longer exists`);
     if (state.workers[o.name] && state.runs[state.workers[o.name]!.run_id]?.status === "active") throw new Error(`worker "${o.name}" exists; release it first`);
@@ -335,7 +302,6 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     startClaimTimer.unref?.();
   }
 
-  // The state dir goes along, so a worker whose pane would otherwise fall back to the XDG default reads the orchestrator's file.
   const env = { PACK_ROLE: "worker", PACK_RUN_ID: o.run.id, PACK_WORKER: o.name, PACK_TASK_ID: task.id, PACK_DISPATCH_ID: dispatchId, HERDR_PLUGIN_STATE_DIR: stateDir };
   let pane!: { pane_id: string };
   let paneCreated = false;
@@ -346,7 +312,6 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   try {
     selection = await resolveStartRuntime(o, task, dispatchId);
     if (wt) {
-      // A hidden-tab worker's worktree opens as a herdr workspace and its tab goes there; a split stays next to the orchestrator.
       shellTab = (await materializeWorktree(wt, o.name, o.placement === "tab")).shellTab;
       wtReady = true;
       await withWorktreeFence(wt.path, async () => {
@@ -397,7 +362,6 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       paneCreated = true;
       tabId = t.tab?.tab_id ?? null;
       log({ event: "tab.created", run: o.run.id, worker: o.name, tab: tabId, pane: pane.pane_id });
-      // One tab per worker: the shell tab herdr gave the worktree workspace goes, so the workspace is just the worker.
       if (shellTab && shellTab !== tabId) {
         await tabClose(shellTab).catch((err) => logHerdrError("worktree.shell_tab.close", err, { worker: o.name, tab: shellTab }));
         log({ event: "worktree.shell_tab_closed", run: o.run.id, worker: o.name, tab: shellTab });
@@ -412,18 +376,14 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     }
   } catch (err) {
     await stopStartClaimHeartbeat();
-    // No worktree or no pane, no dispatch: settle the record so it does not look in flight forever (and frees the name),
-    // and take back a task made by this --spec start alone. A --task start never touched its task.
     const rollback = await rollbackStartClaim(o, task.id, dispatchId).catch(() => ({ dropped: false, revoked: true }));
     if (rollback.dropped) (err as Error).message += `; task ${task.id} was not kept`;
     if (rollback.revoked && paneCreated) await closeStartPane(pane.pane_id, tabId, o.run.id, o.name);
-    // A checkout made for this worker alone is empty: take it away again rather than leave it orphaned.
     if (wt && wtReady) (err as Error).message += `; ${await undoWorktree(wt, o.run.id, o.name, dispatchId)}`;
     if (rollback.revoked) (err as Error).message += `; start was revoked because run ${o.run.id} closed or its dispatch was settled`;
     throw err;
   }
 
-  // The bar is for the human watching, so no flag turns it off: only PACK_LEADER_BAR=0 in the environment.
   const barPane = process.env.PACK_LEADER_BAR === "0" || o.packLayout ? null : await openLeaderBar(o.run, o.name, pane.pane_id, { where: wt?.branch ?? basename(cwd), whereLabel: wt?.branch ? "Branch" : "Dir", task: task.title });
   const { extraArgs, runtime: asked } = selection;
   const worker: Worker = {
@@ -449,8 +409,6 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     awaiting_prompt: true,
     bar_pane_id: barPane,
   };
-  // Commit the pane and task only while this run still owns the unsettled dispatch.
-  // A close that won while tab.create/pane.split was outstanding revokes this start.
   try {
     await update((state) => {
       assertStartAuthority(state, { runId: o.run.id, name: o.name, taskId: task.id, dispatchId });
@@ -518,20 +476,16 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning };
   }
   await labelPane(pane.pane_id, task.title);
-  // Claude Code asks whether to trust a folder it has not seen: the orchestrator chose this cwd, so say yes.
   const blocked = await clearStartupDialog(pane.pane_id);
   if (blocked) {
     await assertCurrentStart();
     log({ event: "worker.blocked_at_start", run: o.run.id, worker: o.name, pane: pane.pane_id });
     return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id, warning: `${o.name} is blocked on a dialog in pane ${pane.pane_id} and has not received its task. Read it with \`pack-leader worker read ${o.name}\`, answer it with \`herdr agent send-keys ${o.name} <keys>\` only if it is safe, then \`pack-leader worker resend ${o.name}\`.` };
   }
-  // Right after start the name can lag the pane by a moment: address the pane, and retry briefly.
   const seq = await baseline(o.name, pane.pane_id);
   let promptWarning: string | undefined;
   let promptedCurrentAttempt = false;
   await withRunStartFence(o.run.id, async () => {
-    // Serialize the final authority check + herdr handoff against run close. If close wins,
-    // this check fails; if this wins, close cannot commit until the prompt has settled.
     await assertCurrentStart();
     try {
       await promptWithRetry(pane.pane_id, text, seq);
@@ -553,10 +507,6 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: pane.pane_id };
 }
 
-/**
- * Start in an existing remote herdr workspace. No local path resolution, git,
- * worktree, split, or local leader-bar operation is permitted in this branch.
- */
 async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
   if (o.setupCommand !== undefined || o.setupTimeoutMs !== undefined) throw new Error("remote workers do not support --setup-command or --setup-timeout");
   if (o.worktree || o.base || o.branch) throw new Error("remote workers do not support --worktree, --base or --branch; use an existing remote directory");
@@ -721,22 +671,13 @@ async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
   return { worker, runtime: selection.runtime, routing: selection.routing, task: load().tasks[task.id] ?? task, pane_id: opened.pane_id };
 }
 
-/** How long `worker prompt` waits for a worker that is still finishing its last turn before it hands over the next dispatch. */
 export const REDISPATCH_IDLE_WAIT_MS = 30_000;
 
-/**
- * Send a follow-up dispatch to a worker that already settled: same pane, new dispatch on a task.
- * Waits (bounded) for the agent to be idle or done first, and checks a --task's dependencies as
- * `worker start` does. When the prompt does not go in, the new dispatch is rolled back: settled
- * as failed, a --spec task removed, a --task task and the worker's IDs put back as they were.
- */
 export async function redispatch(run: Run, name: string, taskId: string | undefined, spec: string | undefined, title?: string, o: { idleWaitMs?: number } = {}): Promise<{ task: Task; dispatch_id: string; warning?: string }> {
   const known = load().workers[name];
   if (!known || known.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
   if (!known.execution_host) return redispatchUnlocked(run, name, taskId, spec, title, o);
   return withRunStartFence(run.id, async () => {
-    // Release and remote redispatch share this cross-process fence. Re-read only after
-    // acquiring it so a queued redispatch cannot act on a worker release already removed.
     const current = load().workers[name];
     if (!current || current.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
     if (!current.execution_host || current.dispatch_id !== known.dispatch_id || current.execution_host.name !== known.execution_host!.name) {
@@ -757,7 +698,6 @@ async function redispatchUnlocked(run: Run, name: string, taskId: string | undef
     }
     return redispatchUnlocked(run, name, taskId, spec, title, o, true);
   });
-  // A prompt typed into a busy agent lands in the middle of its turn: give it a moment to finish first.
   const waitMs = o.idleWaitMs ?? REDISPATCH_IDLE_WAIT_MS;
   const st = await withExecutionHost(known.execution_host ?? undefined, () => agentWait(known.pane_id, ["idle", "done"], waitMs));
   if (st !== "idle" && st !== "done") throw new Error(`${name} is ${st === "timeout" ? "still busy" : st} after waiting ${Math.round(waitMs / 1000)}s; nothing was dispatched. Check it with \`pack-leader worker read ${name}\` and try again when it is idle`);
@@ -771,7 +711,6 @@ async function redispatchUnlocked(run: Run, name: string, taskId: string | undef
       task = state.tasks[taskId]!;
       if (!task || task.run_id !== run.id) throw new Error(`no task ${taskId} in run ${run.id}`);
       if (task.status === "dispatched" || task.status === "succeeded") throw new Error(`task ${task.id} is ${task.status}`);
-      // As in `worker start`: a failed task is a retry, anything else waits on its dependencies.
       assertTaskGatesApproved(state, task.id);
       if (task.status !== "failed" && !ready(state, task)) throw new Error(`task ${task.id} waits on ${task.depends_on.filter((d) => state.tasks[d]?.status !== "succeeded").join(", ")}`);
     } else {
@@ -792,11 +731,9 @@ async function redispatchUnlocked(run: Run, name: string, taskId: string | undef
       };
       state.tasks[task.id] = task;
     }
-    // What a rollback puts back.
     const before = taskId ? { status: task.status, worker: task.worker, dispatch_id: task.dispatch_id, attempts: task.attempts, updated_at: task.updated_at } : null;
     const prev = { task_id: w.task_id, dispatch_id: w.dispatch_id };
     const dispatchId = nextId(state, "d");
-    // Ordinary pane env still names the first dispatch; adopted sessions instead receive a fresh explicit env prefix.
     const text = preamble({ worker: name, run, task, dispatchId, cwd: w.cwd, worktree: w.worktree, remoteHost: w.execution_host ?? undefined, redispatch: true, explicitContext: w.context_mode === "explicit" });
     createDispatch(state, { id: dispatchId, task, worker: name, preamble: text, cwd: w.cwd, executionHost: w.execution_host ?? undefined, ...(w.adopted ? { paneId: w.pane_id } : {}) });
     task.status = "dispatched";
@@ -816,7 +753,6 @@ async function redispatchUnlocked(run: Run, name: string, taskId: string | undef
     } catch (err) {
       if ((err as any)?.code === "remote_delivery_unknown") {
         log({ event: "worker.prompt_delivery_unknown", run: run.id, worker: name, dispatch: r.dispatchId, error: (err as Error).message });
-        // Keep the new dispatch authoritative: the remote agent may already have it.
         throw err;
       }
       const restored = await update<{ received: boolean; revoked: boolean; status?: Task["status"] }>((state) => {
@@ -875,7 +811,6 @@ async function redispatchUnlocked(run: Run, name: string, taskId: string | undef
   return { task: load().tasks[r.task.id] ?? r.task, dispatch_id: r.dispatchId };
 }
 
-/** Interrupt what the worker is doing (escape twice), without closing anything. */
 export async function stopWorker(name: string, target = name): Promise<void> {
   const worker = load().workers[name];
   if (!worker) throw new Error(`no worker "${name}"`);
@@ -886,16 +821,8 @@ export async function stopWorker(name: string, target = name): Promise<void> {
 
 export type ReleasedWorktree = { path: string; branch: string | null; kept: boolean; removed: boolean; note?: string };
 
-/**
- * Post-settlement cleanup: forget the worker and close the pane Pack Leader created.
- * With `force`, a still-dispatched task is marked failed first. A worktree Pack Leader
- * created is removed with its workspace (the branch stays) unless `keepWorktree`, the
- * pane stays open, or it has uncommitted changes; it is never forced. `removeWorktree`
- * insists: then a pane that stays open is an error rather than a kept worktree.
- */
 export type ReleaseResult = { closed_pane: string | null; closed_tab: string | null; close_error?: string; archive_path: string | null; archive_error?: string; worktree?: ReleasedWorktree };
 
-/** Remote cleanup is host-aware and never falls through to local git or local herdr. */
 async function releaseRemoteWorker(run: Run, known: Worker, opts: { force?: boolean; keepPane?: boolean; removeWorktree?: boolean; keepWorktree?: boolean }): Promise<ReleaseResult> {
   if (opts.removeWorktree || opts.keepWorktree) throw new Error("remote worker release does not support --remove-worktree or --keep-worktree");
   if (known.worktree) throw new Error(`remote worker ${known.name} has unexpected local worktree metadata; refusing local cleanup`);
@@ -903,7 +830,6 @@ async function releaseRemoteWorker(run: Run, known: Worker, opts: { force?: bool
   const currentTask = known.task_id ? current.tasks[known.task_id] : null;
   if (currentTask?.status === "dispatched" && !opts.force) throw new Error(`${known.name} still owns task ${currentTask.id} (dispatched); wait for \`pack-leader done\`, or pass --force`);
   const host = known.execution_host!;
-  // A failed SSH preflight must leave task/worker records untouched.
   await withExecutionHost(host, () => listPanes(host.workspace_id));
 
   let archive: { path: string | null; error?: string } = { path: null };
@@ -919,7 +845,6 @@ async function releaseRemoteWorker(run: Run, known: Worker, opts: { force?: bool
       const saved = await withExecutionHost(host, () => archiveScreen({ run_id: run.id, worker: known.name, dispatch_id: known.dispatch_id, target: known.pane_id }));
       archive = { path: saved.path };
     } catch (err) {
-      // A screen-read failure is reportable only if SSH is still reachable; disconnects preserve ownership.
       await withExecutionHost(host, () => listPanes(host.workspace_id));
       archive = { path: null, error: (err as Error).message };
     }
@@ -968,12 +893,6 @@ async function releaseRemoteWorker(run: Run, known: Worker, opts: { force?: bool
   return { closed_pane, closed_tab, archive_path: archive.path, ...(archive.error ? { archive_error: archive.error } : {}) };
 }
 
-/**
- * What a `worker start` or `worker prompt` would hand over, with no effect: the task (an
- * existing one, or the one a --spec would create), where the worker would work, and the
- * exact preamble. Admission checks run as the real dispatch would (gates, retry limit,
- * readiness, a taken name); the dispatch id is a placeholder and routing is not consulted.
- */
 export function previewDispatch(state: State, o: { run: Run; name: string; taskId?: string; spec?: string; title?: string; retry?: boolean; redispatch: boolean; cwd?: string; worktree?: string; base?: string; branch?: string }) {
   if (!WORKER_NAME.test(o.name)) throw new Error(`worker name must match ${WORKER_NAME}`);
   const w = state.workers[o.name];
@@ -1003,13 +922,6 @@ export function previewDispatch(state: State, o: { run: Run; name: string; taskI
 
 export type AbandonResult = { abandoned: string; pane_id: string; tab_id: string | null; task_id: string | null; dispatch_id: string | null; worktree: WorktreeInfo | null; execution_host: string | null };
 
-/**
- * Stop supervising a worker without claiming its agent stopped. Nothing touches herdr,
- * the process or the filesystem: its open task fails as abandoned, its dispatch settles,
- * undelivered followups go, and the worker leaves the run (its name is free again). The
- * pane, the agent in it and its checkout stay as they are; a checkout Pack Leader made
- * stays protected from cleanup, since that agent may still be using it.
- */
 export async function abandonWorker(run: Run, name: string): Promise<AbandonResult> {
   const r = await update((state) => {
     const w = state.workers[name];
@@ -1038,9 +950,6 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
   const known = load().workers[name];
   if (!known || known.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
   if (known.execution_host) return withRunStartFence(run.id, async () => {
-    // Hold the same cross-process fence as remote redispatch/resend across SSH
-    // preflight, archive, pane close, and the final state removal. Network I/O is
-    // never performed while holding the state update lock.
     const current = load().workers[name];
     if (!current || current.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
     if (!current.execution_host || current.dispatch_id !== known.dispatch_id || current.execution_host.name !== known.execution_host!.name) {
@@ -1070,12 +979,10 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
         rec.cleanup_protection = "release_in_progress";
         if (opts.keepWorktree) rec.kept = true;
       }
-      // Nothing still queued for it may reach a later worker of the same name.
       dropUndelivered(state, w);
       delete state.workers[name];
       return w;
     });
-    // Save the screen before the tab goes, so the transcript survives. Never fails the release.
     let archive: { path: string | null; error?: string };
     try {
       const a = await withExecutionHost(w.execution_host ?? undefined, () => archiveScreen({ run_id: run.id, worker: name, dispatch_id: w.dispatch_id, target: w.pane_id }));
@@ -1093,13 +1000,11 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
         else d.archive_error = archive.error;
       }).catch(() => {});
     }
-    // A hidden worker's whole tab goes, and its pane with it; a split worker's pane alone.
     let closed_pane: string | null = null;
     let closed_tab: string | null = null;
     let close_error: string | undefined;
     const shouldClosePane = w.owns_pane && !w.retained && !opts.keepPane;
     if (shouldClosePane) {
-      // The bar above it goes first (a tab close would take it too; a split worker's would stay).
       if (w.bar_pane_id) await withExecutionHost(w.execution_host ?? undefined, () => paneClose(w.bar_pane_id!)).catch((err) => logHerdrError("bar.close", err, { worker: name, pane: w.bar_pane_id }));
       try {
         await withExecutionHost(w.execution_host ?? undefined, () => getPane(w.pane_id));
@@ -1112,7 +1017,6 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
           closed_pane = w.pane_id;
         }
       } catch (err) {
-        // A trustworthy not-found response confirms closure; other errors keep the lease protected.
         logHerdrError("release.close", err, { worker: name, pane: w.pane_id, tab: w.tab_id ?? null });
         const code = (err as HerdrError).code;
         if (code !== "pane_not_found" && code !== "tab_not_found") close_error = `${w.owns_tab && w.tab_id ? `tab ${w.tab_id}` : `pane ${w.pane_id}`} may still be open: ${(err as Error).message}`;
@@ -1140,8 +1044,6 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
     return { worker: w, result };
   };
 
-  // The checkout fence spans the durable in-progress mark and pane close. A concurrent
-  // sweep/admission waits here; after a crash, cleanup_protection remains fail-closed.
   const finished = known.worktree ? await withWorktreeFence(known.worktree.path, releaseLocal) : await releaseLocal();
   const { worker: w, result: released } = finished;
   if (!w.worktree) return released;
@@ -1166,11 +1068,6 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
   return { ...released, worktree: { path: wt.path, branch: wt.branch, kept: !removed, removed, ...(note ? { note } : {}) } };
 }
 
-/**
- * Create (or, for an existing checkout, open) the worktree. With `viaHerdr`, herdr's
- * worktree API does it and the checkout shows up as a workspace, recorded on `wt`;
- * a herdr without that API falls back to `git worktree add`.
- */
 export async function materializeWorktree(wt: WorktreeInfo, label: string, viaHerdr: boolean): Promise<{ shellTab: string | null }> {
   if (viaHerdr) {
     try {
@@ -1178,8 +1075,6 @@ export async function materializeWorktree(wt: WorktreeInfo, label: string, viaHe
         ? await worktreeCreate({ cwd: wt.repo, path: wt.path, branch: wt.branch!, base: wt.base, label })
         : await worktreeOpen({ cwd: wt.repo, path: wt.path, label });
       wt.workspace_id = r.workspace.workspace_id;
-      // herdr opens the workspace with a shell tab of its own; the worker gets a tab next to it,
-      // and the shell tab is closed again unless the workspace was already the user's.
       return { shellTab: r.already_open ? null : r.tab?.tab_id ?? null };
     } catch (err) {
       if (!isUnknownMethod(err)) throw err;
@@ -1189,11 +1084,6 @@ export async function materializeWorktree(wt: WorktreeInfo, label: string, viaHe
   return { shellTab: null };
 }
 
-/**
- * herdr removes the checkout and its workspace together; without the workspace (or the API), git does it.
- * Never forced. herdr reuses workspace ids across restarts, so the recorded id is trusted only while
- * that workspace still shows this checkout; otherwise git removes it and any workspace is left alone.
- */
 async function removeWorktree(wt: WorktreeInfo): Promise<void> {
   if (wt.workspace_id) {
     try {
@@ -1211,11 +1101,6 @@ async function removeWorktree(wt: WorktreeInfo): Promise<void> {
 
 export type SweepResult = { removed: { path: string; worker: string; run_id: string }[]; kept: { path: string; worker: string; run_id: string; reason: string }[] };
 
-/**
- * Garbage collection for checkouts: every worktree Pack Leader created whose worker was released
- * and that is still on disk goes, with its herdr workspace, unless the release kept it on request,
- * a live worker still uses it, or it has uncommitted changes (never forced). The branch always stays.
- */
 export async function sweepWorktrees(o: { dryRun?: boolean } = {}): Promise<SweepResult> {
   const state = load();
   const out: SweepResult = { removed: [], kept: [] };
@@ -1239,7 +1124,6 @@ export async function sweepWorktrees(o: { dryRun?: boolean } = {}): Promise<Swee
     }
     if (!rec.released_at) continue;
     if (o.dryRun) {
-      // Acquiring a checkout fence writes a lock file, so preview is deliberately read-only.
       if (!sweepLeaseOwned(state, rec)) {
         out.kept.push({ ...id, reason: "checkout ownership changed; left in place" });
       } else if (existsSync(rec.path)) {
@@ -1267,17 +1151,14 @@ export async function sweepWorktrees(o: { dryRun?: boolean } = {}): Promise<Swee
 
 type WorktreeCleanupResult = { removed: boolean; note?: string; alreadyMissing?: boolean };
 
-/** Local workers are in the leader's path namespace; remote cwd strings are not comparable. */
 function localWorkerUsesCheckout(w: Worker, path: string): boolean {
   return !w.execution_host && [w.worktree?.path, w.cwd].some((candidate) => candidate && worktreeIdentityPath(candidate) === path);
 }
 
-/** Local unsettled worktree claims must not be confused with a remote host's same-looking path. */
 function localDispatchClaimsCheckout(d: NonNullable<State["dispatches"]>[string], path: string): boolean {
   return !d.execution_host && Boolean(d.worktree_path && worktreeIdentityPath(d.worktree_path) === path);
 }
 
-/** The complete current lease check shared by the fenced cleanup and read-only preview. */
 function sweepLeaseOwned(state: State, wt: WorktreeInfo & { worker: string; run_id: string; dispatch_id?: string; released_at?: string; removed?: boolean; kept?: boolean; cleanup_protection?: string }, requireReleased = true): boolean {
   const ownerDispatchId = wt.dispatch_id;
   const rec = state.worktrees?.[wt.path];
@@ -1302,7 +1183,6 @@ function sweepLeaseOwned(state: State, wt: WorktreeInfo & { worker: string; run_
   return recordMatches && dispatchMatches && !otherWorker && !unsettledClaim;
 }
 
-/** Read git status without optional index refreshes or lock-file writes, for read-only previews. */
 function worktreeCleanWithoutWrites(path: string): boolean {
   try {
     const status = execFileSync("git", ["--no-optional-locks", "-C", path, "status", "--porcelain", "--untracked-files=all"], {
@@ -1316,7 +1196,6 @@ function worktreeCleanWithoutWrites(path: string): boolean {
   }
 }
 
-/** Check lease ownership and remove under the same checkout fence used by start admission. */
 async function cleanupOwnedWorktree(wt: WorktreeInfo, runId: string, worker: string, ownerDispatchId?: string, sweep = false): Promise<WorktreeCleanupResult> {
   return withWorktreeFence(wt.path, async () => {
     const owns = await update((state) => sweepLeaseOwned(state, { ...wt, worker, run_id: runId, dispatch_id: ownerDispatchId }, sweep));
@@ -1328,7 +1207,6 @@ async function cleanupOwnedWorktree(wt: WorktreeInfo, runId: string, worker: str
     if (!wt.created_by_pack) {
       note = "not created by pack-leader, so it was left in place";
     } else if (!existsSync(wt.path)) {
-      // The checkout is already gone. Record that fact only after fenced ownership validation.
       removed = true;
       alreadyMissing = true;
     } else {
@@ -1349,7 +1227,6 @@ async function cleanupOwnedWorktree(wt: WorktreeInfo, runId: string, worker: str
   });
 }
 
-/** A start failed after its worktree was made: remove only its owned checkout, never forced. */
 async function undoWorktree(wt: WorktreeInfo, runId: string, worker: string, dispatchId: string): Promise<string> {
   const result = await cleanupOwnedWorktree(wt, runId, worker, dispatchId);
   log({ event: "worktree.start_failed", run: runId, worker, dispatch: dispatchId, path: wt.path, removed: result.removed, ...(result.note ? { note: result.note } : {}) });
@@ -1360,15 +1237,9 @@ async function undoWorktree(wt: WorktreeInfo, runId: string, worker: string, dis
     : `the worktree ${wt.path} is left as it was`;
 }
 
-/**
- * A start that has recorded its dispatch but not yet its worker is in flight: a second
- * start of the same name or task is refused until it lands. One killed in between stops
- * counting after START_CLAIM_MS (its dispatch is settled as failed).
- */
 const WORKTREE_FENCE_TIMEOUT_MS = 120_000;
 const worktreeFencePath = (path: string) => join(stateDir, "worktree-fences", `${createHash("sha256").update(worktreeIdentityPath(path)).digest("hex")}.lock`);
 
-/** Serialize checkout admission/reuse against ownership revalidation and physical removal. */
 async function withWorktreeFence<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const lock = worktreeFencePath(path);
   await acquire(lock, WORKTREE_FENCE_TIMEOUT_MS);
@@ -1441,7 +1312,6 @@ async function rollbackStartClaim(o: StartOptions, taskId: string, dispatchId: s
 }
 
 async function closeStartPane(paneId: string, tabId: string | null, runId: string, worker: string, barPaneId?: string | null): Promise<void> {
-  // A tab close takes its bar with it; a revoked split owns a separate bar pane.
   if (!tabId && barPaneId) await paneClose(barPaneId).catch((err) => logHerdrError("start.revoke.bar.close", err, { run: runId, worker, pane: barPaneId }));
   try {
     if (tabId) await tabClose(tabId);
@@ -1461,7 +1331,6 @@ export function refuseStartInFlight(state: State, name: string, taskId: string |
     }
     if (d.worker === name) throw new Error(`worker "${name}" is being started (dispatch ${d.id}); wait for that start to finish`);
     if (taskId && d.task_id === taskId) throw new Error(`task ${taskId} is being started by worker "${d.worker}" (dispatch ${d.id}); wait for that start to finish`);
-    // Worker/task identity is global, but paths and pane ids belong to the execution host's namespace.
     if (d.execution_host) continue;
     if (worktreePath && d.worktree_path && worktreeIdentityPath(d.worktree_path) === worktreePath) {
       throw new Error(`checkout ${worktreePath} is being started by worker "${d.worker}" (dispatch ${d.id}); two workers never share a working tree`);
@@ -1470,13 +1339,7 @@ export function refuseStartInFlight(state: State, name: string, taskId: string |
   }
 }
 
-/**
- * A worker blocked right after start is usually Claude Code's folder-trust check. The
- * orchestrator picked the folder, so accept it and wait for the prompt. Returns true when
- * the agent is still blocked on something else.
- */
 export async function clearStartupDialog(paneId: string): Promise<boolean> {
-  // The dialog can render a moment after `agent start` returns: look for it briefly.
   let a = await getAgent(paneId).catch(() => null);
   for (let i = 0; i < 6 && a && a.agent_status !== "blocked"; i++) {
     await new Promise((r) => setTimeout(r, 500));
@@ -1486,8 +1349,6 @@ export async function clearStartupDialog(paneId: string): Promise<boolean> {
   const screen = await agentRead(paneId, 40).catch(() => "");
   if (/Yes, I trust this folder/.test(screen)) {
     await agentSendKeys(paneId, ["down", "enter"]).catch(() => {});
-    // Wait for the prompt only: `blocked` in the list would return at once, before the dialog is gone.
-    // A herdr error here must not escape: the caller has already recorded the dispatch. Re-check below instead.
     const st = await agentWait(paneId, ["idle", "done"], 30_000).catch(() => "timeout" as const);
     if (st === "idle" || st === "done") return false;
   }
@@ -1495,14 +1356,11 @@ export async function clearStartupDialog(paneId: string): Promise<boolean> {
   return a?.agent_status === "blocked";
 }
 
-/** Send the current dispatch's preamble again, for a worker that was blocked when it was started. */
 export async function resendPreamble(run: Run, name: string): Promise<{ task: Task; dispatch_id: string }> {
   const known = load().workers[name];
   if (!known || known.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
   if (!known.execution_host) return resendPreambleUnlocked(run, name);
   return withRunStartFence(run.id, async () => {
-    // Re-read after acquiring the release/redispatch fence; a queued resend must
-    // never prompt a pane that a completed release has already closed.
     const current = load().workers[name];
     if (!current || current.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
     if (!current.execution_host || current.dispatch_id !== known.dispatch_id || current.execution_host.name !== known.execution_host!.name) {
@@ -1530,7 +1388,6 @@ async function resendPreambleUnlocked(run: Run, name: string, remoteFenceHeld = 
   assertTaskGatesApproved(state, task.id);
   const a = await withExecutionHost(w.execution_host ?? undefined, () => getAgent(w.pane_id));
   if (a.agent_status === "blocked") throw new Error(`${name} is still blocked on a dialog in pane ${w.pane_id}`);
-  // The same text as the first time: the dispatch record keeps it (worktree line included).
   const text = state.dispatches?.[w.dispatch_id]?.preamble ?? preamble({ worker: name, run, task, dispatchId: w.dispatch_id, cwd: w.cwd, worktree: w.worktree, remoteHost: w.execution_host ?? undefined, explicitContext: w.context_mode === "explicit" });
   const seq = await withExecutionHost(w.execution_host ?? undefined, () => baseline(name, w.pane_id));
   await withExecutionHost(w.execution_host ?? undefined, () => promptWithRetry(w.pane_id, text, seq, 5, !w.adopted));
@@ -1539,14 +1396,7 @@ async function resendPreambleUnlocked(run: Run, name: string, remoteFenceHeld = 
   return { task: load().tasks[task.id] ?? task, dispatch_id: w.dispatch_id };
 }
 
-/**
- * Remember where herdr's state counter stands just before the prompt goes in, so a
- * later idle can be told from this one. Taken before, not after: an agent that is
- * already working when the counter is read would move the baseline past its own
- * working phase, and a quick idle without a report would go unnoticed.
- */
 export async function baseline(name: string, paneId: string): Promise<number | undefined> {
-  // Local adapters historically omit the counter; remote nonreceipt must never use an invented baseline.
   let seq: number | undefined = currentExecutionHost() ? undefined : 0;
   try {
     const observed = (await getAgent(paneId)).state_change_seq;
@@ -1562,7 +1412,6 @@ export async function baseline(name: string, paneId: string): Promise<number | u
   return seq;
 }
 
-/** Reconcile a prompt receipt only with the same current attempt; a terminal report is a valid receipt race. */
 export async function markPrompted(name: string, authority: { runId: string; taskId: string; dispatchId: string }): Promise<boolean> {
   return update((state) => {
     const w = state.workers[name];
@@ -1579,7 +1428,6 @@ export async function markPrompted(name: string, authority: { runId: string; tas
   });
 }
 
-/** A freshly split pane's shell takes a moment to reach its prompt; herdr refuses to start an agent before that. */
 export async function startWhenShellReady(p: Parameters<typeof agentStart>[0], waitMs = 15_000): Promise<void> {
   const deadline = Date.now() + waitMs;
   for (;;) {
@@ -1594,12 +1442,6 @@ export async function startWhenShellReady(p: Parameters<typeof agentStart>[0], w
   }
 }
 
-/**
- * Prompt, retrying a failure a few times. Local timeout behavior retains its historical
- * at-least-once retry semantics. On remote transport/protocol errors, retry only after a
- * successful observation of the unchanged baseline; unavailable/invalid observations stay
- * unknown and must never trigger a blind replay.
- */
 export async function promptWithRetry(target: string, text: string, seqBefore?: number, tries = 5, clearBlockedDialog = true, canRetry?: () => Promise<boolean>): Promise<void> {
   for (let i = 1; ; i++) {
     try {
@@ -1613,15 +1455,12 @@ export async function promptWithRetry(target: string, text: string, seqBefore?: 
           return;
         }
         if (receipt === "unknown") throw new PromptDeliveryUnknownError(target, err);
-        // A valid, unchanged baseline is the only remote observation that permits retry.
       } else if ((err as HerdrError).code === "timeout" && seqBefore !== undefined && (await promptLanded(target, seqBefore))) {
         log({ event: "prompt.timeout_landed", target });
         return;
       }
       if (i >= tries) throw err;
-      // Adoption stops retries after a receipt or revocation; its caller classifies persisted state.
       if (canRetry && !(await canRetry())) return;
-      // A dialog that appeared late (folder trust) is cleared the same way as at start.
       if ((err as HerdrError).code === "agent_blocked") {
         if (!clearBlockedDialog || await clearStartupDialog(target)) throw err;
         continue;
@@ -1668,15 +1507,9 @@ export const workerSummary = (w: Worker, state: State) => ({
   host_unreachable_since: w.host_unreachable_since ?? null,
 });
 
-/** The worker's unacked questions and alerts for the orchestrator, oldest first. */
 const openFor = (state: State, w: Worker) =>
   state.messages.filter((m) => m.run_id === w.run_id && m.from === w.name && m.to === "orchestrator" && m.task_id === w.task_id && m.dispatch_id === w.dispatch_id && !m.acked && (m.type === "ask" || m.type === "escalation" || m.type === "attention"));
 
-/**
- * What is waiting on the orchestrator for this worker: "ask", an attention
- * status (idle, blocked, exited, unverifiable, stalled, ...), or "note". A note
- * only needs an ack (the worker is not waiting), so it alone requires no action.
- */
 export function workerAttention(state: State, w: Worker): { categories: string[]; requires_action: boolean } {
   const open = openFor(state, w);
   const categories = [...new Set(open.map((m) => (m.type === "ask" || m.type === "escalation" ? m.type : m.status ?? "attention")))];
@@ -1684,12 +1517,6 @@ export function workerAttention(state: State, w: Worker): { categories: string[]
   return { categories: noted ? [...categories, "note"] : categories, requires_action: open.length > 0 };
 }
 
-/**
- * The literal argv the orchestrator should run next for this worker, or null
- * when nothing is required: answer an open question first, then release a
- * worker whose pane is gone with its task open, then read the screen of one
- * with any other open alert. `<answer>` is a placeholder to fill in.
- */
 export function nextAction(state: State, w: Worker): string[] | null {
   const open = openFor(state, w);
   const q = open.find((m) => m.type === "ask");

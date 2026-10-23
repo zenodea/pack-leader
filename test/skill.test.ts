@@ -1,6 +1,3 @@
-// Packaging: `skill --install` against a temp HOME, the SKILL.md stub's herdr
-// check, bin/pack-leader's Node version gate, and the guide's Commands block
-// against `pack-leader help`. No herdr needed.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
@@ -11,7 +8,6 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-skill-"));
 const home = join(dir, "home");
 mkdirSync(home);
-// paths.ts reads the home directory at import time.
 process.env.HOME = home;
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 
@@ -23,7 +19,7 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 
 test("installSkill writes the stub and links pack-leader into ~/.local/bin, idempotently", () => {
   assert.ok(Object.values(paths.skillDirs).every((d) => d.startsWith(home)) && paths.localBin.startsWith(home), "must never touch the real home");
-  mkdirSync(join(home, ".claude"), { recursive: true }); // only harnesses that are set up get the stub
+  mkdirSync(join(home, ".claude"), { recursive: true });
   const r = installSkill();
   const stub = join(home, ".claude", "skills", "pack-leader", "SKILL.md");
   assert.deepEqual(r.skills, [stub]);
@@ -103,12 +99,10 @@ test("bin/pack-leader refuses Node older than 22.18 with a readable message", ()
   }
 });
 
-/** Flags and command words in a command listing. */
 function vocabulary(text: string): { flags: Set<string>; commands: Set<string> } {
   const flags = new Set(text.match(/--[a-z][a-z-]*/g));
   const commands = new Set<string>();
   for (const line of text.replaceAll("| pack-leader ", "| ").split("\n")) {
-    // The command and subcommand after `pack-leader`, and each `| word` alternative (show, list, resend, ...).
     for (const m of line.matchAll(/(?:pack-leader|\|)\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*)\b(?!-))?/g)) {
       commands.add(m[1]!);
       if (m[2]) commands.add(m[2]);
@@ -121,7 +115,6 @@ test("the guide's Commands block lists exactly the commands and flags of `pack-l
   const help = await new Promise<string>((resolve, reject) =>
     execFile(process.execPath, [join(root, "src", "cli.ts"), "help"], { env: { ...process.env, HERDR_PLUGIN_STATE_DIR: join(dir, "state") } }, (err, stdout) => (err ? reject(err) : resolve(stdout))),
   );
-  // Only the command column of help: drop the descriptions after a wide gap, and the notes on lines of their own.
   const helpCommands = help
     .split("\n")
     .filter((l) => /^\s*pack-leader /.test(l) || /^\s{10,}\[/.test(l))

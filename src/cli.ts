@@ -1,28 +1,3 @@
-// Pack Leader: an orchestrator agent and its pack of workers, on herdr.
-//
-// Orchestrator side (the agent you talk to):
-//   pack-leader run create --objective "..." [--no-sidebar] [--no-observer] [--left] [--another] [--cwd D] | show | list | close [--release] [--force]
-//   pack-leader run prune [--keep N] [--older-than 2d] [--all] [--dry-run]
-//   pack-leader status [--json] [--all]
-//   pack-leader task create --spec "..." [--title T] [--depends-on a,b] [--parent ID] | list | show ID | tree [ID] | update ID [--status S] [--parent ID|none] [--summary S] [--force]
-//   pack-leader gate create --task ID --reason TEXT | list [--task ID] | show ID | resolve ID --decision approve|reject [--reason TEXT]
-//   pack-leader worker start NAME --spec "..." | --task ID [--retry] [--kind K] [--model M] [--thinking L] [--router off|openai|jev] [--cwd D] [--placement tab|split]
-//                            [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]]
-//                            [--setup-command STRING [--setup-timeout MS]] [-- agent args]
-//   pack-leader worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]
-//   pack-leader worker prompt NAME --spec "..." | --task ID | resend NAME
-//   pack-leader worker list | show NAME | read NAME [--lines N] [--dispatch ID] | focus NAME | stop NAME | retain NAME
-//   pack-leader worker release NAME [--force] [--keep-pane] [--keep-worktree]
-//   pack-leader spawn NAME --prompt "..." [--kind K] [--model M] [--thinking L] [--cwd D] [--worktree new|PATH] [-- agent args]
-//   pack-leader dispatch list [--task ID] [--worker NAME] | show ID [--preamble]
-//   pack-leader check [--wait] [--timeout MS] [--ack ID[,ID]] [--types done,ask,attention,note]
-//   pack-leader reply ASK_ID --body "..." [--free]
-//   pack-leader send NAME|@all|@idle|@KIND "text" [--now]
-// Worker side (registered worker session; adopted sessions use the explicit context prefix):
-//   pack-leader done --outcome succeeded|failed --summary "..." [--files-modified a,b] [--report-path P]
-//   pack-leader ask "question" [--options a,b,c] [--timeout MS] | pack-leader ask --id ID
-//   pack-leader note "text" | pack-leader send WORKER "text" [--now] | pack-leader heartbeat "note" | pack-leader inbox
-// Either: pack-leader skill [--install] | pack-leader sidebar | pack-leader help
 import { parseArgs, str, has, num, list, type Args } from "./args.ts";
 import { commandName, validateCommandArgs } from "./command-args.ts";
 import { beginRequest, finishRequest, fingerprint, RequestError, requestShow } from "./requests.ts";
@@ -54,18 +29,12 @@ import { describeSettings, runSettings, settingsInForce } from "./settings.ts";
 import { addHost, getHost, HostProfileError, listHosts, removeHost } from "./hosts.ts";
 import { callbackFlagValues, executeRemoteRpc, forwardWorkerCallback, readStdinJson, RemoteError, validateCallbackRequest, withExecutionHost } from "./remote.ts";
 
-/** The last JSON result printed: a `--retry-request` records it to replay on a retry. */
 let lastOut: unknown = null;
 const out = (v: unknown) => {
   lastOut = v;
   process.stdout.write(JSON.stringify(v, null, 2) + "\n");
 };
 
-/**
- * The workspace a herdr pane id belongs to: the part before the colon of `w5:p2`.
- * Null for anything that is not one well-formed `workspace:pane` id. The one place
- * that splits pane ids; src/workers.ts (tab placement) should use it too.
- */
 export function workspaceOf(paneId: string | null | undefined): string | null {
   const m = typeof paneId === "string" ? /^([A-Za-z0-9_-]+):[A-Za-z0-9_-]+$/.exec(paneId) : null;
   return m ? m[1]! : null;
@@ -115,10 +84,6 @@ async function openSettings(fromAction: boolean): Promise<void> {
 
 export type Here = { paneId: string | null; workspaceId: string | null; tabId: string | null; cwd: string };
 
-/**
- * Where this command runs: the context herdr hands a plugin action (HERDR_PLUGIN_CONTEXT_JSON)
- * wins over the pane's own env; malformed JSON counts as none. The workspace falls back to the pane id's.
- */
 export function here(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): Here {
   let ctx: Record<string, unknown> = {};
   try {
@@ -131,9 +96,7 @@ export function here(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()):
   return { paneId, workspaceId, tabId: s(env.HERDR_TAB_ID), cwd: s(ctx.focused_pane_cwd) ?? s(ctx.workspace_cwd) ?? cwd };
 }
 
-/** `run prune` and the tail of `run close`: closed runs past the kept ones with their records and archives, then released checkouts. */
 async function collectGarbage(opts: PruneOptions): Promise<Record<string, unknown>> {
-  // Preserve released checkout leases until the sweep has revalidated and removed them.
   const worktrees = await sweepWorktrees();
   const r = await update((state) => pruneRuns(state, opts));
   const archives = removeArchives(r.runs.map((x) => x.id));
@@ -141,13 +104,11 @@ async function collectGarbage(opts: PruneOptions): Promise<Record<string, unknow
   return { pruned: r.runs, removed: r.removed, archives_removed: archives, worktrees, ...(r.skipped ? { skipped: r.skipped } : {}) };
 }
 
-/** The run a command means; read-only commands pass `allowClosed` so a closed run can still be looked at by id. */
 function currentRun(args: Args, state = load(), allowClosed = false): Run {
   const h = here();
   return resolveRun(state, { runId: str(args, "run"), paneId: h.paneId, workspaceId: h.workspaceId, allowClosed });
 }
 
-/** A worker of the current run, or an error naming the run. */
 function runWorker(args: Args, name: string, state = load(), allowClosed = false) {
   const run = currentRun(args, state, allowClosed);
   const w = state.workers[name];
@@ -155,12 +116,6 @@ function runWorker(args: Args, name: string, state = load(), allowClosed = false
   return w;
 }
 
-/** Gate mutations belong to the coordinator, never to a worker's pane or environment. */
-/**
- * When `run create` comes from a worker (its environment, or a pane Pack Leader registered
- * as one), the new run is that worker's sub-run: one level deeper, within PACK_MAX_RUN_DEPTH,
- * and only while the worker holds a dispatched task. Null for a top-level run.
- */
 function subRunParent(state: State, paneId: string | null): { parent: NonNullable<Run["parent"]>; depth: number } | null {
   const named = process.env.PACK_WORKER ? state.workers[process.env.PACK_WORKER] : undefined;
   const w = named && (!process.env.PACK_RUN_ID || named.run_id === process.env.PACK_RUN_ID) ? named : Object.values(state.workers).find((x) => !x.execution_host && paneId && x.pane_id === paneId);
@@ -178,7 +133,6 @@ function subRunParent(state: State, paneId: string | null): { parent: NonNullabl
   return { parent: { run_id: parentRun.id, worker: w.name, task_id: w.task_id, dispatch_id: w.dispatch_id }, depth };
 }
 
-/** A worker pane coordinating this sub-run is its coordinator, though it is a worker of the parent run. */
 function coordinatesSubRun(run: Run): boolean {
   const paneId = here().paneId;
   return Boolean(run.parent && paneId && run.orchestrator.pane_id === paneId);
@@ -233,7 +187,6 @@ async function main(inputArgv: string[] = process.argv.slice(2)): Promise<void> 
   const name = commandName(command, args);
   const prior = await beginRequest(requestId, name, fingerprint(name, args));
   if (prior) {
-    // The same command already finished: print what it printed, do not act again.
     const receipt = prior.receipt as Record<string, unknown> | null;
     if (prior.exit_code && receipt && "error" in receipt) process.stderr.write(JSON.stringify({ ...receipt, replayed_request: requestId }) + "\n");
     else out(receipt && typeof receipt === "object" && !Array.isArray(receipt) ? { ...receipt, replayed_request: requestId } : { result: receipt, replayed_request: requestId });
@@ -267,7 +220,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
 
-    // ---- run -----------------------------------------------------------------
     case "run": {
       const [sub = "show"] = args.positional;
       if (sub === "create") {
@@ -285,12 +237,10 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
           return run;
         });
         if (run.parent) {
-          // A sub-run lives in its coordinator's pane: no sidebar, observer or renames there.
           log({ event: "run.created", run: run.id, pane: h.paneId, parent: run.parent.run_id, worker: run.parent.worker });
           out({ run, hint: `Sub-run of ${run.parent.run_id}, coordinated by you (worker ${run.parent.worker}). Orchestrator commands from this pane now act on ${run.id}; your own done/ask/note/escalate still go to ${run.parent.run_id}. Close it with \`pack-leader run close --run ${run.id}\` before you report done.` });
           return;
         }
-        // The run is committed: whatever fails from here on is a warning next to it, never a lost run id.
         let sidebar: string | null = null;
         let observer: Record<string, unknown> | null = null;
         let warning: string | undefined;
@@ -307,7 +257,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
             if (sidebar) await update((s) => void (s.runs[run.id]!.sidebar_pane_id = sidebar));
             if (sidebar) await renamePane(sidebar, "Pack");
           }
-          // The observer goes under the orchestrator once the sidebar stands to its right, so the sidebar keeps its full height.
           if (!has(args, "no-observer") && settingsOf(loadConfig()).observer && h.paneId) {
             const current = load().runs[run.id];
             if (current) {
@@ -329,7 +278,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
         return;
       }
       if (sub === "use") {
-        // Lead an existing run from this pane: after a crash, a lost pane, or a hand-over between sessions.
         requireHerdr();
         const id = args.positional[1] ?? str(args, "run");
         const h = here();
@@ -341,7 +289,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
           out({ run: id, orchestrator: before.orchestrator, unchanged: true });
           return;
         }
-        // The current coordinator's pane still open means someone may still be leading: only an explicit takeover moves it.
         const oldOpen = old ? await getPane(old).then(() => true, (err) => ((err as HerdrError).code === "pane_not_found" ? false : true)) : false;
         if (oldOpen && !has(args, "takeover")) throw new Error(`run ${id} is led from pane ${old}, which is still open; pass --takeover only if that coordinator is gone or hands the run over`);
         const run = await update((state) => {
@@ -363,11 +310,9 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
         return;
       }
       if (sub === "close") {
-        // closeRun refuses an already closed run itself, with a clearer message than resolveRun's.
         const run = currentRun(args, load(), true);
         const r = await closeRun(run.id, { release: has(args, "release"), force: has(args, "force") });
         if (fromAction) await notify("Pack Leader", `run ${run.id} closed${r.released.length ? `, released ${r.released.map((x) => x.worker).join(", ")}` : ""}`);
-        // Garbage collection rides on every close: old closed runs (keeping 5) with their archives, and released checkouts.
         const gc = await collectGarbage({}).catch((err) => ({ error: (err as Error).message }));
         out({ ...r, garbage_collected: gc });
         return;
@@ -389,7 +334,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       throw new Error(`unknown: pack-leader run ${sub}`);
     }
 
-    // ---- task ----------------------------------------------------------------
     case "task": {
       const [sub = "list", id] = args.positional;
       if (sub === "create") {
@@ -406,7 +350,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
           if (has(args, "parent")) validateTaskParent(state, run.id, t.id, str(args, "parent")!);
           if (has(args, "parent")) t.parent_id = str(args, "parent")!;
           state.tasks[t.id] = t;
-          // A dependency that already failed or is blocked will not succeed by itself: say so now, not at start time.
           const stuck = deps.filter((d) => state.tasks[d]!.status === "failed" || state.tasks[d]!.status === "blocked").map((d) => `${d} (${state.tasks[d]!.status})`);
           return { task: t, stuck };
         });
@@ -419,7 +362,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
         const status = str(args, "status");
         if (status !== undefined && !TASK_STATUSES.includes(status as TaskStatus)) throw new Error(`--status takes ${TASK_STATUSES.join(", ")}`);
         const tasks = runTasks(state, run.id).filter((t) => (!has(args, "ready") || ready(state, t)) && (status === undefined || t.status === status));
-        // --brief: one short row per task, with the spec collapsed and capped, for a ready view that stays small.
         const brief = (t: Task) => {
           const spec = t.spec.replace(/\s+/g, " ").trim();
           return { id: t.id, title: t.title, status: t.status, ready: ready(state, t), worker: t.worker, depends_on: t.depends_on, spec: spec.length > 160 ? `${spec.slice(0, 159)}…` : spec, ...(spec.length > 160 ? { spec_truncated: true } : {}) };
@@ -463,7 +405,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
           if (status) {
             refuseTransition(t, status, has(args, "force"));
             t.status = status;
-            // Back to pending is a fresh start: the last attempt's worker, dispatch and outcome no longer describe it.
             if (status === "pending") Object.assign(t, { worker: null, dispatch_id: null, outcome: null, retry_reset_at: now() });
             else if (str(args, "summary")) t.outcome = { summary: str(args, "summary")!, files_modified: [], report_path: null };
           }
@@ -476,7 +417,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       throw new Error(`unknown: pack-leader task ${sub}`);
     }
 
-    // ---- durable task approval gates -----------------------------------------
     case "gate": {
       const [sub = "list", id] = args.positional;
       if (sub === "create") {
@@ -508,7 +448,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
         return;
       }
       if (sub === "resolve") {
-        // A choice is an approval that names the option taken.
         const choice = str(args, "choice");
         const decision = str(args, "decision") ?? (choice !== undefined ? "approve" : undefined);
         if (!id || (decision !== "approve" && decision !== "reject")) throw new Error('usage: pack-leader gate resolve ID --decision approve|reject | --choice OPTION [--reason "TEXT"]');
@@ -522,7 +461,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       throw new Error(`unknown: pack-leader gate ${sub}`);
     }
 
-    // ---- worker --------------------------------------------------------------
     case "worker": {
       const [sub = "list", name] = args.positional;
       if (sub === "adopt") {
@@ -547,7 +485,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
         const settings = settingsOf(config);
         const placement = str(args, "placement") ?? (has(args, "direction") ? "split" : str(args, "host") ? "tab" : settings.placement);
         if (placement !== "tab" && placement !== "split") throw new Error("--placement must be tab or split");
-        // A tab has no direction; asking for both is a mistake, not a preference to pick one of.
         if (placement === "tab" && has(args, "direction")) throw new Error("--direction only applies to --placement split (a split without --direction goes right)");
         if (has(args, "worktree") && !str(args, "worktree")) throw new Error("--worktree takes new or a path");
         const choice = worktreeForMode(settings.worktree, str(args, "worktree"), str(args, "cwd") ?? run.orchestrator.cwd, Boolean(str(args, "host")));
@@ -605,7 +542,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
         return;
       }
       if (sub === "read" && (str(args, "source") ?? "screen") === "transcript") {
-        // The agent's own session file (pi via herdr, Claude Code by its dispatch prompt): its turns, not its screen.
         const w = runWorker(args, name);
         if (w.execution_host) throw new Error(`${name} runs on ${w.execution_host.name}; its transcript is not readable from here (use --source screen)`);
         const marker = JSON.stringify(`You are worker "${name}" in run ${w.run_id}`).slice(1, -1);
@@ -624,7 +560,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
         } catch (err) {
           if (str(args, "run")) throw err;
         }
-        // A specific dispatch's archive; or, once the worker is gone from the run, its newest archive.
         const dispatchId = str(args, "dispatch");
         if (dispatchId && run && state.dispatches?.[dispatchId] && state.dispatches[dispatchId]!.run_id !== run.id) throw new Error(`no dispatch ${dispatchId} in run ${run.id}`);
         const live = run ? state.workers[name]?.run_id === run.id : Boolean(state.workers[name]);
@@ -667,7 +602,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       }
       if (sub === "release") {
         const run = currentRun(args);
-        // Its sub-runs go first: forced, they are closed with their workers released; otherwise they block the release.
         const children = childRuns(load(), run.id, name);
         if (children.length && !has(args, "force")) throw new SubRunError("sub_run_open", `${name} still coordinates sub-run${children.length > 1 ? "s" : ""} ${children.map((r) => r.id).join(", ")}; wait for its report, or pass --force to close ${children.length > 1 ? "them" : "it"} too`);
         const subRuns = [];
@@ -696,11 +630,9 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       throw new Error(`unknown: pack-leader worker ${sub}`);
     }
 
-    // ---- dispatch records ------------------------------------------------------
     case "dispatch": {
       const [sub = "list", id] = args.positional;
       const state = load();
-      // Read-only: a closed run's records stay readable until it is pruned.
       const run = currentRun(args, state, true);
       if (sub === "list") {
         const task = str(args, "task");
@@ -718,12 +650,9 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       throw new Error(`unknown: pack-leader dispatch ${sub}`);
     }
 
-    // ---- orchestrator inbox ----------------------------------------------------
     case "check": {
       const run = currentRun(args);
-      // Validate before acking anything, so a typo does not half-run the command.
       const types = has(args, "types") ? checkTypes(list(args, "types")) : undefined;
-      // One JSON document on stdout: an ack that matched nothing is said inside the result, not as a second object.
       let acked: Record<string, unknown> = {};
       if (has(args, "ack")) {
         const ids = list(args, "ack");
@@ -734,8 +663,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
         if (!n && !has(args, "wait")) acked = { acked: 0, ack_warning: "nothing to ack with those ids" };
         if (unknown.length) acked = { ...acked, acked: n, ack_unknown: unknown, ack_warning: `no message ${unknown.join(", ")} in run ${run.id}` };
       }
-      // A short wait buys nothing: `check --wait` returns the moment a message arrives, and every
-      // return costs the orchestrator a full model call. Timeouts under the floor are raised to it.
       let timeoutMs = num(args, "timeout", 540_000);
       let raised: Record<string, unknown> = {};
       const floor = envMs("PACK_MIN_WAIT_MS", 300_000);
@@ -750,7 +677,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       }
       if (has(args, "all")) {
         if (has(args, "wait")) throw new Error("--all is a read-only listing; it does not take --wait");
-        // Every message to you in the run, read or not, newest last: inspection, never progress through the inbox.
         const limit = num(args, "limit", 50);
         const mine = runMessages(load(), run.id).filter((m) => m.to === "orchestrator" && (!types || types.includes(m.type)));
         out({ ...acked, result: "all", messages: mine.slice(-limit), total: mine.length });
@@ -774,7 +700,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
     case "reply": {
-      // `--free` is a bare flag; the parser hands it the next word when one follows (`--free "text"`), so give that back.
       const freeWord = str(args, "free");
       const positional = freeWord === undefined ? args.positional : [...args.positional, freeWord];
       const [askId] = positional;
@@ -791,7 +716,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       const [name, ...words] = args.positional;
       const body = str(args, "body") ?? words.join(" ");
       if (!name || !body) throw new Error("usage: pack-leader send NAME|@all|@idle|@KIND \"text\" [--now]");
-      // From a worker pane: one worker of the same run, by name. From the orchestrator: a name or a group address.
       const sub = process.env.PACK_WORKER ? activeRuns(load()).find((r) => coordinatesSubRun(r)) : undefined;
       if (sub && (name.startsWith("@") || load().workers[name]?.run_id === sub.id)) out(await sendTo(sub, name, body, has(args, "now")));
       else if (process.env.PACK_WORKER) {
@@ -807,12 +731,9 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       try {
         run = currentRun(args, state, true);
       } catch (err) {
-        // Only implicit selection misses get the fleet overview. Explicit ids and
-        // unexpected state/selection failures must remain visible to scripts.
         if (str(args, "run") || process.env.PACK_RUN_ID) throw err;
         if (!(err instanceof Error) || !/^(no active run:|several active runs \()/.test(err.message)) throw err;
       }
-      // Closed runs are counted, and listed only with --all.
       const all = has(args, "all");
       const closed = Object.values(state.runs).filter((r) => r.status === "closed");
       if (has(args, "json") || !process.stdout.isTTY) {
@@ -828,7 +749,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
 
-    // ---- worker side ---------------------------------------------------------
     case "done": {
       const ctx = workerContext({ task: str(args, "task"), dispatch: str(args, "dispatch"), worker: str(args, "worker"), run: str(args, "run") });
       const outcome = str(args, "outcome");
@@ -966,7 +886,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
 
-    // ---- herdr-driven --------------------------------------------------------
     case "sidebar": {
       const { runSidebar } = await import("./sidebar.ts");
       await runSidebar();
@@ -1008,7 +927,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
     case "say": {
-      // The human (or the observer on their behalf) to the orchestrator, through the run's inbox.
       const run = currentRun(args);
       const body = args.positional.join(" ") || str(args, "body");
       if (!body) throw new Error("usage: pack-leader say \"<what the orchestrator should hear>\"");
@@ -1017,7 +935,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
     case "observe": {
-      // What the observer (or anyone) reads before answering "what is going on": state plus the orchestrator's last turns.
       const state = load();
       const run = currentRun(args, state, true);
       const turns = num(args, "turns", OBSERVER_TURNS);
@@ -1036,7 +953,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
     case "observer": {
-      // (Re)open the observer pane under the orchestrator; `--close` closes it.
       requireHerdr();
       const run = currentRun(args);
       if (has(args, "close")) {
@@ -1056,33 +972,26 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
       return;
     }
     case "leader": {
-      // herdr action (or a human in a worker pane): back to the orchestrator of the run this pane belongs to.
       try {
         requireHerdr();
         const h = here();
         const run = resolveLeaderRun(load(), { runId: str(args, "run"), paneId: h.paneId, workspaceId: h.workspaceId });
         if (!run.orchestrator.pane_id) throw new Error(`run ${run.id} has no orchestrator pane`);
-        // Herdr's direct pane focus selects its owning tab AND workspace. Do not
-        // use stored tab IDs (the pane may have moved), or require an agent label.
         await paneFocus(run.orchestrator.pane_id);
         out({ run: run.id, focused: run.orchestrator.pane_id });
       } catch (err) {
-        // Plugin actions have no terminal to show stderr in. The bar displays its
-        // own error; ordinary CLI callers still get the machine-readable failure.
         if (fromAction) await notify("Back to leader failed", (err as Error).message);
         throw err;
       }
       return;
     }
     case "sidebar-open": {
-      // herdr action: the pack as a column to the right of the focused pane, focused so j/k/Enter work at once.
       const h = here();
       if (!h.paneId) throw new Error("no pane to open the sidebar next to");
       out({ sidebar_pane_id: await openSidebar(h.paneId, has(args, "left"), !has(args, "no-focus")) });
       return;
     }
     case "event": {
-      // pane.closed / pane.exited / tab.closed: a worker's pane or hidden tab went away (tab.closed carries no pane_id).
       let data: { pane_id?: string; tab_id?: string } = {};
       try {
         const e = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON ?? "{}");
@@ -1097,8 +1006,6 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
 }
 
 function validateCallbackAuthority(request: any): void {
-  // stateDir/stateFile are captured at module load (often on the SSH login host).
-  // Read the explicitly selected leader file so this check and the re-exec agree.
   const state = load(join(request.state_dir, "state.json"));
   const context = request.context;
   const run = state.runs[context.run_id];
@@ -1164,10 +1071,6 @@ async function runRemoteCallbackRelay(): Promise<void> {
 type Settable = "pending" | "blocked" | "failed" | "succeeded";
 const isSettable = (s: string): s is Settable => ["pending", "blocked", "failed", "succeeded"].includes(s);
 
-/**
- * What `task update` may do: a dispatched task settles only through `done` or a forced release,
- * and a succeeded one is final unless `--force`. Setting the same status again (a new summary) is fine.
- */
 const TRANSITIONS: Record<TaskStatus, readonly Settable[]> = {
   pending: ["blocked", "failed", "succeeded"],
   blocked: ["pending", "failed", "succeeded"],
@@ -1183,15 +1086,10 @@ export function refuseTransition(t: Pick<Task, "id" | "status" | "worker">, to: 
   throw new Error(`task ${t.id} is ${t.status}; ${t.status === "succeeded" ? `pass --force to set it ${to}` : `it cannot become ${to}`}`);
 }
 
-/** `done --report-path` as an absolute path: a relative one means the worker's own cwd, which the orchestrator does not share. */
 export function reportPath(p: string | undefined, base = process.cwd()): string | null {
   return p ? resolve(base, p) : null;
 }
 
-/**
- * The run's working directory: `--cwd` made absolute (against this process's cwd) and checked
- * to be an existing directory; without the flag, the pane's own.
- */
 export function runCwd(flag: string | undefined, given: boolean, fallback: string, base = process.cwd()): string {
   if (!given) return fallback;
   if (!flag) throw new Error("--cwd takes a directory");
@@ -1204,19 +1102,10 @@ export function runCwd(flag: string | undefined, given: boolean, fallback: strin
   return dir;
 }
 
-/**
- * What a worker's waiting `ask` prints: the reply text, and the `answer` to branch
- * on (the chosen option; the reply text itself for a plain or `--free` answer),
- * with `option_index` (null unless an option was chosen).
- */
 function askReply(askId: string, r: Message, options?: string[]) {
   return { result: "reply", ask_id: askId, ...(options ? { options } : {}), reply: r.body, answer: r.answer ?? r.body, option_index: r.option_index ?? null };
 }
 
-/**
- * The sidebar as a narrow column right of `target` (left with `onLeft`), once per run:
- * the run orchestrated from `target` keeps its live sidebar pane. Returns the sidebar pane id.
- */
 async function openSidebar(target: string, onLeft = false, focus = false): Promise<string> {
   const state = load();
   const owner = activeRuns(state).find((r) => r.orchestrator.pane_id === target);
@@ -1236,7 +1125,6 @@ async function openSidebar(target: string, onLeft = false, focus = false): Promi
   const pane: string | undefined = r?.pane?.pane_id ?? r?.plugin_pane?.pane?.pane_id;
   if (!pane) throw new Error("herdr did not report the sidebar pane id");
   if (owner) await update((s) => void (s.runs[owner.id] && (s.runs[owner.id]!.sidebar_pane_id = pane))).catch(() => {});
-  // The split lands on the right; `--left` swaps it with the pane it was split from. Keep it narrow.
   if (onLeft) spawnSync(herdrBin, ["pane", "swap", "--source-pane", pane, "--target-pane", target]);
   spawnSync(herdrBin, ["pane", "resize", "--direction", onLeft ? "left" : "right", "--amount", "0.25", "--pane", pane]);
   await paneFocus(focus ? pane : target).catch(() => {});
@@ -1263,7 +1151,6 @@ function dispatchCounts(state: State, run: Run): Map<string, number> {
 
 const glyph: Record<string, string> = { idle: fg.green("●"), done: fg.green("✔"), working: fg.yellow("◐"), blocked: fg.red("■"), unknown: fg.gray("?"), exited: fg.gray("✕"), unverifiable: fg.red("?"), unreachable: fg.red("⌁"), stalled: fg.red("◌") };
 
-/** An argv as one shell line, quoting what needs it. */
 const shellLine = (argv: string[]) => argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
 
 function statusText(state: State, run: Run): string {
@@ -1403,7 +1290,6 @@ Plugin root: ${pluginRoot}
 `;
 }
 
-/** Keep CLI failures machine-readable without exposing arbitrary thrown-object details. */
 export function cliErrorPayload(err: unknown): { error: string; code?: string } {
   const error = err instanceof Error ? err.message : typeof err === "string" ? err : "unknown error";
   const known = err instanceof HerdrError || err instanceof TaskHierarchyError || err instanceof GateError || err instanceof AdoptionError || err instanceof RemoteError || err instanceof HostProfileError || err instanceof RequestError || err instanceof RetryLimitError || err instanceof SubRunError;
@@ -1411,7 +1297,6 @@ export function cliErrorPayload(err: unknown): { error: string; code?: string } 
   return { error, ...(code === undefined ? {} : { code }) };
 }
 
-// Only as a command: tests (and later src/workers.ts, for workspaceOf) import this file.
 if (import.meta.main) {
   main().catch((err) => {
     process.stderr.write(JSON.stringify(cliErrorPayload(err)) + "\n");

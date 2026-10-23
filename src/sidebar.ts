@@ -1,5 +1,3 @@
-// The pack, live: one box per worker, drawn in a narrow pane. Follows herdr's
-// events and the state file; keys move between boxes, Enter jumps to a worker.
 import { watch, type FSWatcher } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
@@ -27,10 +25,6 @@ function elapsed(iso: string, until?: string): string {
   return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m${sec}s`;
 }
 
-/**
- * The message a worker's box shows: the last thing it said (heartbeat, note, done, ask), or the last reply to it.
- * With `dispatchId`, only messages of that dispatch count, so a new dispatch does not show the previous one's report.
- */
 export function lastMessageFor(state: State, runId: string, worker: string, dispatchId: string | null = null): Message | null {
   for (let i = state.messages.length - 1; i >= 0; i--) {
     const m = state.messages[i]!;
@@ -44,7 +38,6 @@ export function lastMessageFor(state: State, runId: string, worker: string, disp
 
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 
-/** Word-wrap `s` into at most `max` lines of `w` cells; the last line is truncated if more is left. */
 function wrap(s: string, w: number, max: number): string[] {
   const lines: string[] = [];
   let rest = s;
@@ -58,31 +51,17 @@ function wrap(s: string, w: number, max: number): string[] {
   return lines;
 }
 
-/** The selected box shows its last message in full, up to this many lines; `r` peeks at the raw screen for the rest. */
 export const SELECTED_MESSAGE_LINES = 12;
 
-/**
- * One worker's box, borders included: agent, runtime and status, objective,
- * then the last message. An unanswered ask shows its question (up to two
- * lines) and its options as `[a | b | c]`, in yellow; a reply shows its answer;
- * a note shows `note: ...`. The status glyph and word cover liveness
- * (unverifiable, stalled) as well as herdr's agent states.
- * Every line is exactly `cols` cells wide. An unselected box cuts each line to the
- * width (at most 8 lines); the selected box wraps its objective and message in full
- * (message capped at SELECTED_MESSAGE_LINES) and draws its border and name in the theme's accent.
- */
 export function boxLines(w: Worker, t: Task | null, last: Message | null, st: string, cols: number, selected = false, theme: Theme = noTheme): string[] {
   const inner = Math.max(1, cols - 4);
   const accent = theme.accent ? fgRgb(theme.accent) : fg.cyan;
   const name = selected ? accent(bold(w.name)) : bold(w.name);
   const harness = [dim(w.kind), w.model ? dim(w.model) : "", w.thinking ? dim(w.thinking) : "", w.execution_host ? dim(`@${w.execution_host.name}`) : ""].filter(Boolean).join(" ");
   const agentLine = `${glyph[st] ?? "?"} ${name} ${harness}`;
-  // Selected, a long model name moves the harness to a line of its own instead of being cut.
   const agent = selected && width(agentLine) > inner ? [`${glyph[st] ?? "?"} ${name}`, ...wrapAll(harness, inner - 2).map((l) => "  " + l)] : [agentLine];
-  // The clock stops when the worker's current task settles (done, failed, released): it measures the work, not the idle after it.
   const settled = t && t.dispatch_id === w.dispatch_id && (t.status === "succeeded" || t.status === "failed") ? t.updated_at : undefined;
   const runtime = `${dim("runtime")} ${elapsed(w.started_at, settled)} ${dim("·")} ${alarming.has(st) ? fg.red(word[st]!) : word[st] ?? st}`;
-  // A prefixed line: `prefix` styled, `plain` its unstyled text, so a wrapped first line can carry it.
   const prefixed = (prefix: string, plain: string, body: string, style: (l: string) => string = (l) => l, max = 1): string[] => {
     if (!selected) return wrap(plain + body, inner, max).map((l, i) => style(i === 0 && l.startsWith(plain) ? prefix + l.slice(plain.length) : l));
     const lines = wrapAll(plain + body, inner).map((l, i) => style(i === 0 && l.startsWith(plain) ? prefix + l.slice(plain.length) : l));
@@ -112,34 +91,25 @@ export function boxLines(w: Worker, t: Task | null, last: Message | null, st: st
   ];
 }
 
-/**
- * The active run this sidebar pane was opened for, if any. Only active runs count: herdr
- * reuses pane ids across restarts, so a closed run's recorded sidebar pane can be this one.
- */
 export function boundRunFor(state: State, pane: string | null): Run | undefined {
   return pane ? activeRuns(state).find((r) => r.sidebar_pane_id === pane) : undefined;
 }
 
-/** The run's goal as one paragraph, `Goal:` in bold, wrapped to the width, left aligned. */
 export function goalLines(objective: string, cols: number): string[] {
   const label = "Goal:";
   const w = Math.max(8, cols);
-  // A word wider than the pane (a branch name, a path) is split so no line gets cut.
   const text = oneLine(objective).split(" ").flatMap((word) => (width(word) <= w ? [word] : [...word.match(new RegExp(`.{1,${w}}`, "g")) ?? [word]])).join(" ");
   return wrapAll(`${label} ${text}`, w).map((l) => (l.startsWith(label) ? bold(label) + l.slice(label.length) : l));
 }
 
-/** What a click on box `i` does: select it, or open it when it is the selected one already (two clicks open). */
 export function clickOn(i: number, sel: number): { sel: number; open: boolean } {
   if (i < 0) return { sel, open: false };
   return { sel: i, open: i === sel };
 }
 
-/** A mouse report the terminal sent: SGR-encoded button, 1-based cell, press (`M`) or release (`m`). */
 export type MouseEvent = { button: number; x: number; y: number; press: boolean };
 const MOUSE = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
 
-/** Mouse reports out of a raw stdin chunk, and what is left for the key parser. */
 export function splitMouse(chunk: string): { keys: string; mouse: MouseEvent[] } {
   const mouse: MouseEvent[] = [];
   const keys = chunk.replace(MOUSE, (_m, b, x, y, k) => {
@@ -149,41 +119,28 @@ export function splitMouse(chunk: string): { keys: string; mouse: MouseEvent[] }
   return { keys, mouse };
 }
 
-/** The box (index into the drawn boxes) under terminal row `row` (1-based), given the lines each box spans and the scroll; -1 for none. */
 export function boxAt(boxes: { start: number; end: number }[], scroll: number, row: number, avail: number): number {
   if (row < 1 || row > avail) return -1;
   const line = scroll + row - 1;
   return boxes.findIndex((b) => line >= b.start && line < b.end);
 }
 
-/**
- * The status a box shows. Liveness findings win; then herdr's agent state when `live` is known
- * (a pane missing from it is gone). Before the first agent list, or while herdr is unreachable,
- * `live` is null and only the stored liveness can say "exited"; anything else is "unknown".
- */
 export function statusOf(w: Worker, live: ReadonlyMap<string, { status: AgentStatus }> | null): string {
   if (w.liveness === "unverifiable") return "unverifiable";
   if (w.liveness === "unreachable") return "unreachable";
   if (w.stalled_since) return "stalled";
-  // The live map belongs to the local herdr instance; remote pane IDs can collide.
   if (w.execution_host) return w.liveness === "exited" ? "exited" : w.last_status;
   if (live) return live.get(w.pane_id)?.status ?? "exited";
   return w.liveness === "exited" ? "exited" : "unknown";
 }
 
-/** Adopted and remote sessions are addressed by their recorded pane, never an ambiguous name. */
 export const sidebarWorkerTarget = (w: Worker): string => w.adopted || w.execution_host ? w.pane_id : w.name;
 
-/** The key a keypress means. readline names shift-r "r" with `shift` set, so letters are upper-cased here. */
 export function keyName(key: { name?: string; shift?: boolean; sequence?: string }): string | undefined {
   if (key.name && key.shift && /^[a-z]$/.test(key.name)) return key.name.toUpperCase();
   return key.name ?? key.sequence;
 }
 
-/**
- * The first line to show so that lines [start, end) stay visible in `avail` rows, moving as little as
- * possible from `offset`. A box taller than the pane shows its top. Never scrolls past the last line.
- */
 export function scrollFor(offset: number, start: number, end: number, avail: number, total: number): number {
   if (avail <= 0 || total <= avail) return 0;
   if (end - start >= avail || start < offset) offset = start;
@@ -192,7 +149,6 @@ export function scrollFor(offset: number, start: number, end: number, avail: num
 }
 
 export async function runSidebar(): Promise<void> {
-  // Outside a herdr pane with no terminal there is nobody to draw for, and the ticker would keep it alive forever.
   if (!process.stdin.isTTY && !process.env.HERDR_PANE_ID) throw new Error("the sidebar needs a terminal: herdr opens it in a pane (\"Pack Leader: show the pack\")");
   const out = process.stdout;
   const live: Live = new Map();
@@ -208,9 +164,7 @@ export async function runSidebar(): Promise<void> {
   let messagePanel: MessagePanel | null = null;
   let drawTimer: NodeJS.Timeout | null = null;
   const theme = loadTheme();
-  // Set once mouse reporting is on, so quit() turns it off again.
   let mouse = "";
-  // What the last draw put where, for clicks: each box's line span, the scroll and the rows the boxes had.
   let boxSpans: { start: number; end: number }[] = [];
   let drawnScroll = 0;
   let drawnHeader = 0;
@@ -301,7 +255,6 @@ export async function runSidebar(): Promise<void> {
           return messageCounterLines(pending, yours, cols);
         })()
       : [];
-    // The open view's title in its counter's style (agent messages bold yellow, yours italic cyan), then where you are, dimmed.
     const activeLine = messagePanel
       ? [truncate((messagePanel.view === "unread" ? bold(fg.yellow("Unread")) : italic(fg.cyan("From you"))) + dim(italic(` · ${messagePanel.runId}${messagePanel.detail ? " · message" : ""}`)), cols, closeWithItalic)]
       : [];
@@ -309,9 +262,6 @@ export async function runSidebar(): Promise<void> {
     const hasContent = Boolean(messagePanel || runs.length);
     const separator = hasContent ? (rowsAvail >= 10 ? ["", dim("─".repeat(cols)), ""] : [dim("─".repeat(cols))]) : [];
     const goal = selRun ? goalLines(selRun.objective, cols) : [];
-    // Counters and the active view outrank extra goal lines in a short pane. At ordinary heights
-    // the goal still gets up to the original one-third header budget.
-    // A blank line between the goal and the [u]/[y] counters when the pane has room for it.
     const gap = rowsAvail >= 10 && goal.length && counterLines.length ? 1 : 0;
     const wantedHeader = Math.max(1, Math.floor(rowsAvail / 3), essentialHeader.length + (goal.length ? 1 + gap : 0));
     const headerLimit = Math.max(1, Math.min(wantedHeader, rowsAvail - 1 - separator.length));
@@ -322,14 +272,12 @@ export async function runSidebar(): Promise<void> {
     if (!selRun && !runs.length) header.push(dim("no active run — pack-leader run create"));
     const head = [...header, ...separator];
 
-    // Worker preview and transient errors stay pinned. Message bodies belong to the independently scrolling body.
     const tail: string[] = [];
     if (!messagePanel && preview && previewFor) {
       tail.push("", dim(`── ${previewFor} ──`));
       for (const line of preview) tail.push(truncate(line, cols));
     }
     if (message) tail.push("", fg.yellow(truncate(message, cols)));
-    // No standing key hints: the bottom line is for being offline, and for the keys only while `?` is held open.
     const footer = [connected ? "" : fg.red("offline")];
     if (help) footer[0] = dim(messagePanel
       ? messagePanel.detail
@@ -378,7 +326,6 @@ export async function runSidebar(): Promise<void> {
     schedule();
   };
 
-  // State file changes (any pack-leader command) and herdr's live events both redraw.
   ensureDir(stateDir);
   let watcher: FSWatcher | null = null;
   try {
@@ -402,7 +349,6 @@ export async function runSidebar(): Promise<void> {
       schedule();
     },
   );
-  // Transitions must become attention messages even when the orchestrator isn't checking.
   const ticker = setInterval(() => {
     void sync().then((created) => {
       if (created.length) reload();
@@ -432,7 +378,6 @@ export async function runSidebar(): Promise<void> {
     quit();
   };
   out.write(screen.alt + screen.hideCursor + screen.clear);
-  // Clicks and the wheel, only when there is a keyboard to take them away from.
   if (process.stdin.isTTY) {
     mouse = screen.mouseOff;
     out.write(screen.mouseOn);
@@ -446,7 +391,6 @@ export async function runSidebar(): Promise<void> {
   if (!process.stdin.isTTY) return new Promise(() => {});
   const openSelected = () => {
     if (messagePanel) return;
-    // The worker lives in its own tab: this switches to it. herdr's tab keys (or `o` here) come back.
     const cur = rows()[sel];
     if (cur) void withExecutionHost(cur.worker.execution_host ?? undefined, () => agentFocus(sidebarWorkerTarget(cur.worker))).catch((e) => ((message = e.message), schedule()));
   };
@@ -459,7 +403,6 @@ export async function runSidebar(): Promise<void> {
     }
     schedule();
   };
-  // Mouse reports are cut out of the raw input before readline sees it, or it would read them as keys.
   const keys = new PassThrough();
   emitKeypressEvents(keys);
   process.stdin.setRawMode(true);
@@ -490,7 +433,6 @@ export async function runSidebar(): Promise<void> {
     }
     if (name === "R") {
       void refreshLive().then(schedule);
-      // A message view is read-only: reload the file, but do not run inbox sync from this key path.
       if (messagePanel) reload();
       else void sync().then(reload).catch(() => {});
       message = null;
@@ -507,7 +449,6 @@ export async function runSidebar(): Promise<void> {
       schedule();
       return;
     }
-    // Unhandled keys in a message view cannot act on the worker selected behind it.
     if (messagePanel) return;
 
     const cur = rows()[sel];

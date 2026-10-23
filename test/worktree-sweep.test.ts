@@ -1,5 +1,3 @@
-// Checkout garbage-collection ownership regressions. All repositories and herdr
-// traffic are temporary/faked; this file is authored but not run during reconciliation.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -326,7 +324,6 @@ test("close errors and interrupted releases remain protected through repeated sw
   assert.deepEqual(afterPrune.removed, []);
   assert.ok(existsSync(checkout.path));
 
-  // A process dying after the durable in-progress mark has the same fail-closed result.
   const interruptedPath = join(dir, `checkout-${++serial}`);
   const interruptedBranch = `test/interrupted-${serial}`;
   git(repo, "worktree", "add", "-q", "-b", interruptedBranch, interruptedPath, base);
@@ -444,7 +441,7 @@ test("a superseding checkout lease acquired while sweep waits wins under the fen
   addLease(checkout, "alice", `d-old-${serial}`);
   const fence = join(stateDir, "worktree-fences", `${createHash("sha256").update(checkout.path).digest("hex")}.lock`);
   await acquireLock(fence, 10_000);
-  const pendingSweep = sweepWorktrees(); // Snapshot is taken before this call waits on the held fence.
+  const pendingSweep = sweepWorktrees();
   try {
     const state = load();
     state.dispatches![`d-next-${serial}`] = {

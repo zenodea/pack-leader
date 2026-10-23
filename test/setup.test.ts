@@ -1,5 +1,3 @@
-// Explicit worktree setup hooks. These regressions are defined here but are not
-// run during the implementation pack's verification hold.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -66,7 +64,6 @@ beforeEach(() => {
   git(repo, "init", "-q");
   git(repo, "commit", "-q", "--allow-empty", "-m", "init");
   const state = emptyState();
-  // Log files are durable across fixture resets, as in production: never reuse dispatch IDs.
   state.seq = n * 1000;
   state.runs.r1 = activeRun(repo);
   save(state);

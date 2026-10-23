@@ -1,15 +1,5 @@
-// A small argv parser: positionals, --flag, --flag value, --flag=value, and
-// everything after -- untouched. A value flag given twice accumulates its values
-// comma-joined (so `list()` splits them); a bare flag given twice stays `true`, and a
-// bare repeat never discards a value already given.
-//
-// A value that starts with `--` is read as the next flag, so pass it as
-// `--flag=--value`. The free-text flags below are the exception: they always take
-// the next token (unless it is the `--` separator), so `reply m5 --body "--no"`
-// and `done --summary "--dry-run was enough"` work as written.
 export type Args = { positional: string[]; flags: Map<string, string | true>; rest: string[] };
 
-/** Flags whose value is free text: they consume the next token even when it starts with `--`. */
 export const TEXT_FLAGS: ReadonlySet<string> = new Set(["body", "summary", "setup-command"]);
 
 export function parseArgs(argv: string[], textFlags: ReadonlySet<string> = TEXT_FLAGS): Args {
@@ -52,7 +42,6 @@ export function num(args: Args, name: string, fallback: number): number {
   return n;
 }
 
-/** `--files a,b,c`, or `--files a --files b` (parseArgs joins repeats with commas). */
 export function list(args: Args, name: string): string[] {
   const v = str(args, name);
   return v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];

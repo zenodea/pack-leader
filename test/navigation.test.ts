@@ -1,4 +1,3 @@
-// Actual CLI subprocesses, private state, and a private fake Herdr socket only.
 import { test, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -36,9 +35,6 @@ before(async () => {
       let result: any = {};
       let error: any;
       switch (method) {
-        // Herdr v0.9.1 src/app/api/panes.rs handle_pane_focus selects the owning
-        // tab/workspace; its api_pane_focus_focuses_direct_target_across_tabs_and_workspaces
-        // test pins those semantics. No agent label or stored tab ID is required.
         case "pane.focus":
           if (focusError) error = { code: "pane_not_found", message: `pane not found: ${params.pane_id}` };
           else result = { pane: { pane_id: params.pane_id, focused: true } };
@@ -48,7 +44,6 @@ before(async () => {
         case "tab.create": result = { tab: { tab_id: "w2:t8" }, root_pane: { pane_id: "w2:p8" } }; break;
         case "plugin.pane.open": result = { pane: { pane_id: "w2:p9" } }; break;
         case "pane.swap": case "layout.set_split_ratio": break;
-        // Stop fixture startup here: no agent runs, even in the private fixture.
         case "agent.start": error = { code: "fixture_stop", message: "fixture: no agent launch" }; break;
         default: error = { code: "unexpected", message: `unexpected ${method}` };
       }
@@ -116,7 +111,6 @@ test("leader explicit run and worker/action contexts select exactly the coordina
 
 test("global leader action from a bar resolves its run even in an ambiguous workspace", async () => {
   const state = load();
-  // Demonstrated pre-repair defect: the general resolver doesn't know bar panes.
   assert.throws(() => resolveRun(state, { paneId: "w2:bar2", workspaceId: "w2" }, {}), /several active runs/);
   const result = await cli([], action("w2:bar2"));
   assert.equal(result.code, 0, result.stderr);
@@ -188,9 +182,6 @@ test("local bar receives authoritative nondefault state/socket, not inherited wo
   assert.equal(load().workers.newworker!.bar_pane_id, "w2:p9");
   const before = readFileSync(stateFile, "utf8");
   calls.length = 0;
-  // Herdr v0.9.1 replaces protected HERDR_* paths AFTER merging supplied pane
-  // env. Exercise the real bar -> real CLI -> private socket, not a direct CLI
-  // invocation that would incorrectly bypass that host behavior.
   const exercise = String.raw`
 import os, sys, pty, subprocess, select, time, fcntl, termios, struct
 master, slave = pty.openpty()

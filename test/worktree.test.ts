@@ -1,6 +1,3 @@
-// Worktree per worker, without herdr: a temp git repo (one commit), a temp state
-// dir, and a fake herdr socket answering tab.create/agent.start/agent.prompt and,
-// when a test wants it, herdr's worktree methods (backed by real `git worktree`).
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -56,7 +53,6 @@ after(() => {
 const herdrError = (code: string, message: string) => Object.assign(new Error(message), { code });
 const unknownMethod = (method: string) => herdrError("invalid_request", `invalid request: unknown variant \`${method}\`, expected one of ...`);
 
-/** The herdr side a worker start needs; worktree.* is unknown unless `worktreeApi`. */
 function fakeHerdr(worktreeApi: boolean): Handler {
   let tab = 0;
   return (method, params) => {
@@ -102,7 +98,6 @@ const run = (cwd: string): Run => ({ id: "r1", objective: "o", status: "active",
 const start = (name: string, extra: Partial<Parameters<typeof startWorker>[0]> = {}) =>
   startWorker({ run: run(repo), name, kind: "claude", spec: "do the thing", placement: "tab", direction: "right", extraArgs: [], noDefaultArgs: true, timeoutMs: 5000, ...extra });
 
-/** Release after the worker reported, as the orchestrator would. */
 async function release(name: string, opts: Parameters<typeof releaseWorker>[2]) {
   const s = load();
   const t = s.tasks[s.workers[name]!.task_id!]!;
@@ -115,7 +110,6 @@ const prompted = () => calls.filter((c) => c.method === "agent.prompt").map((c) 
 
 beforeEach(() => {
   calls.length = 0;
-  // A fresh repo per test, so branches and worktrees never leak between tests.
   repo = join(dir, `repo${++n}`);
   mkdirSync(repo);
   git(repo, "init", "-q");
@@ -136,7 +130,6 @@ test("--worktree new without herdr's worktree API: git worktree at <repo>-wt/<wo
   assert.equal(git(path, "rev-parse", "--abbrev-ref", "HEAD"), "pack/r1/alice");
   assert.equal(git(path, "rev-parse", "HEAD"), base);
   assert.ok(!existsSync(join(repo, ".pack-leader")), "nothing inside the repo");
-  // The worker's tab is in the run's workspace, started in the worktree.
   const tab = calls.find((c) => c.method === "tab.create")!;
   assert.equal(tab.params.workspace_id, "w1");
   assert.equal(tab.params.cwd, path);
@@ -157,12 +150,10 @@ test("--worktree new prefers herdr's worktree.create and puts the worker's tab i
   assert.equal(tab.params.workspace_id, "w9");
   assert.equal(tab.params.cwd, path);
   assert.equal(git(path, "rev-parse", "--abbrev-ref", "HEAD"), "feat/bob");
-  // One tab per worker: the shell tab herdr opened the workspace with is closed once the worker's tab exists.
   const closed = calls.find((c) => c.method === "tab.close")!;
   assert.equal(closed?.params.tab_id, "w9:t1");
   assert.ok(calls.indexOf(tab) < calls.indexOf(closed), "the worker's tab exists before the shell tab goes");
 
-  // release goes through herdr when it made the workspace.
   const rel = await release("bob", {});
   assert.deepEqual(rel.worktree, { path, branch: "feat/bob", kept: false, removed: true });
   assert.ok(calls.some((c) => c.method === "worktree.remove" && c.params.workspace_id === "w9" && c.params.force === false));
@@ -188,9 +179,7 @@ test("--worktree PATH reuses an existing checkout and records it as not created 
   assert.deepEqual(r.worker.worktree, { path, branch: "mine", base, created_by_pack: false, repo });
   assert.equal(r.worker.cwd, path);
   assert.ok(!calls.some((c) => c.method === "worktree.create"));
-  // A second worker cannot share it.
   await assert.rejects(start("erin", { worktree: path }), /already works in .*never share a working tree/);
-  // Release, even with --remove-worktree, leaves a checkout pack-leader did not create.
   const rel = await release("dave", { removeWorktree: true });
   assert.equal(rel.worktree!.removed, false);
   assert.equal(rel.worktree!.kept, true);

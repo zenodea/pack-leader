@@ -1,6 +1,3 @@
-// Adoption of existing herdr agents: safety checks, explicit context, and
-// ownership-aware lifecycle behavior. These tests are written but intentionally
-// not executed until the integration verification phase.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -16,7 +13,6 @@ import type { State, Task, Worker } from "../src/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-adoption-"));
 const sock = join(dir, "herdr.sock");
-// Quotes and spaces pin shell-safe assignment quoting in the explicit preamble.
 const stateDir = join(dir, "state 'quoted'");
 process.env.HERDR_PLUGIN_STATE_DIR = stateDir;
 process.env.HERDR_SOCKET_PATH = sock;

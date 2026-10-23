@@ -1,5 +1,3 @@
-// Optional tooling: npm install --no-save --package-lock=false playwright
-// Then: npx playwright install chromium && node scripts/capture-previews.mjs
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

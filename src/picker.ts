@@ -1,6 +1,3 @@
-// A searchable list for the terminal: type to filter, arrows or ctrl+j/k to
-// move, enter to take the highlighted entry (or the typed text when nothing
-// matches), esc to cancel. Used by `pack-leader settings`.
 import { emitKeypressEvents } from "node:readline";
 import { bold, dim, fg, inverse, pad, screen, truncate, width } from "./ansi.ts";
 
@@ -33,7 +30,6 @@ export function fuzzyFilter(query: string, items: PickItem[]): PickItem[] {
 
 export type PickOptions = { title: string; items: PickItem[]; current?: string | null; allowCustom?: boolean; hint?: string; nested?: boolean };
 
-/** Resolves to the chosen value, the typed text when `allowCustom` and nothing matched, or undefined on cancel. */
 export function pick(o: PickOptions): Promise<string | undefined> {
   const out = process.stdout;
   const inp = process.stdin;

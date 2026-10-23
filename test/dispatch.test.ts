@@ -1,5 +1,3 @@
-// Dispatch records and the release archive, against a fake herdr socket (as in
-// inbox.test.ts) and a temp state dir.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -56,7 +54,6 @@ beforeEach(() => {
 const prompts = () => calls.filter((c) => c.method === "agent.prompt");
 const SCREEN = "line one\nline two\n$ pack-leader done --outcome succeeded";
 
-/** A herdr that starts agents in new tabs, takes prompts, and shows SCREEN. */
 const fakeHerdr: Handler = (method, params) => {
   switch (method) {
     case "agent.list": return { agents: [] };
@@ -68,7 +65,7 @@ const fakeHerdr: Handler = (method, params) => {
     case "tab.close": return {};
     case "agent.read": return { read: { text: SCREEN, source: params.source } };
     case "agent.wait": return { agent: { agent_status: "idle" } };
-    default: throw new Error(`unexpected ${method}`); // agent.get included: no startup dialog to clear
+    default: throw new Error(`unexpected ${method}`);
   }
 };
 
@@ -121,7 +118,6 @@ test("redispatch of a failed task records attempt 2 retrying the first; start --
   assert.equal(d2.preamble, prompts()[0]!.params.text);
   assert.match(d2.preamble, new RegExp(`--dispatch ${again.dispatch_id}`));
 
-  // A new task on the same worker is not a retry.
   await done({ run_id: "r1", worker: "bob", task_id: r.task.id, dispatch_id: again.dispatch_id }, { outcome: "failed", summary: "y", files: [], reportPath: null });
   const fresh = await redispatch(load().runs.r1!, "bob", undefined, "other work");
   assert.equal(load().dispatches![fresh.dispatch_id]!.retry_of, undefined);
@@ -157,7 +153,6 @@ test("release archives the screen before closing the tab; worker read falls back
   assert.equal(read.source, "recent_unwrapped");
   assert.ok(read.lines >= 1000, "asks for a long history");
 
-  // bob is gone: `worker read` serves the archive and says so.
   const viaName = JSON.parse((await cli("worker", "read", "bob")).stdout);
   assert.equal(viaName.source, "archive");
   assert.equal(viaName.dispatch_id, id);
@@ -209,7 +204,7 @@ test("sync settles the dispatch of a worker that exited owing a report", async (
   save(s);
   handler = (method) => (method === "agent.list" ? { agents: [] } : method === "pane.list" ? { panes: [] } : {});
   await sync();
-  await sync(); // a pane counts as gone after two consecutive syncs without it
+  await sync();
   const d = load().dispatches![r.task.dispatch_id!]!;
   assert.equal(load().tasks[r.task.id]!.status, "failed");
   assert.equal(d.outcome, "failed");

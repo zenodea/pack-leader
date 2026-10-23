@@ -1,7 +1,3 @@
-// The CLI as a child process (run create -> task create -> task update rules,
-// check --ack, worker show, done --report-path, the sidebar failure after run
-// create) and its pure parts (here(), workspaceOf, runCwd, refuseTransition).
-// No herdr: a temp state dir, a socket path nothing listens on, a fake herdr binary.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -20,7 +16,6 @@ const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
 
 after(() => rmSync(dir, { recursive: true, force: true }));
 
-/** A clean env: nothing from the herdr pane or run this test may itself run in. */
 function env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   return { PATH: process.env.PATH, HOME: dir, HERDR_PLUGIN_STATE_DIR: stateDir, HERDR_ENV: "1", HERDR_SOCKET_PATH: join(dir, "nobody.sock"), ...extra };
 }
@@ -46,8 +41,6 @@ function edit(fn: (s: State) => void): void {
   fn(s);
   save(s);
 }
-
-// ---- T8: the orchestrator flow through the real CLI ----------------------------------------------
 
 let runId = "";
 
@@ -86,7 +79,6 @@ test("T8/V1/B4: task create warns on a failed dependency; task update follows th
   assert.match(back.json.error, /succeeded; pass --force/);
   assert.equal(load().tasks[t1]!.status, "succeeded");
 
-  // An earlier attempt's worker, dispatch and outcome go when the task starts over.
   edit((s) => Object.assign(s.tasks[t1]!, { worker: "api", dispatch_id: "d9" }));
   const forced = await cli(["task", "update", t1, "--run", runId, "--status", "pending", "--force"]);
   assert.equal(forced.code, 0, forced.stderr);
@@ -114,8 +106,6 @@ test("refuseTransition: the whitelist", () => {
   assert.throws(() => refuseTransition(t("dispatched"), "failed", true), /dispatched/);
 });
 
-// ---- E3: check --ack ------------------------------------------------------------------------------
-
 test("E3: a bare --ack is a usage error; unknown ack ids are named in the one result", async () => {
   const bare = await cli(["check", "--run", runId, "--ack"]);
   assert.equal(bare.code, 1);
@@ -135,15 +125,11 @@ test("E3: a bare --ack is a usage error; unknown ack ids are named in the one re
   assert.equal(none.json.ack_unknown, undefined);
 });
 
-// ---- V8: --direction with a tab -------------------------------------------------------------------
-
 test("V8: worker start refuses --direction with --placement tab", async () => {
   const r = await cli(["worker", "start", "x", "--run", runId, "--spec", "s", "--placement", "tab", "--direction", "down"]);
   assert.equal(r.code, 1);
   assert.match(r.json.error, /--direction only applies to --placement split/);
 });
-
-// ---- E9 + V4: worker show and done ---------------------------------------------------------------
 
 const worker = (name: string, run: string, extra: Partial<Worker> = {}): Worker => ({
   name, run_id: run, kind: "claude", pane_id: "w1:p2", cwd: dir, task_id: null, dispatch_id: null, started_at: new Date().toISOString(),
@@ -178,10 +164,7 @@ test("V4: done stores --report-path resolved against the directory it runs in", 
   assert.equal(reportPath(undefined), null);
 });
 
-// ---- B8: the run survives a failure after it was created ------------------------------------------
-
 test("B8: run create prints the run even when recording the sidebar fails", { timeout: 20_000 }, async () => {
-  // A fake herdr that opens the "sidebar" and, in doing so, holds the state lock: the update that records it times out.
   const bin = join(dir, "fake-herdr");
   writeFileSync(bin, `#!/bin/sh\nif [ "$1" = plugin ]; then mkdir -p "${join(stateDir, "state.lock")}"; echo '{"result":{"pane":{"pane_id":"w1:p9"}}}'; fi\nexit 0\n`);
   chmodSync(bin, 0o755);
@@ -199,8 +182,6 @@ test("B8: run create prints the run even when recording the sidebar fails", { ti
   }
 });
 
-// ---- T10 / E6: here() and workspaceOf --------------------------------------------------------------
-
 test("T10: here() prefers the plugin context JSON over the pane env", () => {
   const h = here(
     {
@@ -212,7 +193,6 @@ test("T10: here() prefers the plugin context JSON over the pane env", () => {
     "/proc-cwd",
   );
   assert.deepEqual(h, { paneId: "w2:p3", workspaceId: "w2", tabId: "w1:t1", cwd: "/ctx" });
-  // focused_workspace_id and workspace_cwd are the second choices.
   const h2 = here({ HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_workspace_id: "w4", workspace_cwd: "/ws" }), HERDR_WORKSPACE_ID: "w1" }, "/proc-cwd");
   assert.equal(h2.workspaceId, "w4");
   assert.equal(h2.cwd, "/ws");
@@ -223,7 +203,6 @@ test("T10: here() treats malformed or non-object context JSON as none", () => {
     const h = here({ HERDR_PLUGIN_CONTEXT_JSON: bad, HERDR_PANE_ID: "w1:p1", HERDR_WORKSPACE_ID: "w1" }, "/proc-cwd");
     assert.deepEqual(h, { paneId: "w1:p1", workspaceId: "w1", tabId: null, cwd: "/proc-cwd" }, bad);
   }
-  // Empty strings count as absent.
   assert.equal(here({ HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_id: "" }), HERDR_PANE_ID: "w1:p1" }, "/").paneId, "w1:p1");
 });
 

@@ -1,6 +1,3 @@
-// Bounded SSH stdio transport and worker-only callback relay for remote hosts.
-// SSH is the trust boundary: BatchMode and strict host-key checking are mandatory;
-// no password, key material, TCP listener, or arbitrary remote command is accepted.
 import { spawn } from "node:child_process";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createConnection } from "node:net";
@@ -42,7 +39,6 @@ function shellQuote(value: string): string {
 
 type SshResult = { stdout: string; stderr: string };
 
-/** Invoke exactly one executable plus an internal fixed subcommand; argv is never shell-interpolated locally. */
 export function sshStdio(o: { target: string; executable: string; subcommand: "__remote-rpc" | "__remote-callback"; input: string; timeoutMs: number }): Promise<SshResult> {
   const target = validateSshTarget(o.target);
   if (!o.executable || /[\u0000-\u001f\u007f]/.test(o.executable)) throw new RemoteError("invalid_host_profile", "remote executable contains invalid characters");
@@ -74,7 +70,6 @@ export function sshStdio(o: { target: string; executable: string; subcommand: "_
       child.stdin.off("error", onStdinError);
       child.off("error", onChildError);
       child.off("close", onClose);
-      // Keep one inert listener so a late OS-level kill error cannot become unhandled.
       child.on("error", ignoreChildError);
     };
     const destroyPipes = () => {
@@ -97,8 +92,6 @@ export function sshStdio(o: { target: string; executable: string; subcommand: "_
       child.kill("SIGTERM");
       killTimer = setTimeout(() => {
         child.kill("SIGKILL");
-        // A ProxyCommand or other descendant may still own the inherited pipe FDs.
-        // Do not depend on ChildProcess's close event to release local streams.
         pipeTimer = setTimeout(destroyPipes, 250);
       }, 500);
     };
@@ -146,7 +139,6 @@ export function sshStdio(o: { target: string; executable: string; subcommand: "_
   });
 }
 
-/** The local process's active profile determines remote herdr routing; callers establish it from a worker snapshot. */
 export async function remoteHerdr<T = any>(host: HostProfile, method: string, params: Record<string, unknown>, timeoutMs = 15_000): Promise<T> {
   if (!REMOTE_METHODS.has(method)) throw new RemoteError("remote_method_denied", `remote herdr method ${method} is not allowed`);
   const profile = validateHostSnapshot(host);
@@ -164,7 +156,6 @@ export async function remoteHerdr<T = any>(host: HostProfile, method: string, pa
   return reply.result as T;
 }
 
-/** Read the one bounded JSON request delivered to a hidden helper over SSH stdin. */
 export async function readStdinJson(maxBytes = MAX_REQUEST): Promise<any> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -181,7 +172,6 @@ export async function readStdinJson(maxBytes = MAX_REQUEST): Promise<any> {
   }
 }
 
-/** Remote-side hidden helper: execute one allowlisted herdr socket request and return a bounded JSON envelope. */
 export async function executeRemoteRpc(request: any): Promise<{ result?: unknown; error?: { code: string; message: string } }> {
   try {
     if (!request || typeof request !== "object" || !REMOTE_METHODS.has(request.method)) throw new RemoteError("remote_method_denied", `remote herdr method ${String(request?.method)} is not allowed`);
@@ -232,7 +222,6 @@ function socketRequest(socketPath: string | undefined, method: string, params: R
   });
 }
 
-/** Worker-side CLI callback forwarding. Only worker lifecycle/messaging verbs cross back to the leader. */
 export async function forwardWorkerCallback(argv: string[]): Promise<void> {
   const command = argv[0];
   if (!command || !CALLBACK_COMMANDS.has(command)) throw new RemoteError("remote_callback_denied", `remote worker callback does not allow ${command ?? "an empty command"}`);
@@ -262,7 +251,6 @@ export async function forwardWorkerCallback(argv: string[]): Promise<void> {
   process.exitCode = code;
 }
 
-/** Values for one callback flag, following parseArgs value consumption and stopping at native arguments. */
 export function callbackFlagValues(argv: string[], name: "run" | "worker" | "task" | "dispatch"): string[] {
   const flag = `--${name}`;
   const values: string[] = [];
@@ -287,7 +275,6 @@ export function callbackFlagValues(argv: string[], name: "run" | "worker" | "tas
   return values;
 }
 
-/** Guard the leader-side relay independently of the remote CLI's guard. */
 export function validateCallbackRequest(request: any): void {
   if (!request || typeof request !== "object" || Array.isArray(request)) throw new RemoteError("bad_callback_request", "callback request must be an object");
   if (!Array.isArray(request.argv) || request.argv.length < 1 || request.argv.some((a: unknown) => typeof a !== "string" || a.length > 64_000)) throw new RemoteError("bad_callback_request", "callback argv must be a string array");

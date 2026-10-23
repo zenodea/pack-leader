@@ -1,5 +1,3 @@
-// Safely attach supervision to an existing, idle herdr agent without taking
-// ownership of its pane, tab, checkout, or prior conversation.
 import { HerdrError, getAgent, getPane, listAgents, type AgentInfo, type PaneInfo } from "./herdr.ts";
 import { createDispatch, settleDispatch, taskDispatchIds } from "./dispatch.ts";
 import { startClaimIsFresh } from "./claims.ts";
@@ -32,7 +30,6 @@ type Claim = { task: Task; dispatchId: string; text: string; cwd: string; create
 const LIVE_ADOPTABLE = new Set(["idle", "done"]);
 function fail(code: string, message: string): never { throw new AdoptionError(code, message); }
 
-/** Resolve an exact name to one live pane and re-read both session and pane details. */
 async function inspectTarget(name: string, targetPane?: string): Promise<Target> {
   const listed = await listAgents();
   let matches = listed.filter((agent) => agent.name === name);
@@ -63,7 +60,6 @@ async function inspectTarget(name: string, targetPane?: string): Promise<Target>
   return { agent, pane };
 }
 
-/** herdr may include plugin ownership metadata not modeled by older clients. Fail closed when present. */
 function isPluginPane(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const row = value as Record<string, unknown>;
@@ -126,7 +122,6 @@ function assertClaim(state: State, runId: string, name: string, taskId: string, 
   protectPane(state, paneId, dispatchId);
 }
 
-/** Release an admission claim without disturbing any existing herdr resource. */
 async function rollbackAdmission(runId: string, name: string, taskId: string, dispatchId: string, created: boolean): Promise<void> {
   await update((state) => {
     const dispatch = state.dispatches?.[dispatchId];
@@ -150,7 +145,6 @@ function matchingDoneReceipt(state: State, attempt: AdoptionAttempt): Message | 
   );
 }
 
-/** Only an unsettled current claim or its exact persisted done receipt proves this attempt's outcome. */
 function adoptionAttemptState(state: State, attempt: AdoptionAttempt): AttemptState {
   const dispatch = state.dispatches?.[attempt.dispatchId];
   const task = state.tasks[attempt.taskId];
@@ -175,7 +169,6 @@ function taskFromReceipt(state: State, claim: Claim, attempt: AdoptionAttempt, r
     throw new AdoptionError("adoption_claim_revoked", `adoption dispatch ${attempt.dispatchId} has no persisted task outcome`);
   }
   if (task.dispatch_id === attempt.dispatchId && task.status === receipt.outcome) return task;
-  // The same task may already have a later retry; reconstruct this attempt from its persisted done receipt.
   return {
     ...claim.task,
     status: receipt.outcome,
@@ -191,7 +184,6 @@ function taskFromReceipt(state: State, claim: Claim, attempt: AdoptionAttempt, r
   };
 }
 
-/** Roll back only this active attempt; a matching done receipt is distinct from every other revocation. */
 async function rollbackPrompt(claim: Claim, attempt: AdoptionAttempt): Promise<"rolled_back" | "receipt" | "revoked"> {
   return update((state) => {
     const status = adoptionAttemptState(state, attempt);
@@ -210,17 +202,12 @@ async function rollbackPrompt(claim: Claim, attempt: AdoptionAttempt): Promise<"
   });
 }
 
-/**
- * Adopt a named existing session. Admission is a locked dispatch claim; final herdr
- * revalidation, worker registration and prompt are fenced against run close.
- */
 export async function adoptWorker(o: AdoptOptions): Promise<AdoptResult> {
   if (!WORKER_NAME.test(o.name)) fail("adoption_invalid_name", `worker name must match ${WORKER_NAME}`);
   if (Boolean(o.taskId) === Boolean(o.spec)) fail("adoption_invalid_request", `pass exactly one of --task ID or --spec TEXT`);
   if (o.spec !== undefined && !o.spec.trim()) fail("adoption_invalid_request", `--spec must not be empty`);
   if (o.title && !o.spec) fail("adoption_invalid_request", `--title only applies with --spec`);
 
-  // Refuse protected, absent, ambiguous and busy sessions before any state claim.
   const initial = await inspectTarget(o.name, o.targetPane);
   const paneId = initial.agent.pane_id;
   const cwd = initial.agent.cwd ?? initial.agent.foreground_cwd ?? initial.pane.cwd;
@@ -341,7 +328,6 @@ export async function adoptWorker(o: AdoptOptions): Promise<AdoptResult> {
           throw new AdoptionError(code, `adopted worker "${o.name}" did not receive dispatch ${claim.dispatchId} (${reason}); its task claim was rolled back`);
         }
         if (rolled === "revoked") throw new AdoptionError("adoption_claim_revoked", `adoption dispatch ${claim.dispatchId} was revoked without a matching done receipt`);
-        // Only a matching done report is a valid receipt when this dispatch is no longer active.
       }
       await markPrompted(o.name, { runId: o.run.id, taskId: claim.task.id, dispatchId: claim.dispatchId });
       const state = load();

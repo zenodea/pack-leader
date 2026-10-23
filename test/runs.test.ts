@@ -1,5 +1,3 @@
-// Run lifecycle: prune, close, and the run scoping of read/write commands.
-// No herdr: a temp state dir and a fake herdr socket, as in inbox.test.ts.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -65,7 +63,6 @@ const task = (id: string, runId: string, status: Task["status"] = "pending", wor
 const worker = (name: string, runId: string, extra: Partial<Worker> = {}): Worker =>
   ({ name, run_id: runId, kind: "claude", pane_id: `w1:${name}`, cwd: "/", task_id: null, dispatch_id: null, started_at: "t", last_status: "idle", last_seq: 0, last_seen: "t", owns_pane: true, retained: false, ...extra });
 
-/** Active r0 (old), closed c1..c8 (closed 1..8 days ago), each with a task, worker, message and two foreign record kinds. */
 function synthetic(): State {
   const s = emptyState();
   const bag = s as any;
@@ -139,10 +136,7 @@ test("prune: --all deletes every closed run whatever --keep says, never an activ
   assert.deepEqual(pruneRuns(s, { all: true, now: NOW }), { runs: [], removed: {} });
 });
 
-// ---- the CLI ------------------------------------------------------------------
-
 const root = resolve(import.meta.dirname, "..");
-/** The real CLI in a child process; async so the fake herdr server in this process can answer it. */
 function cli(...argv: string[]): Promise<{ code: number; json: any; stderr: string; stdout: string }> {
   const env: NodeJS.ProcessEnv = { ...process.env, HERDR_PLUGIN_STATE_DIR: stateDir, HERDR_SOCKET_PATH: sock };
   for (const k of ["PACK_RUN_ID", "PACK_ROLE", "PACK_WORKER", "HERDR_PANE_ID", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_PLUGIN_ID", "HERDR_PLUGIN_CONTEXT_JSON"]) delete env[k];
@@ -237,9 +231,6 @@ test("cli: status lists active runs and counts closed ones; --all lists closed t
   assert.equal(one.json.runs, undefined);
 });
 
-// ---- run close ----------------------------------------------------------------
-
-/** herdr where every pane in `alive` exists and can be closed. */
 const herdrWith = (alive: Set<string>): Handler => (method, params) => {
   if (method === "pane.get") {
     if (!alive.has(params.pane_id)) throw new Error(`no pane ${params.pane_id}`);

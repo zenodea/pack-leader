@@ -109,7 +109,7 @@ test("sync recovers a followup claim when the sending CLI dies before prompt acc
       promptCount++;
       if (promptCount === 1) {
         promptArrived();
-        return new Promise(() => {}); // backend received the request but never accepted/applied it
+        return new Promise(() => {});
       }
       return {};
     }
@@ -120,7 +120,6 @@ test("sync recovers a followup claim when the sending CLI dies before prompt acc
 
   const sender = spawn(process.execPath, ["--no-warnings", cli, "send", "bob", "must survive"], { env: workerEnv(), stdio: "ignore" });
   t.after(() => { if (sender.exitCode === null && sender.signalCode === null) sender.kill("SIGKILL"); });
-  // Event-driven barrier: the sender has persisted its claim and the fake backend has received prompt.
   await waitFor(arrived, "sender never reached fake herdr");
   const claimed = load().messages.find((m) => m.type === "followup")!;
   assert.ok(claimed.delivery_claim, "in-flight delivery is durably represented as a claim");

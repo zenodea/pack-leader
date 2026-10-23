@@ -1,5 +1,3 @@
-// Remote execution-host coverage uses fake SSH executables and local Unix-socket herdr fixtures.
-// These tests are intentionally authored but MUST NOT be executed until the integration verification phase.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -169,7 +167,6 @@ function cli(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; st
 }
 
 async function waitForAsk(): Promise<{ id: string; body: string }> {
-  // Startup deliberately watches for late dialogs for three seconds before prompting.
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     const ask = load().messages.find((message) => message.type === "ask" && !message.acked);
@@ -265,7 +262,6 @@ test("remote start routes prompts, ask/reply and done through the leader callbac
   assert.equal(followup.delivered, true);
   assert.ok(calls.a.some((request) => request.method === "agent.prompt" && String(request.params.text).includes("inspect this result")));
 
-  // In-flight workers use their profile snapshot after the editable profile is removed.
   await removeHost("alpha");
   const released = await releaseWorker(run, "remote", {});
   assert.equal(released.closed_tab, "remote-ws:t1");
@@ -632,7 +628,7 @@ test("remote followup ambiguity persists across sync and reconciles without dupl
     assert.ok(stored.delivery_unknown, "unknown receipt is durable and remains owed");
     assert.equal(stored.delivery_claim, undefined);
 
-    await sync(); // another sender/sync while transport remains down
+    await sync();
     const inboxUrl = pathToFileURL(resolve(import.meta.dirname, "..", "src", "inbox.ts")).href;
     const restartedSync = await new Promise<{ error: Error | null; stderr: string }>((resolveChild) => {
       execFile(process.execPath, ["--no-warnings", "--input-type=module", "-e", `import { sync } from ${JSON.stringify(inboxUrl)}; await sync();`], {
@@ -804,7 +800,6 @@ test("remote release fences delayed archive/close against redispatch", { timeout
     (value) => ({ value }),
     (error: Error) => ({ error }),
   );
-  // Keep archive and close pending while the competing operation attempts admission.
   await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   allowArchive.resolve();
   await closeStarted.promise;
@@ -906,7 +901,6 @@ test("SSH teardown closes inherited escaped pipes after timeout and output overf
       assert.equal(result.error, null, result.stderr || result.error?.message);
       assert.deepEqual(JSON.parse(result.stdout.trim()), { code: expectedCode });
     } finally {
-      // The fake detached holder intentionally survives its SSH parent; never leak it from the regression.
       removeHolder();
     }
   }

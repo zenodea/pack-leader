@@ -1,5 +1,3 @@
-// Start-admission regressions for exclusive --worktree checkout ownership.
-// All herdr traffic is fake and all Git repositories live in this test's temp dir.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -79,7 +77,6 @@ function defaultHerdr(): Handler {
   };
 }
 
-/** Gate tab creation so tests hold a start after its locked admission, without sleeps. */
 function tabBarrier(expected: number) {
   let arrivals = 0;
   let announce!: () => void;
@@ -92,8 +89,6 @@ function tabBarrier(expected: number) {
     async wait() {
       arrivals++;
       if (arrivals === expected) announce();
-      // If an incorrectly admitted extra start arrives, free everyone so the test fails
-      // with assertions instead of hanging behind its own barrier.
       if (arrivals > expected) open();
       await gate;
     },
@@ -227,7 +222,6 @@ test("a failed start and an expired unsettled claim release their checkout reser
   save(state);
   await releaseWorker(load().runs.r1!, "bob", {});
 
-  // A process killed before it records a worker eventually loses only its own claim.
   const s = load();
   const staleStartedAt = new Date(Date.now() - START_CLAIM_MS - 1000).toISOString();
   s.dispatches!.d999 = {

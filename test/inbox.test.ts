@@ -1,5 +1,3 @@
-// Runs without herdr: the state dir is a temp dir and a tiny fake herdr
-// server answers on a temp socket, scripted per test.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -91,8 +89,6 @@ test("pruning drops acked heartbeats first and never an unacked message", async 
   assert.ok(!ids.includes("hb1000"), "oldest acked heartbeat dropped");
   assert.ok(ids.includes("ask0") && ids.includes("done0") && ids.includes("note1"), "unacked and non-heartbeat kept");
 
-  // No acked heartbeats left: the oldest other acked message goes. (send() with the
-  // agent unreachable queues an unacked followup, so the new message itself is kept.)
   const s2 = load();
   for (const m of s2.messages) if (m.type === "heartbeat") m.acked = false;
   save(s2);
@@ -102,7 +98,6 @@ test("pruning drops acked heartbeats first and never an unacked message", async 
   assert.ok(!ids.includes("note1"));
   assert.ok(ids.includes("ask0") && ids.includes("done0"));
 
-  // Nothing acked at all: the cap is exceeded rather than losing an unacked message.
   const s3 = load();
   for (const m of s3.messages) m.acked = false;
   save(s3);
@@ -282,7 +277,6 @@ test("send reverts the claim when the prompt fails, leaving it queued", async ()
   assert.equal(stored.delivered, false);
   assert.equal(stored.acked, false);
   assert.equal(stored.delivery_claim, undefined);
-  // Still queued: the worker's inbox picks it up.
   assert.deepEqual((await inbox(ctx)).map((m) => m.id), [r.message.id]);
 });
 
@@ -323,7 +317,6 @@ test("concurrent syncs deliver a queued followup exactly once; a claimed one is 
   await sync();
   assert.equal(prompts().length, 1, "already delivered: not prompted again");
 
-  // A followup the worker already read via `pack-leader inbox` (acked, delivered) is not re-sent either.
   const s2 = load();
   s2.messages.push(msg("f2", "followup", true, { delivered: true }));
   save(s2);

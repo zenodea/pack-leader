@@ -28,7 +28,6 @@ test("width: wide glyphs take two cells, combining marks and joiners none", () =
 test("truncate cuts wide text by cells and never splits a grapheme", () => {
   assert.equal(truncate("日本語です", 5), "日本…" + CLOSE);
   assert.equal(width(truncate("日本語です", 5)), 5);
-  // No room for a whole wide glyph before the ellipsis: one cell short, never over.
   assert.equal(truncate("日本語です", 4), "日…" + CLOSE);
   assert.equal(width(truncate("日本語です", 4)), 3);
   assert.equal(truncate("ab👩‍💻cd", 5), "ab👩‍💻…" + CLOSE);
@@ -68,7 +67,6 @@ test("truncate drops escape sequences after the cut", () => {
 
 test("truncate inside an enclosing style keeps that style for the rest of the line", () => {
   const line = fg.yellow(truncate("abcdef", 3) + " tail");
-  // The caller's yellow is still open after the truncated part: no \x1b[0m in between.
   assert.equal(line, "\x1b[33mab…" + CLOSE + " tail\x1b[39m");
 });
 

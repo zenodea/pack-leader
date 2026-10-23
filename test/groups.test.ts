@@ -1,5 +1,3 @@
-// Group addresses, worker notes and worker-to-worker sends. Same harness as
-// inbox.test.ts: a temp state dir and a fake herdr server on a temp socket.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -56,10 +54,6 @@ function worker(name: string, pane: string, kind = "claude", run = "r1"): Worker
   return { name, run_id: run, kind, pane_id: pane, cwd: "/", task_id: null, dispatch_id: null, started_at: new Date().toISOString(), last_status: "idle", last_seq: 1, last_seen: "t", owns_pane: true, retained: false };
 }
 
-/**
- * Run r1 (orchestrator pane w1:p1): api (claude, dispatched), web (codex,
- * dispatched), docs (claude, settled). Run r2: other (claude, dispatched).
- */
 function base(): State {
   const s = emptyState();
   const run = (id: string, pane: string | null) => ({ id, objective: "o", status: "active" as const, created_at: "t", orchestrator: { pane_id: pane, workspace_id: null, tab_id: null, cwd: "/" } });
@@ -81,7 +75,6 @@ function base(): State {
   return s;
 }
 
-/** Live statuses by pane for agent.get / agent.list; prompts succeed. */
 function live(status: Record<string, string>): Handler {
   const agents = Object.entries(status).map(([pane_id, agent_status]) => ({ pane_id, agent_status, state_change_seq: 1 }));
   const paneOf: Record<string, string> = { api: "w1:p2", web: "w1:p3", docs: "w1:p4", other: "w2:p1" };
@@ -116,8 +109,8 @@ test("@all expands only to workers with a dispatched task", async () => {
 
 test("@idle uses live herdr status, not the recorded one, and delivers at once", async () => {
   const s = base();
-  s.workers.api!.last_status = "working"; // stale: herdr now says idle
-  s.workers.docs!.last_status = "idle"; // stale: herdr now says working
+  s.workers.api!.last_status = "working";
+  s.workers.docs!.last_status = "idle";
   save(s);
   handler = live({ "w1:p2": "idle", "w1:p3": "done", "w1:p4": "working" });
   const r = await sendTo(load().runs.r1!, "@idle", "status?", false);
@@ -189,7 +182,6 @@ test("note surfaces in check by default and nudges the orchestrator once", async
   const other = await check(load().runs.r1!, { wait: false, timeoutMs: 0, types: ["done", "ask"] });
   assert.equal(other.result, "empty");
 
-  // Later checks and syncs do not nudge again.
   await sync();
   assert.equal(prompts().filter((p) => p.params.target === "w1:p1").length, 1);
 });

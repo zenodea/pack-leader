@@ -1,5 +1,3 @@
-// `run use`, `worker start|prompt --dry-run` and `worker read --source transcript`.
-// The CLI as a child process; the herdr socket points nowhere.
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

@@ -1,5 +1,3 @@
-// Dispatch records: what each hand-over of a task said and how it ended, and
-// the worker's screen saved on release so its transcript outlives the tab.
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { herdr } from "./herdr.ts";
@@ -10,7 +8,6 @@ import type { HostProfile } from "./hosts.ts";
 
 export const archiveDir = (runId: string) => join(stateDir, "archive", runId);
 
-/** Failed attempts in a row after which a task takes no new dispatch (`PACK_MAX_FAILED_ATTEMPTS`, 0 off). */
 export const MAX_FAILED_ATTEMPTS = 3;
 
 export class RetryLimitError extends Error {
@@ -22,7 +19,6 @@ export class RetryLimitError extends Error {
   }
 }
 
-/** The task's failed dispatches since it was last reset to pending: the attempts that count toward the limit. */
 export function failedStreak(state: State, task: Task): string[] {
   const since = task.retry_reset_at ? Date.parse(task.retry_reset_at) : -Infinity;
   return Object.values(state.dispatches ?? {})
@@ -30,10 +26,6 @@ export function failedStreak(state: State, task: Task): string[] {
     .map((d) => d.id);
 }
 
-/**
- * A task that failed MAX_FAILED_ATTEMPTS times in a row takes no further dispatch: a
- * fourth try of the same spec rarely goes differently. A coordinator decision resets it.
- */
 export function assertRetryBudget(state: State, task: Task): void {
   const raw = process.env.PACK_MAX_FAILED_ATTEMPTS;
   const limit = raw !== undefined && Number.isInteger(Number(raw)) && Number(raw) >= 0 ? Number(raw) : MAX_FAILED_ATTEMPTS;
@@ -44,10 +36,6 @@ export function assertRetryBudget(state: State, task: Task): void {
   }
 }
 
-/**
- * Record a dispatch where its id was minted. A dispatch of a task that failed
- * before is a retry of that task's last dispatch.
- */
 export function createDispatch(state: State, d: { id: string; task: Task; worker: string; preamble: string; cwd: string; worktreePath?: string; paneId?: string; executionHost?: HostProfile }): Dispatch {
   assertTaskGatesApproved(state, d.task.id);
   assertRetryBudget(state, d.task);
@@ -63,7 +51,6 @@ export function createDispatch(state: State, d: { id: string; task: Task; worker
     ...(d.worktreePath ? { worktree_path: d.worktreePath } : {}),
     ...(d.paneId ? { pane_id: d.paneId } : {}),
     ...(d.executionHost ? { execution_host: { ...d.executionHost } } : {}),
-    // Reusing a registered session never routes it again.
     ...(state.workers[d.worker]?.run_id === d.task.run_id ? {
       runtime: { kind: state.workers[d.worker]!.kind, model: state.workers[d.worker]!.model ?? null, thinking: state.workers[d.worker]!.thinking ?? null },
       routing: { provider: "off" as const, status: "bypass" as const, reason: "session_reused" as const, elapsed_ms: 0 },
@@ -75,10 +62,8 @@ export function createDispatch(state: State, d: { id: string; task: Task; worker
   return rec;
 }
 
-/** Kept as a re-export for lifecycle callers; gates use the cycle-free helper directly. */
 export { startClaimIsFresh } from "./claims.ts";
 
-/** Settle a dispatch once; a later settle (a done after a forced release) does not overwrite it. */
 export function settleDispatch(state: State, id: string | null | undefined, outcome: "succeeded" | "failed"): void {
   const d = id ? state.dispatches?.[id] : undefined;
   if (!d || d.settled_at) return;
@@ -87,7 +72,6 @@ export function settleDispatch(state: State, id: string | null | undefined, outc
   delete d.claim_until;
 }
 
-/** A dispatch as `list`/`show` print it: the preamble replaced by its length. */
 export function dispatchView(d: Dispatch) {
   const { preamble, ...rest } = d;
   return { ...rest, preamble_length: preamble.length };
@@ -96,14 +80,8 @@ export function dispatchView(d: Dispatch) {
 export const taskDispatchIds = (state: State, taskId: string): string[] =>
   Object.values(state.dispatches ?? {}).filter((d) => d.task_id === taskId).sort((a, b) => idSeq(a.id) - idSeq(b.id)).map((d) => d.id);
 
-/** How much history to ask herdr for: the whole session as far as herdr keeps it. */
 const ARCHIVE_LINES = 10_000;
 
-/**
- * The fullest screen text herdr will give: unwrapped scrollback at a high line
- * count, then (herdr refuses long reads of a busy alternate-screen agent) its
- * default recent window, then the visible screen.
- */
 export async function readFullScreen(target: string): Promise<{ text: string; source: string }> {
   const tries: { source: string; lines?: number; label: string }[] = [
     { source: "recent_unwrapped", lines: ARCHIVE_LINES, label: `recent_unwrapped:${ARCHIVE_LINES}` },
@@ -124,7 +102,6 @@ export async function readFullScreen(target: string): Promise<{ text: string; so
   throw new Error(errors.join("; "));
 }
 
-/** Write a worker's screen to `<stateDir>/archive/<run>/<worker>-<dispatch>.txt` (dir 0700, file 0600). */
 export async function archiveScreen(p: { run_id: string; worker: string; dispatch_id: string | null; target: string }): Promise<{ path: string; source: string }> {
   const { text, source } = await readFullScreen(p.target);
   const dir = ensureDir(archiveDir(p.run_id));
@@ -135,7 +112,6 @@ export async function archiveScreen(p: { run_id: string; worker: string; dispatc
   return { path, source };
 }
 
-/** The archive to read: a given dispatch's, or the newest one for a worker name in the run. */
 export function findArchive(state: State, o: { runId: string | null; worker?: string; dispatchId?: string }): Dispatch | null {
   if (o.dispatchId) {
     const d = state.dispatches?.[o.dispatchId];
@@ -148,7 +124,6 @@ export function findArchive(state: State, o: { runId: string | null; worker?: st
   return mine[0] ?? null;
 }
 
-/** An archive's text, the last `lines` of it (all with 0), as `worker read` prints it. */
 export function readArchive(d: Dispatch, lines: number) {
   const all = readFileSync(d.archive_path!, "utf8").replace(/\n$/, "").split("\n");
   const text = lines > 0 ? all.slice(-lines).join("\n") : all.join("\n");

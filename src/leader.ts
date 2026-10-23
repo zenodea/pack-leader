@@ -1,7 +1,5 @@
 import { resolveRun, type Run, type State } from "./state.ts";
 
-/** Navigation alone also recognizes the worker's human-facing bar. Do not extend
- * task/callback authority, or match remote pane IDs in the local Herdr session. */
 export function resolveLeaderRun(
   state: State,
   opts: { runId?: string; paneId?: string | null; workspaceId?: string | null },
@@ -10,7 +8,6 @@ export function resolveLeaderRun(
   if (!opts.runId && !env.PACK_RUN_ID && opts.paneId) {
     const active = Object.values(state.runs).filter((run) => run.status === "active");
     const workers = Object.values(state.workers).filter((worker) => !worker.execution_host && state.runs[worker.run_id]?.status === "active");
-    // Preserve resolveRun's existing direct-pane precedence if stale records collide.
     const direct = active.some((run) => run.orchestrator.pane_id === opts.paneId || run.sidebar_pane_id === opts.paneId || run.observer?.pane_id === opts.paneId)
       || workers.some((worker) => worker.pane_id === opts.paneId);
     if (!direct) {

@@ -1,5 +1,3 @@
-// Liveness verdicts, stall detection, next_action and the check --wait
-// heartbeat, against the same kind of fake herdr socket as inbox.test.ts.
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -53,7 +51,6 @@ beforeEach(() => {
 const PANE = "w1:p2";
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
-/** bob owes a report on t1 (dispatch d1), was last seen just now, and herdr last saw it working at seq 5. */
 function base(): State {
   const s = emptyState();
   s.runs.r1 = { id: "r1", objective: "o", status: "active", created_at: "t", orchestrator: { pane_id: null, workspace_id: null, tab_id: null, cwd: "/" } };
@@ -62,7 +59,6 @@ function base(): State {
   return s;
 }
 
-/** herdr answers with these agents and panes. */
 function herdrSees(o: { agent: boolean; pane: boolean; status?: string; seq?: number }) {
   handler = (method) => {
     if (method === "agent.list") return { agents: o.agent ? [{ pane_id: PANE, agent_status: o.status ?? "working", state_change_seq: o.seq ?? 5 }] : [] };
@@ -107,7 +103,6 @@ test("agent present in its pane is live; gone past the start grace is unverifiab
   assert.deepEqual(row.attention, { categories: ["unverifiable"], requires_action: true });
   assert.deepEqual(row.next_action, ["pack-leader", "worker", "read", "bob"]);
 
-  // Even acked, the same dispatch does not raise it again; the agent coming back makes it live.
   const s2 = load();
   for (const m of s2.messages) m.acked = true;
   save(s2);
@@ -141,7 +136,6 @@ test("a pane missing once changes nothing; missing twice running is exited and f
   assert.deepEqual(attention().map((m) => m.status), ["exited"]);
   assert.deepEqual(nextAction(s, s.workers.bob!), ["pack-leader", "worker", "release", "bob", "--force"]);
 
-  // Still the next step after the alert is acked: the dead worker holds a failed-by-exit task.
   for (const m of s.messages) m.acked = true;
   save(s);
   assert.deepEqual(nextAction(load(), load().workers.bob!), ["pack-leader", "worker", "release", "bob", "--force"]);
@@ -186,7 +180,6 @@ test("silence past PACK_STALL_MS raises stalled once; a heartbeat clears it so a
   await sync();
   assert.deepEqual(attention().map((m) => m.status), ["stalled", "stalled"]);
 
-  // PACK_STALL_MS raises the threshold.
   process.env.PACK_STALL_MS = String(60 * 60_000);
   try {
     const s3 = base();

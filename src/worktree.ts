@@ -1,29 +1,18 @@
-// A git worktree per worker, so two workers never share a working tree. The
-// checkout lives next to the repo (`<repo parent>/<repo>-wt/<worker>`, or under
-// PACK_WORKTREE_DIR), never inside it. herdr's own worktree API is preferred so
-// the checkout shows up as a herdr workspace; plain `git worktree` is the fallback.
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { HerdrError } from "./herdr.ts";
 import type { WorktreeMode } from "./config.ts";
 
-/** What a worker's worktree is. Kept on the Worker, and in `state.worktrees` after release. */
 export type WorktreeInfo = {
   path: string;
-  /** null when the checkout is on a detached HEAD. */
   branch: string | null;
-  /** The commit the branch started from (new) or HEAD when it was adopted (existing). */
   base: string;
-  /** Pack Leader ran `worktree add` for it; only then may `release --remove-worktree` remove it. */
   created_by_pack: boolean;
-  /** The main checkout of the repository the worktree belongs to. */
   repo: string;
-  /** The herdr workspace that shows the worktree, when herdr created or opened it. */
   workspace_id?: string | null;
 };
 
-/** A worktree in `state.worktrees`, keyed by path: which start attempt owns its lease and whether it is still on disk. */
 export type WorktreeRecord = WorktreeInfo & {
   worker: string;
   run_id: string;
@@ -31,9 +20,7 @@ export type WorktreeRecord = WorktreeInfo & {
   created_at: string;
   released_at?: string;
   removed?: boolean;
-  /** Released with --keep-worktree: the sweep leaves it alone. */
   kept?: boolean;
-  /** Fail-closed pane/cleanup lifecycle; only a confirmed pane closure clears this. */
   cleanup_protection?: "release_in_progress" | "pane_kept" | "pane_close_failed" | "forgotten" | "abandoned";
 };
 
@@ -57,7 +44,6 @@ const gitOk = (cwd: string, args: string[]): boolean => {
 
 const real = (p: string) => (existsSync(p) ? realpathSync(p) : resolve(p));
 
-/** Canonical checkout identity for admission checks, including symlink aliases and not-yet-created paths. */
 export function worktreeIdentityPath(path: string): string {
   let candidate = resolve(path);
   const tail: string[] = [];
@@ -70,7 +56,6 @@ export function worktreeIdentityPath(path: string): string {
   return join(realpathSync(candidate), ...tail);
 }
 
-/** The top of the checkout containing `cwd`; a clear error when it is not in a git repository. */
 export function repoRoot(cwd: string): string {
   if (!existsSync(cwd)) throw new Error(`--worktree: ${cwd} does not exist`);
   try {
@@ -80,29 +65,20 @@ export function repoRoot(cwd: string): string {
   }
 }
 
-/** The main checkout of the repository, whichever of its worktrees `dir` is in. */
 function mainCheckout(dir: string): string {
   const common = git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   return basename(common) === ".git" ? dirname(common) : common;
 }
 
-/** Where new worktrees go: `$PACK_WORKTREE_DIR`, else a sibling of the repo, `<repo>-wt`. */
 export function worktreeParent(repo: string, env: NodeJS.ProcessEnv = process.env): string {
   return env.PACK_WORKTREE_DIR ? resolve(env.PACK_WORKTREE_DIR) : join(dirname(repo), `${basename(repo)}-wt`);
 }
 
 export const defaultBranch = (runId: string, worker: string) => `pack/${runId}/${worker}`;
 
-/**
- * Work out the worktree for `--worktree new|PATH` without touching anything, so a
- * bad repo, branch or path fails before a task, tab or checkout exists.
- * `created_by_pack` says whether it still has to be created.
- */
 export function planWorktree(o: { spec: string; cwd: string; runId: string; worker: string; base?: string; branch?: string; env?: NodeJS.ProcessEnv }): WorktreeInfo {
   if (o.spec === "new") {
     const top = repoRoot(o.cwd);
-    // The base is HEAD of the checkout at cwd; the location hangs off the main checkout,
-    // so workers started from inside a worktree still land next to the repo.
     const repo = mainCheckout(top);
     const ref = o.base ?? "HEAD";
     let base: string;
@@ -133,17 +109,14 @@ export function planWorktree(o: { spec: string; cwd: string; runId: string; work
   return { path: real(path), branch, base, created_by_pack: false, repo: mainCheckout(path) };
 }
 
-/** `git worktree add -b <branch> <path> <base>`: the fallback when herdr has no worktree API. */
 export function gitWorktreeAdd(info: WorktreeInfo): void {
   git(info.repo, ["worktree", "add", "-b", info.branch!, info.path, info.base]);
 }
 
-/** `git worktree remove` without --force: a checkout with uncommitted work is refused, not deleted. The branch stays. */
 export function gitWorktreeRemove(info: WorktreeInfo): void {
   git(info.repo, ["worktree", "remove", info.path]);
 }
 
-/** herdr answers a method it does not know with invalid_request "unknown variant". */
 export const isUnknownMethod = (err: unknown): boolean => (err as HerdrError)?.code === "invalid_request" && /unknown variant/.test((err as Error).message ?? "");
 
 export type WorktreeChoice = { worktree?: string; note?: string };

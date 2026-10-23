@@ -1,5 +1,3 @@
-// Opt-in, leader-only routing among user-approved profiles. No harness selection,
-// arbitrary endpoints, retries, or provider error text crosses this boundary.
 export type RouterProvider = "off" | "openai" | "jev";
 export type RoutingProfile = { model: string; thinking?: string | null; description: string };
 export type RoutingConfig = {
@@ -43,7 +41,6 @@ export function routerProvider(value: unknown): RouterProvider {
   return value;
 }
 
-/** Validate and copy before admission; never preserve credentials or endpoint fields. */
 export function validateRouting(value: unknown): RoutingConfig {
   if (!record(value)) invalid();
   fields(value, ["provider", "min_confidence", "timeout_ms", "kinds"]);
@@ -80,7 +77,6 @@ class RoutingFailure extends Error {
 }
 const safeIdentifier = (v: unknown): string | undefined => typeof v === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(v) ? v : undefined;
 
-/** One bounded request; every unsuccessful decision uses this kind's configured fallback. */
 export async function selectProfile(input: RoutingInput, deps: Dependencies = {}): Promise<Selection> {
   const config = input.config === undefined ? undefined : validateRouting(input.config);
   const provider = routerProvider(input.provider ?? config?.provider ?? "off");

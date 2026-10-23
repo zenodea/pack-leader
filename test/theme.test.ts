@@ -1,4 +1,3 @@
-// herdr's accent and selected-row colours out of config.toml, and the fallbacks.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

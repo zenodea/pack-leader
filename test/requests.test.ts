@@ -1,5 +1,3 @@
-// `--retry-request`: one durable identity per mutating command, replayed instead
-// of rerun, and `request show`. Runs the CLI as a child process without herdr.
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
