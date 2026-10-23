@@ -5,9 +5,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquire, emptyState, load, lockFor, lockIsStale, log, nextId, release, resolveRun as resolve, ready, save, unacked, update, type Run, type State, type Task } from "../src/state.ts";
+import { acquire, emptyState, load, lockFor, lockIsStale, log, nextId, release, resolveRun as resolve, ready, save, unacked, update, type Run, type State, type Task } from "../src/core/state.ts";
 
-const stateModule = fileURLToPath(new URL("../src/state.ts", import.meta.url));
+const stateModule = fileURLToPath(new URL("../src/core/state.ts", import.meta.url));
 
 function child(code: string, env: NodeJS.ProcessEnv = process.env): ChildProcess {
   const body = `const st = await import(${JSON.stringify(stateModule)});\n${code}`;

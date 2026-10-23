@@ -1,4 +1,4 @@
-import { resolveRun, type Run, type State } from "./state.ts";
+import { resolveRun, type Run, type State } from "../core/state.ts";
 
 export function resolveLeaderRun(
   state: State,

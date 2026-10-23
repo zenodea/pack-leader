@@ -1,8 +1,8 @@
 import { closeSync, openSync, readFileSync, renameSync, writeFileSync, fsyncSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { acquire, lockFor, release } from "./state.ts";
-import { configDir, ensureDir } from "./paths.ts";
-import { CodedError } from "./errors.ts";
+import { acquire, lockFor, release } from "../core/state.ts";
+import { configDir, ensureDir } from "../core/paths.ts";
+import { CodedError } from "../core/errors.ts";
 
 export type HostProfile = {
   name: string;

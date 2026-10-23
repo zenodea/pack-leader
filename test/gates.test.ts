@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { State, Task } from "../src/state.ts";
+import type { State, Task } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-gates-"));
 const sock = join(dir, "herdr.sock");
@@ -15,11 +15,11 @@ process.env.HERDR_PLUGIN_STATE_DIR = stateDir;
 process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_LEADER_BAR = "0";
 
-const { emptyState, load, ready, save, START_CLAIM_MS } = await import("../src/state.ts");
-const { assertTaskGatesApproved, createGate, resolveGate } = await import("../src/gates.ts");
-const { createDispatch } = await import("../src/dispatch.ts");
-const { redispatch, resendPreamble, startWorker } = await import("../src/workers.ts");
-const { pruneRuns } = await import("../src/runs.ts");
+const { emptyState, load, ready, save, START_CLAIM_MS } = await import("../src/core/state.ts");
+const { assertTaskGatesApproved, createGate, resolveGate } = await import("../src/core/gates.ts");
+const { createDispatch } = await import("../src/core/dispatch.ts");
+const { redispatch, resendPreamble, startWorker } = await import("../src/agents/workers.ts");
+const { pruneRuns } = await import("../src/core/runs.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("unexpected herdr request"); };

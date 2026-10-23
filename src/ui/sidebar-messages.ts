@@ -1,5 +1,5 @@
 import { bold, closeWithItalic, dim, fg, italic, truncate, width } from "./ansi.ts";
-import { unacked, type Message, type State } from "./state.ts";
+import { unacked, type Message, type State } from "../core/state.ts";
 
 export type MessageView = "unread" | "user";
 export type MessagePanel = {

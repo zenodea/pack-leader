@@ -6,9 +6,9 @@ import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { load, now, update } from "../src/state.ts";
+import { load, now, update } from "../src/core/state.ts";
 
-const stateModule = fileURLToPath(new URL("../src/state.ts", import.meta.url));
+const stateModule = fileURLToPath(new URL("../src/core/state.ts", import.meta.url));
 
 test("stale corrupt reader cannot quarantine a healthy replacement committed by update", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "pack-leader-corrupt-race-"));

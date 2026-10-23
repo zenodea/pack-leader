@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { State } from "../src/state.ts";
+import type { State } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-handoff-"));
 const sock = join(dir, "herdr.sock");
@@ -20,11 +20,11 @@ process.env.HERDR_SOCKET_PATH = sock;
 process.env.HERDR_PLUGIN_CONFIG_DIR = configDir;
 process.env.PACK_HANDOFF_SETTLE_MS = "0";
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { saveConfig } = await import("../src/config.ts");
-const { claudeSessionDir } = await import("../src/observer.ts");
-const { nudgeOrchestrator } = await import("../src/inbox.ts");
-const { claudeOrchestratorFile, contextTokens, handoffGate, lastToolCommand, resumeAfterHandoff, saveHandoff } = await import("../src/handoff.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { saveConfig } = await import("../src/core/config.ts");
+const { claudeSessionDir } = await import("../src/agents/observer.ts");
+const { nudgeOrchestrator } = await import("../src/messaging/inbox.ts");
+const { claudeOrchestratorFile, contextTokens, handoffGate, lastToolCommand, resumeAfterHandoff, saveHandoff } = await import("../src/agents/handoff.ts");
 const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;

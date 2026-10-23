@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { emitKeypressEvents } from "node:readline";
 import { bold, dim, fg, pad, screen, truncate, wrap } from "./ansi.ts";
-import { formatTokens, loadConfig, parseTokens, saveConfig, settingsOf, type Config, type KindDefaults, type Placement, type WorktreeMode } from "./config.ts";
+import { formatTokens, loadConfig, parseTokens, saveConfig, settingsOf, type Config, type KindDefaults, type Placement, type WorktreeMode } from "../core/config.ts";
 import { pick, type PickItem, type PickOptions } from "./picker.ts";
-import { DEFAULT_KIND } from "./workers.ts";
+import { DEFAULT_KIND } from "../agents/workers.ts";
 
 export const KINDS: PickItem[] = [
   { value: "claude", description: "Claude Code" },

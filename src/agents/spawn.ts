@@ -1,5 +1,5 @@
-import { agentPrompt, getAgent, labelPane, listAgents, logHerdrError, promptLanded, tabClose, tabCreate, HerdrError } from "./herdr.ts";
-import { log, WORKER_NAME } from "./state.ts";
+import { agentPrompt, getAgent, labelPane, listAgents, logHerdrError, promptLanded, tabClose, tabCreate, HerdrError } from "../herdr/herdr.ts";
+import { log, WORKER_NAME } from "../core/state.ts";
 import { planWorktree, type WorktreeInfo } from "./worktree.ts";
 import { clearStartupDialog, defaultAgentArgs, materializeWorktree, modelArgs, startWhenShellReady } from "./workers.ts";
 

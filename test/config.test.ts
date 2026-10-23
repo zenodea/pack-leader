@@ -11,7 +11,7 @@ const configFile = join(configDir, "config.json");
 mkdirSync(configDir, { recursive: true });
 process.env.HERDR_PLUGIN_CONFIG_DIR = configDir;
 
-const { defaultsFor, loadConfig, saveConfig } = await import("../src/config.ts");
+const { defaultsFor, loadConfig, saveConfig } = await import("../src/core/config.ts");
 const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
 
 after(() => rmSync(dir, { recursive: true, force: true }));

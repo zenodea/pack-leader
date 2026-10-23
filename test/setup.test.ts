@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Run } from "../src/state.ts";
+import type { Run } from "../src/core/state.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "pack-leader-setup-")));
 const sock = join(dir, "herdr.sock");
@@ -14,11 +14,11 @@ process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_LEADER_BAR = "0";
 delete process.env.PACK_WORKTREE_DIR;
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { startWorker } = await import("../src/workers.ts");
-const { runSetup, SETUP_MAX_LOG_BYTES, setupInProgress } = await import("../src/setup.ts");
-const { closeRun } = await import("../src/runs.ts");
-const { startClaimIsFresh } = await import("../src/dispatch.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { startWorker } = await import("../src/agents/workers.ts");
+const { runSetup, SETUP_MAX_LOG_BYTES, setupInProgress } = await import("../src/agents/setup.ts");
+const { closeRun } = await import("../src/core/runs.ts");
+const { startClaimIsFresh } = await import("../src/core/dispatch.ts");
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 

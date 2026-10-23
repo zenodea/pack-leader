@@ -4,14 +4,14 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { Run, State, Task } from "../src/state.ts";
+import type { Run, State, Task } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-hierarchy-"));
 const stateDir = join(dir, "state");
 process.env.HERDR_PLUGIN_STATE_DIR = stateDir;
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { taskTree } = await import("../src/hierarchy.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { taskTree } = await import("../src/core/hierarchy.ts");
 const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
 
 after(() => rmSync(dir, { recursive: true, force: true }));

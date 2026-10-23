@@ -6,10 +6,10 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { AgentInfo } from "../src/herdr.ts";
-import { parseArgs } from "../src/args.ts";
-import { validateCommandArgs } from "../src/command-args.ts";
-import type { State, Task, Worker } from "../src/state.ts";
+import type { AgentInfo } from "../src/herdr/herdr.ts";
+import { parseArgs } from "../src/cli/args.ts";
+import { validateCommandArgs } from "../src/cli/command-args.ts";
+import type { State, Task, Worker } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-adoption-"));
 const sock = join(dir, "herdr.sock");
@@ -18,13 +18,13 @@ process.env.HERDR_PLUGIN_STATE_DIR = stateDir;
 process.env.HERDR_SOCKET_PATH = sock;
 process.env.HERDR_ENV = "1";
 
-const { emptyState, load, nextId, now, save, update } = await import("../src/state.ts");
-const { createDispatch } = await import("../src/dispatch.ts");
-const { adoptWorker } = await import("../src/adoption.ts");
-const { createGate, resolveGate } = await import("../src/gates.ts");
-const { done } = await import("../src/inbox.ts");
-const { closeRun } = await import("../src/runs.ts");
-const { explicitWorkerContext, preamble, redispatch, releaseWorker, resendPreamble } = await import("../src/workers.ts");
+const { emptyState, load, nextId, now, save, update } = await import("../src/core/state.ts");
+const { createDispatch } = await import("../src/core/dispatch.ts");
+const { adoptWorker } = await import("../src/agents/adoption.ts");
+const { createGate, resolveGate } = await import("../src/core/gates.ts");
+const { done } = await import("../src/messaging/inbox.ts");
+const { closeRun } = await import("../src/core/runs.ts");
+const { explicitWorkerContext, preamble, redispatch, releaseWorker, resendPreamble } = await import("../src/agents/workers.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler;

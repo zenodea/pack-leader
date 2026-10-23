@@ -1,21 +1,21 @@
-import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, listPanes, logHerdrError, paneClose, paneSplit, paneSwap, pluginPaneOpen, promptLanded, PromptDeliveryUnknownError, isRemotePromptReceiptError, observePromptReceipt, setSplitRatio, tabClose, tabCreate, workspaceGet, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "./herdr.ts";
+import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, listPanes, logHerdrError, paneClose, paneSplit, paneSwap, pluginPaneOpen, promptLanded, PromptDeliveryUnknownError, isRemotePromptReceiptError, observePromptReceipt, setSplitRatio, tabClose, tabCreate, workspaceGet, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "../herdr/herdr.ts";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
-import { loadTheme } from "./theme.ts";
-import { placeInPack } from "./pack-layout.ts";
-import { dropUndelivered, envMs, EXITED_SUMMARY, touch } from "./inbox.ts";
+import { loadTheme } from "../ui/theme.ts";
+import { placeInPack } from "../herdr/pack-layout.ts";
+import { dropUndelivered, envMs, EXITED_SUMMARY, touch } from "../messaging/inbox.ts";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { herdrSocketPath, stateDir } from "./paths.ts";
-import { acquire, addTask, load, log, newTask, nextId, now, ready, release, START_CLAIM_MS, withRunStartFence, taskGateBlockers, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "./state.ts";
-import { assertTaskGatesApproved } from "./gates.ts";
-import { archiveScreen, assertRetryBudget, createDispatch, settleDispatch, startClaimIsFresh, taskDispatchIds } from "./dispatch.ts";
+import { herdrSocketPath, stateDir } from "../core/paths.ts";
+import { acquire, addTask, load, log, newTask, nextId, now, ready, release, START_CLAIM_MS, withRunStartFence, taskGateBlockers, type Run, type State, type Task, type Worker, update, WORKER_NAME } from "../core/state.ts";
+import { assertTaskGatesApproved } from "../core/gates.ts";
+import { archiveScreen, assertRetryBudget, createDispatch, settleDispatch, startClaimIsFresh, taskDispatchIds } from "../core/dispatch.ts";
 import { gitWorktreeAdd, gitWorktreeRemove, isUnknownMethod, planWorktree, worktreeIdentityPath, type WorktreeInfo } from "./worktree.ts";
 import { runSetup, SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS, setupInProgress } from "./setup.ts";
-import { getHost, type HostProfile } from "./hosts.ts";
-import { selectProfile, validateRouting, routerProvider, type RoutingConfig, type RouterProvider, type Runtime, type RoutingProvenance } from "./routing.ts";
-import { currentExecutionHost, withExecutionHost } from "./remote.ts";
+import { getHost, type HostProfile } from "../herdr/hosts.ts";
+import { selectProfile, validateRouting, routerProvider, type RoutingConfig, type RouterProvider, type Runtime, type RoutingProvenance } from "../core/routing.ts";
+import { currentExecutionHost, withExecutionHost } from "../herdr/remote.ts";
 
 export { START_CLAIM_MS };
 

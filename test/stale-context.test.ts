@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { Message, State } from "../src/state.ts";
+import type { Message, State } from "../src/core/state.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-stale-context-"));
@@ -15,9 +15,9 @@ process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 process.env.PACK_STALL_MS = "1";
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { ask, heartbeat, inbox, note, workerSend, sync } = await import("../src/inbox.ts");
-const { nextAction, workerAttention } = await import("../src/workers.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { ask, heartbeat, inbox, note, workerSend, sync } = await import("../src/messaging/inbox.ts");
+const { nextAction, workerAttention } = await import("../src/agents/workers.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };

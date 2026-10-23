@@ -5,8 +5,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { selectProfile, validateRouting, ROUTING_INPUT_BYTES, ROUTING_RESPONSE_BYTES, type RouterProvider, type RoutingConfig } from "../src/routing.ts";
-import { modelFromArgs } from "../src/workers.ts";
+import { selectProfile, validateRouting, ROUTING_INPUT_BYTES, ROUTING_RESPONSE_BYTES, type RouterProvider, type RoutingConfig } from "../src/core/routing.ts";
+import { modelFromArgs } from "../src/agents/workers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-routing-"));
 after(() => rmSync(dir, { recursive: true, force: true }));

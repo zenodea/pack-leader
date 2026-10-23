@@ -11,8 +11,8 @@ mkdirSync(home);
 process.env.HOME = home;
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 
-const paths = await import("../src/paths.ts");
-const { guide, installSkill } = await import("../src/skill.ts");
+const paths = await import("../src/core/paths.ts");
+const { guide, installSkill } = await import("../src/cli/skill.ts");
 const root = join(import.meta.dirname, "..");
 
 after(() => rmSync(dir, { recursive: true, force: true }));

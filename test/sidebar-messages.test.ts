@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Message, State } from "../src/state.ts";
+import type { Message, State } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-sidebar-messages-"));
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = join(dir, "no-herdr.sock");
 
-const { emptyState } = await import("../src/state.ts");
+const { emptyState } = await import("../src/core/state.ts");
 const {
   messageAge,
   messageCounterLines,
@@ -21,9 +21,9 @@ const {
   reconcileMessagePanel,
   sidebarMessages,
   wrapMessageText,
-} = await import("../src/sidebar-messages.ts");
-const { scrollFor } = await import("../src/sidebar.ts");
-const { width } = await import("../src/ansi.ts");
+} = await import("../src/ui/sidebar-messages.ts");
+const { scrollFor } = await import("../src/ui/sidebar.ts");
+const { width } = await import("../src/ui/ansi.ts");
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 after(() => rmSync(dir, { recursive: true, force: true }));

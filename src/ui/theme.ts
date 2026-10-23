@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { herdrHome } from "./paths.ts";
+import { herdrHome } from "../core/paths.ts";
 
 export type Theme = { accent: string | null };
 

@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseArgs, str, has, list, num } from "../src/args.ts";
-import { preamble, defaultAgentArgs } from "../src/workers.ts";
-import { firstLine } from "../src/state.ts";
+import { parseArgs, str, has, list, num } from "../src/cli/args.ts";
+import { preamble, defaultAgentArgs } from "../src/agents/workers.ts";
+import { firstLine } from "../src/core/state.ts";
 
 test("parseArgs: flags, values, = form, and -- passthrough", () => {
   const a = parseArgs(["start", "api", "--spec", "do it", "--wait", "--timeout=5", "--", "--model", "x"]);

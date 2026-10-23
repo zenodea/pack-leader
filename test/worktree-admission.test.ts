@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Run } from "../src/state.ts";
+import type { Run } from "../src/core/state.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "pack-leader-worktree-admission-")));
 const sock = join(dir, "herdr.sock");
@@ -14,10 +14,10 @@ process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 delete process.env.PACK_WORKTREE_DIR;
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { settleDispatch } = await import("../src/dispatch.ts");
-const { releaseWorker, startWorker, START_CLAIM_MS } = await import("../src/workers.ts");
-const { worktreeIdentityPath } = await import("../src/worktree.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { settleDispatch } = await import("../src/core/dispatch.ts");
+const { releaseWorker, startWorker, START_CLAIM_MS } = await import("../src/agents/workers.ts");
+const { worktreeIdentityPath } = await import("../src/agents/worktree.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler;

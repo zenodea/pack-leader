@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultStateDir, herdrHome, herdrSocketPath, resolveStateDir, stateDirDivergence } from "../src/paths.ts";
+import { defaultStateDir, herdrHome, herdrSocketPath, resolveStateDir, stateDirDivergence } from "../src/core/paths.ts";
 
 test("state dir: HERDR_PLUGIN_STATE_DIR, then XDG_STATE_HOME, then ~/.local/state", () => {
   const h = "/home/u";

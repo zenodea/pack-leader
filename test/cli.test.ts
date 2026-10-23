@@ -4,13 +4,13 @@ import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { State, Task, Worker } from "../src/state.ts";
+import type { State, Task, Worker } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-cli-"));
 const stateDir = join(dir, "state");
 process.env.HERDR_PLUGIN_STATE_DIR = stateDir;
 
-const { load, save } = await import("../src/state.ts");
+const { load, save } = await import("../src/core/state.ts");
 const { here, workspaceOf, runCwd, refuseTransition, reportPath } = await import("../src/cli.ts");
 const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
 

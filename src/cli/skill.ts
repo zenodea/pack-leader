@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { skillDirs, guideFile, localBin, skillStubFile, packLeaderBin } from "./paths.ts";
+import { skillDirs, guideFile, localBin, skillStubFile, packLeaderBin } from "../core/paths.ts";
 
 export function guide(): string {
   return readFileSync(guideFile, "utf8");

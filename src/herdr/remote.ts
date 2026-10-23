@@ -4,9 +4,9 @@ import { createConnection } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import type { HostProfile } from "./hosts.ts";
 import { validateHostSnapshot, validateSshTarget } from "./hosts.ts";
-import { herdrSocketPath } from "./paths.ts";
-import { TEXT_FLAGS } from "./args.ts";
-import { CodedError } from "./errors.ts";
+import { herdrSocketPath } from "../core/paths.ts";
+import { TEXT_FLAGS } from "../cli/args.ts";
+import { CodedError } from "../core/errors.ts";
 
 const MAX_STDOUT = 1_000_000;
 const MAX_STDERR = 128_000;

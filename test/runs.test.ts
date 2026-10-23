@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { Run, State, Task, Worker } from "../src/state.ts";
+import type { Run, State, Task, Worker } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-runs-"));
 const sock = join(dir, "herdr.sock");
@@ -13,9 +13,9 @@ const stateDir = join(dir, "state");
 process.env.HERDR_PLUGIN_STATE_DIR = stateDir;
 process.env.HERDR_SOCKET_PATH = sock;
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { closeRun, parseDuration, pruneRuns } = await import("../src/runs.ts");
-const { releaseWorker } = await import("../src/workers.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { closeRun, parseDuration, pruneRuns } = await import("../src/core/runs.ts");
+const { releaseWorker } = await import("../src/agents/workers.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };

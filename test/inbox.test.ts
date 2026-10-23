@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Message, State } from "../src/state.ts";
+import type { Message, State } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-inbox-"));
 const sock = join(dir, "herdr.sock");
@@ -12,8 +12,8 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 
-const { emptyState, load, save, update } = await import("../src/state.ts");
-const { ask, done, heartbeat, inbox, send, sync } = await import("../src/inbox.ts");
+const { emptyState, load, save, update } = await import("../src/core/state.ts");
+const { ask, done, heartbeat, inbox, send, sync } = await import("../src/messaging/inbox.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };

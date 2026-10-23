@@ -57,8 +57,8 @@ footer{padding:0 28px 15px;font:10px "DejaVu Sans Mono",monospace;letter-spacing
 const realNow = Date.now;
 try {
   Date.now = () => Date.parse("2026-01-01T12:08:00Z");
-  const { boxLines, goalLines } = await import("../src/sidebar.ts");
-  const { dim, fg } = await import("../src/ansi.ts");
+  const { boxLines, goalLines } = await import("../src/ui/sidebar.ts");
+  const { dim, fg } = await import("../src/ui/ansi.ts");
   const base = {
     run_id: "demo", pane_id: "w-demo:p1", cwd: "/demo/project", task_id: "t-demo", dispatch_id: "d-demo",
     started_at: "2026-01-01T12:04:00Z", last_status: "working", last_seq: 1,

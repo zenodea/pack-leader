@@ -1,34 +1,34 @@
-import { parseArgs, str, has, num, list, type Args } from "./args.ts";
-import { commandName, validateCommandArgs } from "./command-args.ts";
-import { beginRequest, finishRequest, fingerprint, requestShow } from "./requests.ts";
-import { fg, bold, dim } from "./ansi.ts";
-import { HerdrError, agentFocus, agentRead, getPane, listAgents, renamePane, notify, paneFocus, tabGet, tabRename } from "./herdr.ts";
+import { parseArgs, str, has, num, list, type Args } from "./cli/args.ts";
+import { commandName, validateCommandArgs } from "./cli/command-args.ts";
+import { beginRequest, finishRequest, fingerprint, requestShow } from "./core/requests.ts";
+import { fg, bold, dim } from "./ui/ansi.ts";
+import { HerdrError, agentFocus, agentRead, getPane, listAgents, renamePane, notify, paneFocus, tabGet, tabRename } from "./herdr/herdr.ts";
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ack, ask, check, checkTypes, done, envMs, escalate, heartbeat, herdrWarning, inbox, note, reply, say, sendTo, sync, workerContext, workerSend } from "./inbox.ts";
-import { claudeSessionDir, closeObserver, digest, OBSERVER_TURNS, sessionPath, startObserver, transcriptPath, transcriptTail } from "./observer.ts";
+import { ack, ask, check, checkTypes, done, envMs, escalate, heartbeat, herdrWarning, inbox, note, reply, say, sendTo, sync, workerContext, workerSend } from "./messaging/inbox.ts";
+import { claudeSessionDir, closeObserver, digest, OBSERVER_TURNS, sessionPath, startObserver, transcriptPath, transcriptTail } from "./agents/observer.ts";
 import { readFileSync } from "node:fs";
-import { herdrBin, pluginRoot } from "./paths.ts";
-import { activeRuns, childRuns, load, log, maxRunDepth, newTask, nextId, now, resolveRun, ready, TASK_STATUSES, runDispatches, runMessages, runTasks, runWorkers, taskGateBlockers, type Message, type Run, type State, type Task, type TaskStatus, unacked, update } from "./state.ts";
-import { createGate, GateError, resolveGate, runGates } from "./gates.ts";
-import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./dispatch.ts";
-import { assertTaskParentMutable, taskTree, TaskHierarchyError, validateTaskParent } from "./hierarchy.ts";
-import { worktreeForMode } from "./worktree.ts";
-import { spawnAgent } from "./spawn.ts";
-import { handoffGate, resumeAfterHandoff, saveHandoff, spawnResume } from "./handoff.ts";
-import { closeRun, parseDuration, type PruneOptions, pruneRuns, removeArchives, SubRunError } from "./runs.ts";
-import { adoptWorker } from "./adoption.ts";
-import { resolveLeaderRun } from "./leader.ts";
-import { abandonWorker, DEFAULT_KIND, nextAction, previewDispatch, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, sweepWorktrees, taskSummary, workerSummary } from "./workers.ts";
-import { SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS } from "./setup-policy.ts";
-import { guide, installSkill } from "./skill.ts";
-import { configFile, defaultsFor, loadConfig, parseTokens, PLACEMENTS, saveConfig, settingsOf, WORKTREE_MODES, type Config, type Placement, type WorktreeMode } from "./config.ts";
-import { routerProvider, validateRouting } from "./routing.ts";
-import { describeSettings, runSettings, settingsInForce } from "./settings.ts";
-import { addHost, getHost, listHosts, removeHost } from "./hosts.ts";
-import { callbackFlagValues, executeRemoteRpc, forwardWorkerCallback, readStdinJson, RemoteError, validateCallbackRequest, withExecutionHost } from "./remote.ts";
-import { CodedError } from "./errors.ts";
+import { herdrBin, pluginRoot } from "./core/paths.ts";
+import { activeRuns, childRuns, load, log, maxRunDepth, newTask, nextId, now, resolveRun, ready, TASK_STATUSES, runDispatches, runMessages, runTasks, runWorkers, taskGateBlockers, type Message, type Run, type State, type Task, type TaskStatus, unacked, update } from "./core/state.ts";
+import { createGate, GateError, resolveGate, runGates } from "./core/gates.ts";
+import { dispatchView, findArchive, readArchive, taskDispatchIds } from "./core/dispatch.ts";
+import { assertTaskParentMutable, taskTree, TaskHierarchyError, validateTaskParent } from "./core/hierarchy.ts";
+import { worktreeForMode } from "./agents/worktree.ts";
+import { spawnAgent } from "./agents/spawn.ts";
+import { handoffGate, resumeAfterHandoff, saveHandoff, spawnResume } from "./agents/handoff.ts";
+import { closeRun, parseDuration, type PruneOptions, pruneRuns, removeArchives, SubRunError } from "./core/runs.ts";
+import { adoptWorker } from "./agents/adoption.ts";
+import { resolveLeaderRun } from "./ui/leader.ts";
+import { abandonWorker, DEFAULT_KIND, nextAction, previewDispatch, redispatch, releaseWorker, resendPreamble, startWorker, stopWorker, sweepWorktrees, taskSummary, workerSummary } from "./agents/workers.ts";
+import { SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS } from "./agents/setup-policy.ts";
+import { guide, installSkill } from "./cli/skill.ts";
+import { configFile, defaultsFor, loadConfig, parseTokens, PLACEMENTS, saveConfig, settingsOf, WORKTREE_MODES, type Config, type Placement, type WorktreeMode } from "./core/config.ts";
+import { routerProvider, validateRouting } from "./core/routing.ts";
+import { describeSettings, runSettings, settingsInForce } from "./ui/settings.ts";
+import { addHost, getHost, listHosts, removeHost } from "./herdr/hosts.ts";
+import { callbackFlagValues, executeRemoteRpc, forwardWorkerCallback, readStdinJson, RemoteError, validateCallbackRequest, withExecutionHost } from "./herdr/remote.ts";
+import { CodedError } from "./core/errors.ts";
 
 let lastOut: unknown = null;
 const out = (v: unknown) => {
@@ -887,7 +887,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
     }
 
     case "sidebar": {
-      const { runSidebar } = await import("./sidebar.ts");
+      const { runSidebar } = await import("./ui/sidebar.ts");
       await runSidebar();
       return;
     }
@@ -945,7 +945,7 @@ async function runCommand(command: string, args: Args, fromAction: boolean): Pro
           tail = transcriptTail(readFileSync(file, "utf8"), turns);
         } catch {}
       }
-      let live: Map<string, { status: import("./herdr.ts").AgentStatus }> | null = null;
+      let live: Map<string, { status: import("./herdr/herdr.ts").AgentStatus }> | null = null;
       try {
         live = new Map((await listAgents()).map((a) => [a.pane_id, { status: a.agent_status }]));
       } catch {}

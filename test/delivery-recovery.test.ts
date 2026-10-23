@@ -6,7 +6,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Message, State } from "../src/state.ts";
+import type { Message, State } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-delivery-recovery-"));
 const stateDir = join(dir, "state");
@@ -16,8 +16,8 @@ process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_PROMPT_RETRY_MS = "0";
 
 const [{ emptyState, load, save, update }, { inbox, send, sync }] = await Promise.all([
-  import("../src/state.ts"),
-  import("../src/inbox.ts"),
+  import("../src/core/state.ts"),
+  import("../src/messaging/inbox.ts"),
 ]);
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 

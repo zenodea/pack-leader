@@ -6,7 +6,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, wr
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Run, Worker } from "../src/state.ts";
+import type { Run, Worker } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-remote-"));
 const stateDir = join(dir, "state");
@@ -33,12 +33,12 @@ delete process.env.PACK_REMOTE_CALLBACK_LEADER_BIN;
 delete process.env.PACK_REMOTE_CALLBACK_STATE_DIR;
 delete process.env.PACK_REMOTE_CALLBACK_ACTIVE;
 
-const { emptyState, load, save, update } = await import("../src/state.ts");
-const { addHost, listHosts, removeHost, validateSshTarget } = await import("../src/hosts.ts");
-const { currentExecutionHost, withExecutionHost, remoteHerdr, executeRemoteRpc, sshStdio, validateCallbackRequest } = await import("../src/remote.ts");
-const { promptWithRetry, redispatch, resendPreamble, startWorker, releaseWorker } = await import("../src/workers.ts");
-const { sync, reply, send, check } = await import("../src/inbox.ts");
-const { createGate } = await import("../src/gates.ts");
+const { emptyState, load, save, update } = await import("../src/core/state.ts");
+const { addHost, listHosts, removeHost, validateSshTarget } = await import("../src/herdr/hosts.ts");
+const { currentExecutionHost, withExecutionHost, remoteHerdr, executeRemoteRpc, sshStdio, validateCallbackRequest } = await import("../src/herdr/remote.ts");
+const { promptWithRetry, redispatch, resendPreamble, startWorker, releaseWorker } = await import("../src/agents/workers.ts");
+const { sync, reply, send, check } = await import("../src/messaging/inbox.ts");
+const { createGate } = await import("../src/core/gates.ts");
 
 type Request = { id: string; method: string; params: any };
 type Handler = (request: Request) => Promise<any> | any;
@@ -371,7 +371,7 @@ test("remote RPC falls back to herdrSocketPath when socket_path and HERDR_SOCKET
   mkdirSync(dirname(fallbackSocket), { recursive: true });
   const fallbackServer = socketServer(fallbackSocket, "local", () => (request) => request.method === "pane.list" ? { panes: [{ pane_id: "fallback:p1" }] } : {});
   await new Promise<void>((resolveListen) => fallbackServer.once("listening", resolveListen));
-  const remoteUrl = pathToFileURL(resolve(import.meta.dirname, "..", "src", "remote.ts")).href;
+  const remoteUrl = pathToFileURL(resolve(import.meta.dirname, "..", "src", "herdr", "remote.ts")).href;
   const script = `import { executeRemoteRpc } from ${JSON.stringify(remoteUrl)}; console.log(JSON.stringify(await executeRemoteRpc({ socket_path: null, method: "pane.list", params: {}, timeout_ms: 1000 })));`;
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: fallbackHome, XDG_CONFIG_HOME: xdgConfig };
   delete env.HERDR_SOCKET_PATH;
@@ -629,7 +629,7 @@ test("remote followup ambiguity persists across sync and reconciles without dupl
     assert.equal(stored.delivery_claim, undefined);
 
     await sync();
-    const inboxUrl = pathToFileURL(resolve(import.meta.dirname, "..", "src", "inbox.ts")).href;
+    const inboxUrl = pathToFileURL(resolve(import.meta.dirname, "..", "src", "messaging", "inbox.ts")).href;
     const restartedSync = await new Promise<{ error: Error | null; stderr: string }>((resolveChild) => {
       execFile(process.execPath, ["--no-warnings", "--input-type=module", "-e", `import { sync } from ${JSON.stringify(inboxUrl)}; await sync();`], {
         cwd: dir, env: { ...process.env }, timeout: 15_000,
@@ -877,7 +877,7 @@ test("failed remote release preflight preserves worker and task registration", a
 });
 
 test("SSH teardown closes inherited escaped pipes after timeout and output overflow", { timeout: 15_000 }, async () => {
-  const remoteUrl = pathToFileURL(resolve(import.meta.dirname, "..", "src", "remote.ts")).href;
+  const remoteUrl = pathToFileURL(resolve(import.meta.dirname, "..", "src", "herdr", "remote.ts")).href;
   const script = `import { sshStdio } from ${JSON.stringify(remoteUrl)};\ntry { await sshStdio({ target: process.env.FAKE_TARGET, executable: "pack-leader", subcommand: "__remote-rpc", input: "{}", timeoutMs: 1000 }); console.log(JSON.stringify({ code: "unexpected_success" })); process.exitCode = 2; } catch (err) { console.log(JSON.stringify({ code: err.code })); }`;
   const pidFile = join(dir, "pipe-holder.pid");
   const runProbe = (target: string) => new Promise<{ error: Error | null; stdout: string; stderr: string }>((resolveProbe) => {

@@ -11,11 +11,11 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { redispatch, startWorker } = await import("../src/workers.ts");
-const { done } = await import("../src/inbox.ts");
-const { closeRun } = await import("../src/runs.ts");
-import type { Run } from "../src/state.ts";
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { redispatch, startWorker } = await import("../src/agents/workers.ts");
+const { done } = await import("../src/messaging/inbox.ts");
+const { closeRun } = await import("../src/core/runs.ts");
+import type { Run } from "../src/core/state.ts";
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("unexpected herdr request"); };

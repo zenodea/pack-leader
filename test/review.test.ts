@@ -6,7 +6,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { Message, Run, State, Task, Worker } from "../src/state.ts";
+import type { Message, Run, State, Task, Worker } from "../src/core/state.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "pack-leader-review-")));
 const sock = join(dir, "herdr.sock");
@@ -16,11 +16,11 @@ process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 delete process.env.PACK_WORKTREE_DIR;
 
-const { emptyState, load, save, update } = await import("../src/state.ts");
-const { ack, ask, ASK_TICK_MS, check, done, inbox, markHerdrUnreachable, reply, send, sendTo, sync } = await import("../src/inbox.ts");
-const { getAgent, getPane, herdr, labelPane, observePromptReceipt, promptLanded, subscribeBackoff } = await import("../src/herdr.ts");
-const { baseline, preamble, promptWithRetry, redispatch, releaseWorker, startWorker } = await import("../src/workers.ts");
-const { closeRun, pruneRuns } = await import("../src/runs.ts");
+const { emptyState, load, save, update } = await import("../src/core/state.ts");
+const { ack, ask, ASK_TICK_MS, check, done, inbox, markHerdrUnreachable, reply, send, sendTo, sync } = await import("../src/messaging/inbox.ts");
+const { getAgent, getPane, herdr, labelPane, observePromptReceipt, promptLanded, subscribeBackoff } = await import("../src/herdr/herdr.ts");
+const { baseline, preamble, promptWithRetry, redispatch, releaseWorker, startWorker } = await import("../src/agents/workers.ts");
+const { closeRun, pruneRuns } = await import("../src/core/runs.ts");
 
 type Raw = { __raw: string };
 type Handler = (method: string, params: any, req?: any) => Promise<any> | any;

@@ -1,9 +1,9 @@
 import { createConnection, type Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
-import { herdrSocketPath } from "./paths.ts";
-import { log } from "./state.ts";
+import { herdrSocketPath } from "../core/paths.ts";
+import { log } from "../core/state.ts";
 import { currentExecutionHost, remoteHerdr } from "./remote.ts";
-import { CodedError } from "./errors.ts";
+import { CodedError } from "../core/errors.ts";
 
 export class HerdrError extends CodedError {}
 

@@ -7,7 +7,7 @@ export const home = homedir();
 const xdgConfig = process.env.XDG_CONFIG_HOME || join(home, ".config");
 const xdgState = process.env.XDG_STATE_HOME || join(home, ".local", "state");
 
-export const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+export const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const packLeaderBin = join(pluginRoot, "bin", "pack-leader");
 export const guideFile = join(pluginRoot, "docs", "guide.md");
 export const skillStubFile = join(pluginRoot, "skill", "SKILL.md");

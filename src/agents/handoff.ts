@@ -2,11 +2,11 @@ import { spawn } from "node:child_process";
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { formatTokens, loadConfig, settingsOf } from "./config.ts";
-import { agentPrompt, agentWait, getPane, logHerdrError, notify } from "./herdr.ts";
+import { formatTokens, loadConfig, settingsOf } from "../core/config.ts";
+import { agentPrompt, agentWait, getPane, logHerdrError, notify } from "../herdr/herdr.ts";
 import { claudeSessionDir } from "./observer.ts";
-import { pluginRoot } from "./paths.ts";
-import { load, log, now, update, type Run, type RunHandoff } from "./state.ts";
+import { pluginRoot } from "../core/paths.ts";
+import { load, log, now, update, type Run, type RunHandoff } from "../core/state.ts";
 
 export const CLEAR_COMMANDS: Record<string, string> = { claude: "/clear", pi: "/new" };
 export const HANDOFF_MAX_ASKS = 2;

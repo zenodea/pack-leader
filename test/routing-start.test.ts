@@ -6,8 +6,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { RoutingConfig, RouterProvider } from "../src/routing.ts";
-import type { StartOptions } from "../src/workers.ts";
+import type { RoutingConfig, RouterProvider } from "../src/core/routing.ts";
+import type { StartOptions } from "../src/agents/workers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-routing-start-"));
 const sock = join(dir, "herdr.sock");
@@ -23,14 +23,14 @@ process.env.OPENAI_API_KEY = "fake-openai";
 process.env.TYPESAFE_API_KEY = "fake-jev";
 process.env.PATH = `${bin}:${process.env.PATH}`;
 delete process.env.PACK_REMOTE_CALLBACK_TARGET;
-const { emptyState, load, save, update, START_CLAIM_MS } = await import("../src/state.ts");
-const { startWorker, redispatch, releaseWorker } = await import("../src/workers.ts");
-const { done } = await import("../src/inbox.ts");
-const { closeRun } = await import("../src/runs.ts");
-const { createGate } = await import("../src/gates.ts");
-const { addHost } = await import("../src/hosts.ts");
-const { currentExecutionHost } = await import("../src/remote.ts");
-const { ROUTING_MAX_TIMEOUT_MS } = await import("../src/routing.ts");
+const { emptyState, load, save, update, START_CLAIM_MS } = await import("../src/core/state.ts");
+const { startWorker, redispatch, releaseWorker } = await import("../src/agents/workers.ts");
+const { done } = await import("../src/messaging/inbox.ts");
+const { closeRun } = await import("../src/core/runs.ts");
+const { createGate } = await import("../src/core/gates.ts");
+const { addHost } = await import("../src/herdr/hosts.ts");
+const { currentExecutionHost } = await import("../src/herdr/remote.ts");
+const { ROUTING_MAX_TIMEOUT_MS } = await import("../src/core/routing.ts");
 
 type Request = { method: string; params: any; remote: boolean };
 const calls: Request[] = [];

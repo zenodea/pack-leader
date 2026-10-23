@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bold, closeStyles, dim, fg, inverse, pad, reset, truncate, width } from "../src/ansi.ts";
+import { bold, closeStyles, dim, fg, inverse, pad, reset, truncate, width } from "../src/ui/ansi.ts";
 
 const CLOSE = "\x1b[22m\x1b[27m\x1b[39m";
 

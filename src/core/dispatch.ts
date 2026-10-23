@@ -1,10 +1,10 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { herdr } from "./herdr.ts";
+import { herdr } from "../herdr/herdr.ts";
 import { ensureDir, stateDir } from "./paths.ts";
 import { idSeq, now, type Dispatch, type State, type Task } from "./state.ts";
 import { assertTaskGatesApproved } from "./gates.ts";
-import type { HostProfile } from "./hosts.ts";
+import type { HostProfile } from "../herdr/hosts.ts";
 import { CodedError } from "./errors.ts";
 
 export const archiveDir = (runId: string) => join(stateDir, "archive", runId);

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { stateDir } from "./paths.ts";
+import { stateDir } from "../core/paths.ts";
 
 import { SETUP_MAX_LOG_BYTES } from "./setup-policy.ts";
 export { SETUP_DEFAULT_TIMEOUT_MS, SETUP_MAX_TIMEOUT_MS, SETUP_MAX_LOG_BYTES } from "./setup-policy.ts";

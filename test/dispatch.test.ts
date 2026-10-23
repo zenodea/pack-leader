@@ -6,7 +6,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { State } from "../src/state.ts";
+import type { State } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-dispatch-"));
 const sock = join(dir, "herdr.sock");
@@ -14,9 +14,9 @@ const stateDir = join(dir, "state");
 process.env.HERDR_PLUGIN_STATE_DIR = stateDir;
 process.env.HERDR_SOCKET_PATH = sock;
 
-const { emptyState, load, save, runDispatches } = await import("../src/state.ts");
-const { done, sync } = await import("../src/inbox.ts");
-const { startWorker, redispatch, releaseWorker } = await import("../src/workers.ts");
+const { emptyState, load, save, runDispatches } = await import("../src/core/state.ts");
+const { done, sync } = await import("../src/messaging/inbox.ts");
+const { startWorker, redispatch, releaseWorker } = await import("../src/agents/workers.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };

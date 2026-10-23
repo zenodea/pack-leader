@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { HerdrError } from "./herdr.ts";
-import type { WorktreeMode } from "./config.ts";
+import type { HerdrError } from "../herdr/herdr.ts";
+import type { WorktreeMode } from "../core/config.ts";
 
 export type WorktreeInfo = {
   path: string;

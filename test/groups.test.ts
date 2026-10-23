@@ -4,16 +4,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { State, Worker } from "../src/state.ts";
+import type { State, Worker } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-groups-"));
 const sock = join(dir, "herdr.sock");
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { check, checkTypes, escalate, heartbeat, inbox, note, sendTo, sync, workerSend } = await import("../src/inbox.ts");
-const { nextAction, workerSummary } = await import("../src/workers.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { check, checkTypes, escalate, heartbeat, inbox, note, sendTo, sync, workerSend } = await import("../src/messaging/inbox.ts");
+const { nextAction, workerSummary } = await import("../src/agents/workers.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };

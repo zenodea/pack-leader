@@ -1,5 +1,5 @@
 import type { Args } from "./args.ts";
-import { SETUP_MAX_TIMEOUT_MS } from "./setup-policy.ts";
+import { SETUP_MAX_TIMEOUT_MS } from "../agents/setup-policy.ts";
 
 export const RETRYABLE = new Set([
   "run create", "run use", "run close", "task create", "task update", "gate create", "gate resolve",

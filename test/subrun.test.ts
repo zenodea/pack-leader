@@ -4,14 +4,14 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { State } from "../src/state.ts";
+import type { State } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-subrun-"));
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = join(dir, "no-herdr.sock");
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { closeRun } = await import("../src/runs.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { closeRun } = await import("../src/core/runs.ts");
 
 after(() => rmSync(dir, { recursive: true, force: true }));
 

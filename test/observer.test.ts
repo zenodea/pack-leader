@@ -6,15 +6,15 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { Worker } from "../src/state.ts";
+import type { Worker } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-observer-"));
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = join(dir, "no-herdr.sock");
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { claudeSessionDir, digest, observerArgs, observerPreamble, transcriptTail } = await import("../src/observer.ts");
-const { check, say } = await import("../src/inbox.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { claudeSessionDir, digest, observerArgs, observerPreamble, transcriptTail } = await import("../src/agents/observer.ts");
+const { check, say } = await import("../src/messaging/inbox.ts");
 
 after(() => rmSync(dir, { recursive: true, force: true }));
 

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { State } from "../src/state.ts";
+import type { State } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-liveness-"));
 const sock = join(dir, "herdr.sock");
@@ -13,9 +13,9 @@ process.env.HERDR_SOCKET_PATH = sock;
 process.env.PACK_WAIT_HEARTBEAT_MS = "0";
 delete process.env.PACK_STALL_MS;
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { ask, check, done, heartbeat, sync, START_GRACE_MS } = await import("../src/inbox.ts");
-const { nextAction, workerSummary } = await import("../src/workers.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { ask, check, done, heartbeat, sync, START_GRACE_MS } = await import("../src/messaging/inbox.ts");
+const { nextAction, workerSummary } = await import("../src/agents/workers.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => { throw new Error("no handler"); };

@@ -4,8 +4,8 @@ import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseArgs } from "../src/args.ts";
-import { validateCommandArgs } from "../src/command-args.ts";
+import { parseArgs } from "../src/cli/args.ts";
+import { validateCommandArgs } from "../src/cli/command-args.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-flags-"));
 const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");

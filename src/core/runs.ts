@@ -1,9 +1,9 @@
 import { existsSync, rmSync } from "node:fs";
-import { getPane, renamePane, logHerdrError, paneClose, tabRename } from "./herdr.ts";
-import { closeObserver } from "./observer.ts";
+import { getPane, renamePane, logHerdrError, paneClose, tabRename } from "../herdr/herdr.ts";
+import { closeObserver } from "../agents/observer.ts";
 import { activeRuns, load, log, now, runWorkers, START_CLAIM_MS, type Run, type State, update, withRunStartFence } from "./state.ts";
 import { archiveDir, settleDispatch, startClaimIsFresh } from "./dispatch.ts";
-import { type ReleaseResult, releaseWorker } from "./workers.ts";
+import { type ReleaseResult, releaseWorker } from "../agents/workers.ts";
 import { CodedError } from "./errors.ts";
 
 const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };

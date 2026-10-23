@@ -1,12 +1,12 @@
 import { watch, type FSWatcher } from "node:fs";
 import { basename, dirname } from "node:path";
 import { hostname } from "node:os";
-import { agentPrompt, getAgent, type HerdrError, isRemotePromptReceiptError, listAgents, listPanes, logHerdrError, observePromptReceipt, promptLanded, type AgentStatus, subscribe } from "./herdr.ts";
-import { stateFile } from "./paths.ts";
-import { DEFAULT_SETTINGS, loadConfig, settingsOf } from "./config.ts";
-import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load, childRuns, processAlive } from "./state.ts";
-import { settleDispatch } from "./dispatch.ts";
-import { withExecutionHost } from "./remote.ts";
+import { agentPrompt, getAgent, type HerdrError, isRemotePromptReceiptError, listAgents, listPanes, logHerdrError, observePromptReceipt, promptLanded, type AgentStatus, subscribe } from "../herdr/herdr.ts";
+import { stateFile } from "../core/paths.ts";
+import { DEFAULT_SETTINGS, loadConfig, settingsOf } from "../core/config.ts";
+import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load, childRuns, processAlive } from "../core/state.ts";
+import { settleDispatch } from "../core/dispatch.ts";
+import { withExecutionHost } from "../herdr/remote.ts";
 
 export type WorkerContext = { run_id: string; worker: string; task_id: string | null; dispatch_id: string | null };
 

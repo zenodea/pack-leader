@@ -2,11 +2,11 @@ import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, 
 import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { ensureDir, lockDir, logFile, stateDir, stateDirDivergence, stateFile } from "./paths.ts";
-import type { AgentStatus } from "./herdr.ts";
-import type { WorktreeInfo, WorktreeRecord } from "./worktree.ts";
-import type { SetupMetadata } from "./setup.ts";
+import type { AgentStatus } from "../herdr/herdr.ts";
+import type { WorktreeInfo, WorktreeRecord } from "../agents/worktree.ts";
+import type { SetupMetadata } from "../agents/setup.ts";
 import type { Runtime, RoutingProvenance } from "./routing.ts";
-import type { HostProfile } from "./hosts.ts";
+import type { HostProfile } from "../herdr/hosts.ts";
 import type { RequestRecord } from "./requests.ts";
 
 export const TASK_STATUSES = ["pending", "dispatched", "succeeded", "failed", "blocked"] as const;

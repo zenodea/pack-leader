@@ -5,15 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { emitKeypressEvents } from "node:readline";
-import type { Message, Worker } from "../src/state.ts";
+import type { Message, Worker } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-sidebar-"));
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = join(dir, "no-herdr.sock");
 
-const { emptyState } = await import("../src/state.ts");
-const { boundRunFor, boxAt, boxLines, clickOn, goalLines, keyName, lastMessageFor, scrollFor, splitMouse, statusOf, sidebarWorkerTarget, SELECTED_MESSAGE_LINES } = await import("../src/sidebar.ts");
-const { bold, width } = await import("../src/ansi.ts");
+const { emptyState } = await import("../src/core/state.ts");
+const { boundRunFor, boxAt, boxLines, clickOn, goalLines, keyName, lastMessageFor, scrollFor, splitMouse, statusOf, sidebarWorkerTarget, SELECTED_MESSAGE_LINES } = await import("../src/ui/sidebar.ts");
+const { bold, width } = await import("../src/ui/ansi.ts");
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 after(() => rmSync(dir, { recursive: true, force: true }));

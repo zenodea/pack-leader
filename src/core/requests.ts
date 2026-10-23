@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
-import type { Args } from "./args.ts";
+import type { Args } from "../cli/args.ts";
 import { load, now, processAlive, update } from "./state.ts";
 import { CodedError } from "./errors.ts";
 

@@ -1,8 +1,8 @@
 import { mkdirSync, rmdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getPane, layoutExport, logHerdrError, paneMove, paneSplit, type LayoutNode, type PaneInfo } from "./herdr.ts";
-import { ensureDir, stateDir } from "./paths.ts";
-import { load, log, type Run } from "./state.ts";
+import { ensureDir, stateDir } from "../core/paths.ts";
+import { load, log, type Run } from "../core/state.ts";
 
 export type PackSplit = { target: string; direction: "right" | "down" };
 

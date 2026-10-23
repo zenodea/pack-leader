@@ -1,11 +1,11 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { defaultsFor, loadConfig } from "./config.ts";
-import { agentWait, getPane, listAgents, logHerdrError, paneClose, paneSplit, renamePane, type AgentStatus } from "./herdr.ts";
-import { lastMessageFor } from "./sidebar.ts";
-import { log, now, type Run, type State, runTasks, runWorkers, unacked, update } from "./state.ts";
-import { ensureDir, stateDir } from "./paths.ts";
+import { defaultsFor, loadConfig } from "../core/config.ts";
+import { agentWait, getPane, listAgents, logHerdrError, paneClose, paneSplit, renamePane, type AgentStatus } from "../herdr/herdr.ts";
+import { lastMessageFor } from "../ui/sidebar.ts";
+import { log, now, type Run, type State, runTasks, runWorkers, unacked, update } from "../core/state.ts";
+import { ensureDir, stateDir } from "../core/paths.ts";
 import { DEFAULT_KIND, defaultAgentArgs, modelArgs, promptWithRetry, startWhenShellReady } from "./workers.ts";
 
 export const OBSERVER_TURNS = 8;

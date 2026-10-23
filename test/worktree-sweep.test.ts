@@ -6,8 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, readdirSync, readFile
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Run, State, Worker } from "../src/state.ts";
-import type { WorktreeInfo } from "../src/worktree.ts";
+import type { Run, State, Worker } from "../src/core/state.ts";
+import type { WorktreeInfo } from "../src/agents/worktree.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "pack-leader-sweep-")));
 const sock = join(dir, "herdr.sock");
@@ -15,10 +15,10 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
 delete process.env.PACK_WORKTREE_DIR;
 
-const { emptyState, load, save, acquire: acquireLock, release: releaseLock } = await import("../src/state.ts");
-const { stateDir, stateFile } = await import("../src/paths.ts");
-const { refuseStartInFlight, releaseWorker, sweepWorktrees } = await import("../src/workers.ts");
-const { closeRun, pruneRuns } = await import("../src/runs.ts");
+const { emptyState, load, save, acquire: acquireLock, release: releaseLock } = await import("../src/core/state.ts");
+const { stateDir, stateFile } = await import("../src/core/paths.ts");
+const { refuseStartInFlight, releaseWorker, sweepWorktrees } = await import("../src/agents/workers.ts");
+const { closeRun, pruneRuns } = await import("../src/core/runs.ts");
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const run: Run = { id: "r1", objective: "test", status: "active", created_at: "2025-01-01T00:00:00.000Z", orchestrator: { pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1", cwd: dir } };

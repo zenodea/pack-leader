@@ -89,8 +89,8 @@ function pane(name, body, tail, { cols, rows }) {
 const realNow = Date.now;
 try {
   Date.now = () => Date.parse("2026-01-01T12:08:30Z");
-  const { boxLines, goalLines } = await import("../src/sidebar.ts");
-  const { dim, fg } = await import("../src/ansi.ts");
+  const { boxLines, goalLines } = await import("../src/ui/sidebar.ts");
+  const { dim, fg } = await import("../src/ui/ansi.ts");
 
   const run = "r-7f3a";
   const ask = "Reject invalid rows, or skip them?";

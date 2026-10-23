@@ -4,17 +4,17 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Message, State, Task, Worker } from "../src/state.ts";
+import type { Message, State, Task, Worker } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-ask-"));
 process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = join(dir, "no-herdr.sock");
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { ask, check, matchOption, reply, replyHint } = await import("../src/inbox.ts");
-const { boxLines, lastMessageFor } = await import("../src/sidebar.ts");
-const { nextAction } = await import("../src/workers.ts");
-const { width } = await import("../src/ansi.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { ask, check, matchOption, reply, replyHint } = await import("../src/messaging/inbox.ts");
+const { boxLines, lastMessageFor } = await import("../src/ui/sidebar.ts");
+const { nextAction } = await import("../src/agents/workers.ts");
+const { width } = await import("../src/ui/ansi.ts");
 
 after(() => rmSync(dir, { recursive: true, force: true }));
 

@@ -2,12 +2,12 @@ import { watch, type FSWatcher } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
 import { bold, closeWithItalic, dim, fg, fgRgb, italic, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
-import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "./herdr.ts";
-import { ensureDir, stateDir } from "./paths.ts";
-import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, type Worker } from "./state.ts";
-import { formatOptions, sync } from "./inbox.ts";
+import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "../herdr/herdr.ts";
+import { ensureDir, stateDir } from "../core/paths.ts";
+import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, type Worker } from "../core/state.ts";
+import { formatOptions, sync } from "../messaging/inbox.ts";
 import { loadTheme, noTheme, type Theme } from "./theme.ts";
-import { withExecutionHost } from "./remote.ts";
+import { withExecutionHost } from "../herdr/remote.ts";
 import { messageCounterLines, messageDetailLines, messageListLayout, messagePanelKey, reconcileMessagePanel, sidebarMessages, type MessagePanel } from "./sidebar-messages.ts";
 
 type Live = Map<string, { status: AgentStatus; title: string | null; agent: string | null }>;

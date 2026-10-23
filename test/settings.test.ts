@@ -11,9 +11,9 @@ const configFile = join(configDir, "config.json");
 mkdirSync(configDir, { recursive: true });
 process.env.HERDR_PLUGIN_CONFIG_DIR = configDir;
 
-const { DEFAULT_SETTINGS, formatTokens, loadConfig, parseTokens, settingsOf } = await import("../src/config.ts");
-const { describeSettings, renderSettings, SETTINGS_ROWS } = await import("../src/settings.ts");
-const { worktreeForMode } = await import("../src/worktree.ts");
+const { DEFAULT_SETTINGS, formatTokens, loadConfig, parseTokens, settingsOf } = await import("../src/core/config.ts");
+const { describeSettings, renderSettings, SETTINGS_ROWS } = await import("../src/ui/settings.ts");
+const { worktreeForMode } = await import("../src/agents/worktree.ts");
 const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
 
 after(() => rmSync(dir, { recursive: true, force: true }));

@@ -1,8 +1,8 @@
-import { HerdrError, getAgent, getPane, listAgents, type AgentInfo, type PaneInfo } from "./herdr.ts";
-import { createDispatch, settleDispatch, taskDispatchIds } from "./dispatch.ts";
-import { startClaimIsFresh } from "./claims.ts";
-import { assertTaskGatesApproved } from "./gates.ts";
-import { addTask, load, nextId, now, ready, update, withRunStartFence, WORKER_NAME, type Message, type Run, type State, type Task, type Worker } from "./state.ts";
+import { HerdrError, getAgent, getPane, listAgents, type AgentInfo, type PaneInfo } from "../herdr/herdr.ts";
+import { createDispatch, settleDispatch, taskDispatchIds } from "../core/dispatch.ts";
+import { startClaimIsFresh } from "../core/claims.ts";
+import { assertTaskGatesApproved } from "../core/gates.ts";
+import { addTask, load, nextId, now, ready, update, withRunStartFence, WORKER_NAME, type Message, type Run, type State, type Task, type Worker } from "../core/state.ts";
 import { markPrompted, preamble, promptWithRetry, refuseStartInFlight, START_CLAIM_MS } from "./workers.ts";
 
 export class AdoptionError extends HerdrError {}

@@ -12,8 +12,8 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
 delete process.env.PACK_WORKTREE_DIR;
 
-const { emptyState, load, save } = await import("../src/state.ts");
-const { spawnAgent } = await import("../src/spawn.ts");
+const { emptyState, load, save } = await import("../src/core/state.ts");
+const { spawnAgent } = await import("../src/agents/spawn.ts");
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 

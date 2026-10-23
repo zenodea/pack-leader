@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hexColor, loadTheme, parseTheme } from "../src/theme.ts";
+import { hexColor, loadTheme, parseTheme } from "../src/ui/theme.ts";
 
 test("parseTheme: [ui] accent wins over [theme.custom]; comments and other keys are skipped", () => {
   const toml = `
