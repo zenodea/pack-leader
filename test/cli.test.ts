@@ -11,7 +11,8 @@ const stateDir = join(dir, "state");
 process.env.HERDR_PLUGIN_STATE_DIR = stateDir;
 
 const { load, save } = await import("../src/core/state.ts");
-const { here, workspaceOf, runCwd, refuseTransition, reportPath } = await import("../src/cli.ts");
+const { here, workspaceOf, runCwd, reportPath } = await import("../src/cli/shared.ts");
+const { refuseTransition } = await import("../src/cli/commands/task.ts");
 const cliPath = resolve(import.meta.dirname, "..", "src", "cli.ts");
 
 after(() => rmSync(dir, { recursive: true, force: true }));
