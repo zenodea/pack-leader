@@ -1,0 +1,3 @@
+pub const SETUP_DEFAULT_TIMEOUT_MS: i64 = 120_000;
+pub const SETUP_MAX_TIMEOUT_MS: i64 = 300_000;
+pub const SETUP_MAX_LOG_BYTES: usize = 256 * 1024;
