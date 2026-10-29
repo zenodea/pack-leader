@@ -212,6 +212,7 @@ fn createTx(c: CreateCtx, s: State) !*Obj {
         .{ "status", "active" },
         .{ "created_at", state.now() },
         .{ "orchestrator", json.object(.{ .{ "pane_id", json.optStr(c.h.pane_id) }, .{ "workspace_id", json.optStr(c.h.workspace_id) }, .{ "tab_id", json.optStr(c.h.tab_id) }, .{ "cwd", c.cwd } }) },
+        .{ "mux", mux.runMuxTag() },
     });
     if (parent) |p| {
         run.put("parent", p.parent.val());
@@ -277,6 +278,7 @@ fn useTx(c: UseCtx, s: State) !*Obj {
     orch.putStr("workspace_id", c.h.workspace_id);
     orch.putStr("tab_id", c.h.tab_id);
     r.put("orchestrator", orch.val());
+    if (mux.runMuxTag()) |tag| r.putStr("mux", tag) else r.del("mux");
     return r;
 }
 

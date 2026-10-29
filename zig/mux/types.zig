@@ -39,7 +39,9 @@ pub const MuxEvent = union(enum) {
 };
 
 pub const Capabilities = struct {
-    agent_status: enum { native, none },
+    /// native: the multiplexer reports status and state_change_seq; hooks: agents report it through
+    /// `pack-leader __agent-status` (kinds without hooks stay "unknown"); none: never known.
+    agent_status: enum { native, hooks, none },
     events: bool,
     layout_tree: bool,
     arrange: bool,
@@ -107,6 +109,12 @@ pub const Multiplexer = struct {
     readScreen: *const fn (target: []const u8, source: ScreenSource, lines: ?i64, timeout_ms: ?i64) anyerror!?[]const u8,
 
     notify: *const fn (title: []const u8, body: ?[]const u8, sound: []const u8) void,
+    /// The calling process's own pane, when the environment does not name it.
+    locate: ?*const fn () ?Location = null,
+    /// Whether the current process can reach this multiplexer at all.
+    reachable: *const fn () bool,
+    /// Error message when it cannot ("not inside herdr (HERDR_ENV is not 1)").
+    unreachable_message: []const u8,
     subscribe: *const fn (types: []const MuxEventType) Subscription,
 
     layoutExport: ?*const fn (tab_id: []const u8) anyerror!*Obj = null,
@@ -121,3 +129,6 @@ pub const Multiplexer = struct {
 };
 
 pub const TabCreated = struct { tab: ?*Obj, root_pane: ?*Obj };
+
+/// Where the calling process runs, for backends without HERDR_PANE_ID-style environment.
+pub const Location = struct { pane_id: []const u8, workspace_id: []const u8, tab_id: []const u8, cwd: ?[]const u8 = null };

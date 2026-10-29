@@ -4,6 +4,8 @@ const json = @import("../core/json.zig");
 const state = @import("../core/state.zig");
 const remote = @import("../herdr/remote.zig");
 const herdr_backend = @import("herdr.zig");
+const tmux_backend = @import("tmux.zig");
+pub const agent_status = @import("agent_status.zig");
 pub const types = @import("types.zig");
 
 const Obj = json.Obj;
@@ -17,17 +19,42 @@ pub const ScreenSource = types.ScreenSource;
 pub const TabCreated = types.TabCreated;
 pub const atRest = types.atRest;
 
-const BACKENDS = [_]*const Multiplexer{&herdr_backend.backend};
+const BACKENDS = [_]*const Multiplexer{ &herdr_backend.backend, &tmux_backend.backend };
 
+/// PACK_LEADER_MUX wins; otherwise herdr when its environment is present, tmux inside a tmux client, else herdr.
 pub fn detectBackend() ![]const u8 {
     if (rt.getenv("PACK_LEADER_MUX")) |raw| {
         const want = rt.trim(raw);
         if (want.len > 0) {
             for (BACKENDS) |b| if (rt.eql(b.name, want)) return b.name;
-            return rt.fail("unknown_mux", "PACK_LEADER_MUX={s} is not a known multiplexer (known: herdr)", .{want});
+            return rt.fail("unknown_mux", "PACK_LEADER_MUX={s} is not a known multiplexer (known: herdr, tmux)", .{want});
         }
     }
+    if (herdr_backend.backend.reachable()) return "herdr";
+    if (tmux_backend.backend.reachable()) return "tmux";
     return "herdr";
+}
+
+/// Fails with the backend's own message when the current process is not inside it.
+pub fn requireMux() !void {
+    const m = mux();
+    if (!m.reachable()) return rt.failMsg(null, m.unreachable_message);
+}
+
+/// Runs remember the multiplexer they were created under (absent means herdr); a backend only manages its own.
+pub fn ownsRun(run: *Obj) bool {
+    return rt.eql(run.str("mux") orelse "herdr", mux().name);
+}
+
+/// The value a new or re-bound run records: null under herdr, so herdr state stays unchanged.
+pub fn runMuxTag() ?[]const u8 {
+    const name = mux().name;
+    return if (rt.eql(name, "herdr")) null else name;
+}
+
+pub fn locate() ?types.Location {
+    const f = mux().locate orelse return null;
+    return f();
 }
 
 var active: ?*const Multiplexer = null;

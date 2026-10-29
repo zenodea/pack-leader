@@ -514,7 +514,7 @@ const Sidebar = struct {
     }
 
     fn leave(self: *Sidebar) noreturn {
-        if (rt.getenvNonEmpty("HERDR_PANE_ID")) |p| _ = mux.paneClose(p) catch {};
+        if (self.pane) |p| _ = mux.paneClose(p) catch {};
         self.quit();
     }
 
@@ -863,7 +863,8 @@ const SUB_RECYCLE_MS: i64 = 60_000;
 
 pub fn runSidebar() !void {
     const tty = term.isTty(0);
-    if (!tty and rt.getenv("HERDR_PANE_ID") == null) return rt.fail(null, "the sidebar needs a terminal: herdr opens it in a pane (\"Pack Leader: show the pack\")", .{});
+    const own_pane = shared.here().pane_id;
+    if (!tty and own_pane == null) return rt.fail(null, "the sidebar needs a terminal: herdr opens it in a pane (\"Pack Leader: show the pack\")", .{});
     _ = rt.cwd();
     var sb: Sidebar = .{
         .state = undefined,
@@ -874,8 +875,8 @@ pub fn runSidebar() !void {
         .msg_arena = newArena(),
         .sub_arena = newArena(),
         .theme = theme_mod.loadTheme(),
-        .pane = rt.getenvNonEmpty("HERDR_PANE_ID"),
-        .workspace = shared.workspaceOf(rt.getenvNonEmpty("HERDR_PANE_ID")),
+        .pane = own_pane,
+        .workspace = shared.workspaceOf(own_pane),
     };
     {
         const prev = rt.a;

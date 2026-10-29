@@ -52,14 +52,36 @@ pub fn here() Here {
         if (json.parse(raw)) |v| ctx = v.asObj() else |_| {}
     }
     const c = ctx orelse json.newObj();
-    const pane_id = c.strNonEmpty("focused_pane_id") orelse rt.getenvNonEmpty("HERDR_PANE_ID");
-    const workspace_id = c.strNonEmpty("workspace_id") orelse c.strNonEmpty("focused_workspace_id") orelse rt.getenvNonEmpty("HERDR_WORKSPACE_ID") orelse workspaceOf(pane_id);
+    var pane_id = c.strNonEmpty("focused_pane_id") orelse rt.getenvNonEmpty("HERDR_PANE_ID");
+    var workspace_id = c.strNonEmpty("workspace_id") orelse c.strNonEmpty("focused_workspace_id") orelse rt.getenvNonEmpty("HERDR_WORKSPACE_ID") orelse workspaceOf(pane_id);
+    var tab_id = rt.getenvNonEmpty("HERDR_TAB_ID");
+    if (pane_id == null) if (located()) |loc| {
+        pane_id = loc.pane_id;
+        workspace_id = workspace_id orelse loc.workspace_id;
+        tab_id = tab_id orelse loc.tab_id;
+    };
     return .{
         .pane_id = pane_id,
         .workspace_id = workspace_id,
-        .tab_id = rt.getenvNonEmpty("HERDR_TAB_ID"),
+        .tab_id = tab_id,
         .cwd = c.strNonEmpty("focused_pane_cwd") orelse c.strNonEmpty("workspace_cwd") orelse rt.cwd(),
     };
+}
+
+var location_cache: ?mux.types.Location = null;
+var location_looked = false;
+
+fn located() ?mux.types.Location {
+    if (!location_looked) {
+        location_looked = true;
+        if (mux.locate()) |loc| location_cache = .{
+            .pane_id = rt.dupePerm(loc.pane_id),
+            .workspace_id = rt.dupePerm(loc.workspace_id),
+            .tab_id = rt.dupePerm(loc.tab_id),
+            .cwd = if (loc.cwd) |c| rt.dupePerm(c) else null,
+        };
+    }
+    return location_cache;
 }
 
 pub fn currentRun(a: *const Args, s: state.State, allow_closed: bool) !state.Run {
@@ -76,8 +98,9 @@ pub fn coordinatesSubRun(run: state.Run) bool {
     return run.truthy("parent") and rt.eqlOpt(state.orchestratorPane(run), pane);
 }
 
+/// Fails unless this process runs inside the active multiplexer (herdr or tmux).
 pub fn requireHerdr() !void {
-    if (!rt.eqlOpt(rt.getenv("HERDR_ENV"), "1") and rt.getenvNonEmpty("HERDR_PLUGIN_ID") == null and rt.getenvNonEmpty("HERDR_SOCKET_PATH") == null) return rt.fail(null, "not inside herdr (HERDR_ENV is not 1)", .{});
+    return mux.requireMux();
 }
 
 pub fn reportPath(p: ?[]const u8, base: []const u8) ?[]const u8 {
@@ -116,6 +139,13 @@ pub fn openSidebar(target: []const u8, on_left: bool, focus: bool) ![]const u8 {
             }
         } else |_| {}
     };
+    if (!rt.eql(mux.mux().name, "herdr")) {
+        const pane = try mux.openToolPane(json.object(.{ .{ "entrypoint", "sidebar" }, .{ "target_pane_id", target }, .{ "direction", "right" }, .{ "before", on_left } }));
+        const id = pane.str("pane_id") orelse return rt.fail(null, "{s} did not report the sidebar pane id", .{mux.mux().name});
+        if (owner) |o| state.update(void, SidebarCtx{ .run_id = o.str("id").?, .pane = id }, setSidebar) catch {};
+        _ = mux.paneFocus(if (focus) id else target) catch {};
+        return id;
+    }
     const plugin_id = rt.getenvNonEmpty("HERDR_PLUGIN_ID") orelse "pack-leader";
     const res = proc.run(&.{ paths.herdr_bin, "plugin", "pane", "open", "--plugin", plugin_id, "--entrypoint", "sidebar", "--placement", "split", "--direction", "right", "--no-focus", "--target-pane", target }, .{});
     if (!res.ok()) {

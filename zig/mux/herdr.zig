@@ -74,6 +74,10 @@ fn subscribe(wanted: []const types.MuxEventType) types.Subscription {
     return .{ .ctx = ctx, .fdFn = subFd, .retryFn = subRetry, .serviceFn = subService, .closeFn = subClose };
 }
 
+fn reachable() bool {
+    return rt.eqlOpt(rt.getenv("HERDR_ENV"), "1") or rt.getenvNonEmpty("HERDR_PLUGIN_ID") != null or rt.getenvNonEmpty("HERDR_SOCKET_PATH") != null;
+}
+
 pub const backend: types.Multiplexer = .{
     .name = "herdr",
     .capabilities = .{ .agent_status = .native, .events = true, .layout_tree = true, .arrange = true, .workspaces = true },
@@ -104,6 +108,8 @@ pub const backend: types.Multiplexer = .{
 
     .notify = h.notify,
     .subscribe = subscribe,
+    .reachable = reachable,
+    .unreachable_message = "not inside herdr (HERDR_ENV is not 1)",
 
     .layoutExport = h.layoutExport,
     .paneMove = h.paneMove,

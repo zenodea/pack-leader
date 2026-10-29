@@ -86,6 +86,10 @@ fn mainInner(argv: []const []const u8) !void {
         return;
     }
     if (rt.eql(command, "__remote-callback")) return remote_callback.runRemoteCallbackRelay();
+    if (rt.eql(command, "__agent-status")) {
+        @import("mux/agent_status.zig").runHookCommand(rest);
+        return;
+    }
     const a = args_mod.parseArgs(rest);
     try command_args.validateCommandArgs(command, &a);
     const from_action = rt.getenvNonEmpty("HERDR_PLUGIN_ID") != null and rt.getenvNonEmpty("PACK_ROLE") == null;

@@ -1137,6 +1137,7 @@ pub fn herdrWarning(run: ?Run) ?[]const u8 {
 
 fn markUnreachableTx(_: void, s: State) !void {
     for (state.activeRuns(s)) |r| {
+        if (!mux.ownsRun(r)) continue;
         const v = r.get("herdr_unreachable_since");
         if (v == null or v.? == .null) r.putStr("herdr_unreachable_since", state.now());
     }
@@ -1145,7 +1146,7 @@ fn markUnreachableTx(_: void, s: State) !void {
 pub fn markHerdrUnreachable() void {
     const s = state.load() catch return;
     var any = false;
-    for (state.activeRuns(s)) |r| if (!r.truthy("herdr_unreachable_since")) {
+    for (state.activeRuns(s)) |r| if (mux.ownsRun(r) and !r.truthy("herdr_unreachable_since")) {
         any = true;
     };
     if (!any) return;
@@ -1193,10 +1194,11 @@ fn jsRound(x: f64) i64 {
 
 fn syncTx(c: SyncCtx, s: State) ![]Message {
     var out: std.ArrayListUnmanaged(Message) = .empty;
-    if (c.local != null) for (state.activeRuns(s)) |r| if (r.truthy("herdr_unreachable_since")) r.putNull("herdr_unreachable_since");
+    if (c.local != null) for (state.activeRuns(s)) |r| if (mux.ownsRun(r) and r.truthy("herdr_unreachable_since")) r.putNull("herdr_unreachable_since");
     for (state.workers(s).objValues()) |w| {
         const run = state.getRun(s, w.str("run_id") orelse "") orelse continue;
         if (!rt.eqlOpt(run.str("status"), "active")) continue;
+        if (!mux.ownsRun(run)) continue;
         if (parseMs(w.str("started_at"))) |st| if (st > c.snap_at) continue;
         const host = w.get("execution_host");
         const remote_worker = host != null and host.?.truthy();
@@ -1317,6 +1319,7 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
     }
 
     for (state.activeRuns(s)) |r| {
+        if (!mux.ownsRun(r)) continue;
         const pane = state.orchestratorPane(r);
         const o = if (pane != null and pane.?.len > 0 and c.local != null) c.local.?.by_pane.get(pane.?) else null;
         if (pane == null or pane.?.len == 0 or c.renudge_limit <= 0 or o == null or !mux.atRest(o.?.str("agent_status"))) continue;
