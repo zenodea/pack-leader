@@ -21,5 +21,5 @@ Read-only loads now throw a path-specific parse/version error on corruption;
 missing files still return an empty state. Quarantine is deferred until the
 next `update()`, which avoids a reader acting on a stale parse verdict;
 corruption details are also recorded when locked recovery occurs.
-The lock serializes all Pack Leader writers, while external tools that directly
+The lock serializes all Lodestar writers, while external tools that directly
 replace the state file without using that lock remain outside this guarantee.

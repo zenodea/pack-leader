@@ -674,7 +674,7 @@ const Sidebar = struct {
             if (goal_n > 0 and gap == 1) header.append(rt.a, "") catch {};
             appendAll(&header, essential.items);
         }
-        if (sel_run == null and runs.len == 0) header.append(rt.a, dim("no active run — pack-leader run create")) catch {};
+        if (sel_run == null and runs.len == 0) header.append(rt.a, dim("no active run — lodestar run create")) catch {};
         var head: std.ArrayListUnmanaged([]const u8) = .empty;
         appendAll(&head, header.items);
         appendAll(&head, separator);
@@ -864,7 +864,7 @@ const SUB_RECYCLE_MS: i64 = 60_000;
 pub fn runSidebar() !void {
     const tty = term.isTty(0);
     const own_pane = shared.here().pane_id;
-    if (!tty and own_pane == null) return rt.fail(null, "the sidebar needs a terminal: herdr opens it in a pane (\"Pack Leader: show the pack\")", .{});
+    if (!tty and own_pane == null) return rt.fail(null, "the sidebar needs a terminal: herdr opens it in a pane (\"Lodestar: show the workers\")", .{});
     _ = rt.cwd();
     var sb: Sidebar = .{
         .state = undefined,

@@ -1,5 +1,5 @@
 //! Agent status for multiplexers that cannot see inside a pane (tmux). Agents report through hooks that run
-//! `pack-leader __agent-status STATUS`; the record lives in `<state_dir>/agent-status/<server>-<pane>.json`.
+//! `lodestar __agent-status STATUS`; the record lives in `<state_dir>/agent-status/<server>-<pane>.json`.
 
 const std = @import("std");
 const rt = @import("../rt.zig");
@@ -18,7 +18,7 @@ fn isStatus(s: []const u8) bool {
     return false;
 }
 
-/// Agent kinds whose hooks report every transition Pack Leader relies on.
+/// Agent kinds whose hooks report every transition Lodestar relies on.
 pub fn hasHooks(kind: ?[]const u8) bool {
     const k = kind orelse return false;
     return rt.eql(k, "claude") or rt.eql(k, "codex");
@@ -101,7 +101,7 @@ pub fn tmuxServerFromEnv() ?[]const u8 {
     return if (pid.len > 0) pid else null;
 }
 
-/// `pack-leader __agent-status STATUS [...]`, run by an agent's hook inside its pane. Never fails loudly.
+/// `lodestar __agent-status STATUS [...]`, run by an agent's hook inside its pane. Never fails loudly.
 pub fn runHookCommand(argv: []const []const u8) void {
     const raw = if (argv.len > 0) argv[0] else return;
     const status = if (rt.eql(raw, "stop")) "idle" else raw;
@@ -130,7 +130,7 @@ fn hookGroup(bin: []const u8, matcher: ?[]const u8, status: []const u8) json.Val
     return arr.val();
 }
 
-/// Extra launch arguments that make an agent report its status. `bin` is the pack-leader launcher.
+/// Extra launch arguments that make an agent report its status. `bin` is the lodestar launcher.
 pub fn hookArgs(kind: []const u8, bin: []const u8) []const []const u8 {
     if (rt.eql(kind, "claude")) {
         const hooks = json.newObj();
@@ -177,8 +177,8 @@ test "status transitions bump the sequences like herdr" {
     try std.testing.expectEqual(@as(?i64, 3), r.int("state_change_seq"));
     try std.testing.expectEqual(@as(?i64, 1), r.int("completion_seq"));
     try std.testing.expectEqualStrings("claude", read("9", "%3").?.str("agent").?);
-    const args = hookArgs("claude", "/x/pack-leader");
+    const args = hookArgs("claude", "/x/lodestar");
     try std.testing.expectEqualStrings("--settings", args[0]);
-    try std.testing.expect(rt.contains(args[1], "'/x/pack-leader' __agent-status working"));
+    try std.testing.expect(rt.contains(args[1], "'/x/lodestar' __agent-status working"));
     try std.testing.expectEqual(@as(usize, 0), hookArgs("pi", "/x").len);
 }

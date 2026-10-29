@@ -13,7 +13,7 @@
   sync). `check`, `status` and `worker list/show` print it as `warning`.
 - New attention statuses: `unverifiable` (once per dispatch, tracked by
   `Worker.unverifiable_dispatch`) and `stalled` (owes a report and
-  `now - last_seen > PACK_STALL_MS`, default 20 min; deduped by
+  `now - last_seen > LODESTAR_STALL_MS`, default 20 min; deduped by
   `Worker.stalled_since`).
 - `touch()` refreshes `last_seen` and clears `stalled_since`. Called by
   `heartbeat`, `done`, `ask` (new question and `ask --id` resume), a herdr
@@ -21,10 +21,10 @@
   (`markDispatched`).
 - `workerSummary` rows gain `last_seen`, `liveness`, `liveness_reason`,
   `missing_since`/`stalled_since` (when set), `attention: {categories,
-  requires_action}` and `next_action` (argv or null). `pack-leader status` text
+  requires_action}` and `next_action` (argv or null). `lodestar status` text
   shows liveness and a `next:` line per worker.
 - `check --wait` writes `{"waiting":true,"elapsed_ms","pending","workers"}` to
-  stderr every `PACK_WAIT_HEARTBEAT_MS` (default 15000, 0 disables; tests set 0).
+  stderr every `LODESTAR_WAIT_HEARTBEAT_MS` (default 15000, 0 disables; tests set 0).
 - Sidebar: glyph/word for `unverifiable` (red ?, NO AGENT) and `stalled`
   (red ◌, STALLED).
 
@@ -36,7 +36,7 @@
   pane; the agent vanishing or the pane closing is not a sign of life.
 - No `stalled` alert while the worker has an unanswered `ask`: the next move is
   the orchestrator's. Stall needs `liveness === "live"` (unverifiable/exited
-  have their own alerts). `PACK_STALL_MS=0` disables stall detection.
+  have their own alerts). `LODESTAR_STALL_MS=0` disables stall detection.
 - `pending` in the wait heartbeat counts dispatched tasks still owing a report
   (unacked messages are always 0 while waiting).
 - `next_action` priority: open ask → reply; exited with its task dispatched or

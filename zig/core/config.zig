@@ -12,12 +12,12 @@ const Value = json.Value;
 pub const Config = *Obj;
 
 pub const PLACEMENTS = [_][]const u8{ "tab", "split" };
-pub const WORKTREE_MODES = [_][]const u8{ "on", "off", "leader" };
+pub const WORKTREE_MODES = [_][]const u8{ "on", "off", "leader", "shared" };
 
 pub const HandoffSettings = struct { enabled: bool, at_tokens: i64 };
-pub const Settings = struct { placement: []const u8, worktree: []const u8, observer: bool, stall_minutes: i64, handoff: HandoffSettings };
+pub const Settings = struct { placement: []const u8, worktree: []const u8, observer: bool, review: bool, stall_minutes: i64, handoff: HandoffSettings };
 
-pub const DEFAULT_SETTINGS: Settings = .{ .placement = "tab", .worktree = "leader", .observer = true, .stall_minutes = 20, .handoff = .{ .enabled = false, .at_tokens = 200_000 } };
+pub const DEFAULT_SETTINGS: Settings = .{ .placement = "tab", .worktree = "leader", .observer = true, .review = true, .stall_minutes = 20, .handoff = .{ .enabled = false, .at_tokens = 200_000 } };
 
 pub fn settingsOf(config: Config) Settings {
     const handoff = config.obj("handoff");
@@ -25,6 +25,7 @@ pub fn settingsOf(config: Config) Settings {
         .placement = nonNullStr(config.get("placement")) orelse DEFAULT_SETTINGS.placement,
         .worktree = nonNullStr(config.get("worktree")) orelse DEFAULT_SETTINGS.worktree,
         .observer = config.boolean("observer") orelse DEFAULT_SETTINGS.observer,
+        .review = config.boolean("review") orelse DEFAULT_SETTINGS.review,
         .stall_minutes = config.int("stall_minutes") orelse DEFAULT_SETTINGS.stall_minutes,
         .handoff = .{
             .enabled = (if (handoff) |h| h.boolean("enabled") else null) orelse DEFAULT_SETTINGS.handoff.enabled,
@@ -44,6 +45,7 @@ pub fn settingsObj(st: Settings) *Obj {
         .{ "placement", st.placement },
         .{ "worktree", st.worktree },
         .{ "observer", st.observer },
+        .{ "review", st.review },
         .{ "stall_minutes", st.stall_minutes },
         .{ "handoff", json.object(.{ .{ "enabled", st.handoff.enabled }, .{ "at_tokens", st.handoff.at_tokens } }) },
     });
@@ -132,6 +134,7 @@ fn validateSettings(v: *const Obj) !void {
     if (v.get("placement")) |p| if (!(p == .str and rt.oneOf(p.str, &PLACEMENTS))) return invalidConfig("\"placement\" must be one of {s}", .{joinList(&PLACEMENTS)});
     if (v.get("worktree")) |w| if (!(w == .str and rt.oneOf(w.str, &WORKTREE_MODES))) return invalidConfig("\"worktree\" must be one of {s}", .{joinList(&WORKTREE_MODES)});
     if (v.get("observer")) |o| if (o != .bool) return invalidConfig("\"observer\" must be true or false", .{});
+    if (v.get("review")) |o| if (o != .bool) return invalidConfig("\"review\" must be true or false", .{});
     if (v.get("stall_minutes")) |s| if (!isWholeAtLeast(s, 0)) return invalidConfig("\"stall_minutes\" must be a whole number of minutes, 0 for off", .{});
     const handoff = v.get("handoff") orelse return;
     const h = handoff.asObj() orelse return invalidConfig("\"handoff\" must be an object", .{});
@@ -160,6 +163,19 @@ pub fn saveConfig(config: Config) !Config {
     _ = paths.ensureDir(paths.config_dir);
     fs.writeFile(configFile(), rt.concat(&.{ json.stringify(config.val(), true), "\n" }), 0o666) catch |err| return rt.fail(null, "cannot write {s}: {s}", .{ configFile(), fs.errText(err) });
     return config;
+}
+
+/// Whether the orchestrator reviews workers' code: the run's own `review` (set by
+/// `run create --no-review`) wins over the settings.
+pub fn reviewFor(run: ?*const Obj) bool {
+    if (run) |r| if (r.boolean("review")) |b| return b;
+    const c = loadConfig() catch return DEFAULT_SETTINGS.review;
+    return settingsOf(c).review;
+}
+
+pub fn worktreeMode() []const u8 {
+    const c = loadConfig() catch return DEFAULT_SETTINGS.worktree;
+    return settingsOf(c).worktree;
 }
 
 pub fn defaultsFor(config: Config, kind: []const u8) *Obj {

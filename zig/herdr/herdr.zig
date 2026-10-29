@@ -14,7 +14,7 @@ var next_id: u64 = 0;
 pub fn herdr(method: []const u8, params: *Obj, timeout_ms_: ?i64) !Value {
     if (remote.currentExecutionHost()) |host| return remote.remoteHerdr(host, method, params, timeout_ms_ orelse 15_000);
     next_id += 1;
-    const id = rt.fmt("pack-leader:{d}:{d}", .{ rt.pid, next_id });
+    const id = rt.fmt("lodestar:{d}:{d}", .{ rt.pid, next_id });
     const timeout_ms = timeout_ms_ orelse 15_000;
     const deadline = rt.monoMs() + timeout_ms;
     var conn = sock.connect(paths.herdrSocketPath()) catch |err| return rt.fail("unreachable", "herdr is not reachable ({s})", .{rt.errMessage(err)});
@@ -138,7 +138,7 @@ pub fn tabClose(tab_id: []const u8) !Value {
 
 /// p: { entrypoint, target_pane_id, direction, env? }
 pub fn pluginPaneOpen(p: *Obj) !*Obj {
-    const params = json.object(.{ .{ "plugin_id", rt.getenvNonEmpty("HERDR_PLUGIN_ID") orelse "pack-leader" }, .{ "placement", "split" }, .{ "focus", false } });
+    const params = json.object(.{ .{ "plugin_id", rt.getenvNonEmpty("HERDR_PLUGIN_ID") orelse "lodestar" }, .{ "placement", "split" }, .{ "focus", false } });
     params.assign(p);
     const res = try herdr("plugin.pane.open", params, null);
     const o = res.asObj();
@@ -236,9 +236,9 @@ pub fn renamePane(pane_id: []const u8, label: ?[]const u8) void {
 
 pub fn labelPane(pane_id: []const u8, title: ?[]const u8) void {
     const params = if (title) |t|
-        json.object(.{ .{ "pane_id", pane_id }, .{ "source", "pack-leader" }, .{ "title", t } })
+        json.object(.{ .{ "pane_id", pane_id }, .{ "source", "lodestar" }, .{ "title", t } })
     else
-        json.object(.{ .{ "pane_id", pane_id }, .{ "source", "pack-leader" }, .{ "clear_title", true } });
+        json.object(.{ .{ "pane_id", pane_id }, .{ "source", "lodestar" }, .{ "clear_title", true } });
     _ = herdr("pane.report_metadata", params, 3000) catch |err| {
         logHerdrError("pane.report_metadata", err, json.object(.{.{ "pane", pane_id }}));
     };
@@ -277,7 +277,7 @@ pub const Subscription = struct {
 
     fn open(self: *Subscription) void {
         next_id += 1;
-        const id = rt.fmt("pack-leader:sub:{d}:{d}", .{ rt.pid, next_id });
+        const id = rt.fmt("lodestar:sub:{d}:{d}", .{ rt.pid, next_id });
         var conn = sock.connect(paths.herdrSocketPath()) catch {
             self.dropped();
             return;

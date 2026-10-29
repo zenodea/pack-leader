@@ -10,6 +10,7 @@ test {
     std.testing.refAllDecls(@import("agents/spawn.zig"));
     std.testing.refAllDecls(@import("agents/workers.zig"));
     std.testing.refAllDecls(@import("agents/worktree.zig"));
+    std.testing.refAllDecls(@import("agents/shared_worktree.zig"));
     std.testing.refAllDecls(@import("cli/args.zig"));
     std.testing.refAllDecls(@import("cli/command_args.zig"));
     std.testing.refAllDecls(@import("cli/commands/config.zig"));

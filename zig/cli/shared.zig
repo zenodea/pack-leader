@@ -146,7 +146,7 @@ pub fn openSidebar(target: []const u8, on_left: bool, focus: bool) ![]const u8 {
         _ = mux.paneFocus(if (focus) id else target) catch {};
         return id;
     }
-    const plugin_id = rt.getenvNonEmpty("HERDR_PLUGIN_ID") orelse "pack-leader";
+    const plugin_id = rt.getenvNonEmpty("HERDR_PLUGIN_ID") orelse "lodestar";
     const res = proc.run(&.{ paths.herdr_bin, "plugin", "pane", "open", "--plugin", plugin_id, "--entrypoint", "sidebar", "--placement", "split", "--direction", "right", "--no-focus", "--target-pane", target }, .{});
     if (!res.ok()) {
         const msg = rt.trim(res.stderr);

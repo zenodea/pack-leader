@@ -7,6 +7,9 @@ const args_mod = @import("../args.zig");
 const shared = @import("../shared.zig");
 const inbox = @import("../../messaging/inbox.zig");
 const handoff = @import("../../agents/handoff.zig");
+const shared_worktree = @import("../../agents/shared_worktree.zig");
+const fs = @import("../../core/fs.zig");
+const config = @import("../../core/config.zig");
 
 const Obj = json.Obj;
 const Value = json.Value;
@@ -63,9 +66,9 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
     if (rt.eql(command, "send")) return send(a);
     if (rt.eql(command, "say")) {
         const run = try currentRun(a);
-        const body = positionalOr(a, "body") orelse return rt.fail(null, "usage: pack-leader say \"<what the orchestrator should hear>\"", .{});
+        const body = positionalOr(a, "body") orelse return rt.fail(null, "usage: lodestar say \"<what the orchestrator should hear>\"", .{});
         const m = try inbox.say(run, body);
-        shared.outObj(json.object(.{ .{ "sent", m.get("id") }, .{ "run", run.get("id") }, .{ "to", "orchestrator" }, .{ "body", body }, .{ "next", "The orchestrator reads it on its next `pack-leader check`." } }));
+        shared.outObj(json.object(.{ .{ "sent", m.get("id") }, .{ "run", run.get("id") }, .{ "to", "orchestrator" }, .{ "body", body }, .{ "next", "The orchestrator reads it on its next `lodestar check`." } }));
         return;
     }
     if (rt.eql(command, "done")) {
@@ -73,10 +76,16 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
         const outcome = str(a, "outcome");
         const summary = str(a, "summary");
         const ok_outcome = outcome != null and (rt.eql(outcome.?, "succeeded") or rt.eql(outcome.?, "failed"));
-        if (!ok_outcome or summary == null or summary.?.len == 0) return rt.fail(null, "usage: pack-leader done --outcome succeeded|failed --summary \"...\" [--files-modified a,b] [--report-path P]", .{});
-        const base = rt.getenv("PACK_REMOTE_CALLBACK_CWD") orelse rt.cwd();
-        const m = try inbox.done(ctx, .{ .outcome = outcome.?, .summary = summary.?, .files = list(a, "files-modified"), .reportPath = shared.reportPath(str(a, "report-path"), base) });
-        shared.outObj(json.object(.{ .{ "reported", m.get("id") }, .{ "task_id", m.get("task_id") }, .{ "outcome", outcome.? }, .{ "next", "End your turn and wait for the orchestrator." } }));
+        if (!ok_outcome or summary == null or summary.?.len == 0) return rt.fail(null, "usage: lodestar done --outcome succeeded|failed --summary \"...\" [--files-modified a,b] [--report-path P]", .{});
+        const base = rt.getenv("LODESTAR_REMOTE_CALLBACK_CWD") orelse rt.cwd();
+        const files = list(a, "files-modified");
+        const in_shared = rt.eql(outcome.?, "succeeded") and rt.getenv("LODESTAR_REMOTE_CALLBACK_CWD") == null and sharedCheckout(ctx) != null;
+        const commit = if (in_shared) try commitShared(ctx, files, summary.?) else null;
+        const m = try inbox.done(ctx, .{ .outcome = outcome.?, .summary = summary.?, .files = files, .reportPath = shared.reportPath(str(a, "report-path"), base), .commit = commit });
+        const out = json.object(.{ .{ "reported", m.get("id") }, .{ "task_id", m.get("task_id") }, .{ "outcome", outcome.? }, .{ "next", "End your turn and wait for the orchestrator." } });
+        if (commit) |cm| out.put("commit", cm.val());
+        if (in_shared and commit == null) out.putStr("note", if (files.len == 0) "nothing was committed: no --files-modified was given" else "nothing was committed: those files have no changes");
+        shared.outObj(out);
         return;
     }
     if (rt.eql(command, "ask")) {
@@ -86,7 +95,7 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
         if (rt.eql(r.result, "timeout")) {
             const out = json.object(.{ .{ "result", r.result }, .{ "ask_id", r.ask_id } });
             if (r.options.len > 0) out.put("options", json.strArr(r.options));
-            out.putStr("next", rt.fmt("No answer yet. Run `pack-leader ask --id {s}` to keep waiting.", .{r.ask_id}));
+            out.putStr("next", rt.fmt("No answer yet. Run `lodestar ask --id {s}` to keep waiting.", .{r.ask_id}));
             shared.outObj(out);
         } else shared.outObj(askReply(r.ask_id, r.reply.?, r.options));
         return;
@@ -99,16 +108,16 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
     }
     if (rt.eql(command, "note")) {
         const ctx = try contextFrom(a);
-        const body = positionalOr(a, "body") orelse return rt.fail(null, "usage: pack-leader note \"<blocker, finding, or why this takes longer>\"", .{});
+        const body = positionalOr(a, "body") orelse return rt.fail(null, "usage: lodestar note \"<blocker, finding, or why this takes longer>\"", .{});
         const m = try inbox.note(ctx, body);
-        shared.outObj(json.object(.{ .{ "note", m.get("id") }, .{ "next", "Keep working; the orchestrator sees it in `pack-leader check`." } }));
+        shared.outObj(json.object(.{ .{ "note", m.get("id") }, .{ "next", "Keep working; the orchestrator sees it in `lodestar check`." } }));
         return;
     }
     if (rt.eql(command, "escalate")) {
         const ctx = try contextFrom(a);
-        const body = positionalOr(a, "body") orelse return rt.fail(null, "usage: pack-leader escalate \"<what the orchestrator must act on>\"", .{});
+        const body = positionalOr(a, "body") orelse return rt.fail(null, "usage: lodestar escalate \"<what the orchestrator must act on>\"", .{});
         const m = try inbox.escalate(ctx, body);
-        shared.outObj(json.object(.{ .{ "escalation", m.get("id") }, .{ "next", "Keep working unless you cannot; the orchestrator must act on it and may send you a follow-up. Use `pack-leader ask` if you need an answer before you go on." } }));
+        shared.outObj(json.object(.{ .{ "escalation", m.get("id") }, .{ "next", "Keep working unless you cannot; the orchestrator must act on it and may send you a follow-up. Use `lodestar ask` if you need an answer before you go on." } }));
         return;
     }
     if (rt.eql(command, "inbox")) {
@@ -133,10 +142,36 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
     if (rt.eql(command, "request")) {
         const sub = a.pos(0) orelse "show";
         const id = a.pos(1);
-        if (!rt.eql(sub, "show") or id == null or id.?.len == 0) return rt.fail(null, "usage: pack-leader request show ID", .{});
+        if (!rt.eql(sub, "show") or id == null or id.?.len == 0) return rt.fail(null, "usage: lodestar request show ID", .{});
         shared.outObj(try requests.requestShow(id.?));
         return;
     }
+}
+
+/// The run's shared worktree when this worker was started in it.
+fn sharedCheckout(ctx: inbox.WorkerContext) ?*Obj {
+    const s = state.load() catch return null;
+    const run = state.getRun(s, ctx.run_id) orelse return null;
+    const w = state.getWorker(s, ctx.worker) orelse return null;
+    if (!shared_worktree.contains(run, w.str("cwd") orelse return null)) return null;
+    return shared_worktree.of(run);
+}
+
+fn commitShared(ctx: inbox.WorkerContext, files: []const []const u8, summary: []const u8) !?*Obj {
+    const sw = sharedCheckout(ctx) orelse return null;
+    const path = sw.str("path") orelse return null;
+    // Refuse a report `done` would refuse before anything is committed.
+    const task_id = try inbox.doneTaskId(ctx);
+    var abs: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (files) |f| abs.append(rt.a, fs.resolve(rt.cwd(), f)) catch {};
+    return shared_worktree.commitFiles(.{ .cwd = path, .files = abs.items, .worker = ctx.worker, .run_id = ctx.run_id, .task_id = task_id, .summary = summary }) catch |err|
+        rt.fail("commit_failed", "your report was not recorded: committing your files on {s} failed: {s}. Fix that, then run the same `lodestar done` again.", .{ sw.str("branch") orelse "the shared branch", rt.errMessage(err) });
+}
+
+fn hasDone(r: *Obj) bool {
+    const msgs = r.arr("messages") orelse return false;
+    for (msgs.objs()) |m| if (rt.eqlOpt(m.str("type"), "done")) return true;
+    return false;
 }
 
 fn check(a: *const Args) !void {
@@ -165,7 +200,7 @@ fn check(a: *const Args) !void {
     }
     var timeout_ms = try args_mod.num(a, "timeout", 540_000);
     const raised = json.newObj();
-    const floor = inbox.envMs("PACK_MIN_WAIT_MS", 300_000);
+    const floor = inbox.envMs("LODESTAR_MIN_WAIT_MS", 300_000);
     if (has(a, "wait") and floor > 0 and timeout_ms < @as(f64, @floatFromInt(floor))) {
         raised.putNum("timeout_raised_from_ms", timeout_ms);
         raised.putInt("timeout_ms", floor);
@@ -208,6 +243,10 @@ fn check(a: *const Args) !void {
     const out = acked.clone();
     out.assign(r);
     out.assign(raised);
+    if (hasDone(r) and !config.reviewFor(run)) {
+        out.putStr("review", "off");
+        out.putStr("review_note", "Review is off for this run: accept each done report as the worker states it. Do not read its diff, rerun its tests or inspect its files; reuse, retain or release the worker and dispatch what is next.");
+    }
     shared.outObj(out);
 }
 
@@ -219,12 +258,12 @@ fn handoffCmd(a: *const Args) !void {
         return;
     }
     const body = str(a, "body") orelse joinPositional(a.positional);
-    if (rt.trim(body).len == 0) return rt.fail(null, "usage: pack-leader handoff --body \"<note for the session that replaces you>\"", .{});
+    if (rt.trim(body).len == 0) return rt.fail(null, "usage: lodestar handoff --body \"<note for the session that replaces you>\"", .{});
     const saved = try handoff.saveHandoff(run, body);
     try handoff.spawnResume(run_id);
     const out = json.object(.{.{ "handoff", "pending" }});
     out.assign(saved);
-    out.putStr("next", "End your turn now with one line saying you are handing off. Pack Leader clears this session once you are idle and resumes the run in a fresh one.");
+    out.putStr("next", "End your turn now with one line saying you are handing off. Lodestar clears this session once you are idle and resumes the run in a fresh one.");
     shared.outObj(out);
 }
 
@@ -235,23 +274,23 @@ fn reply(a: *const Args) !void {
     if (free_word) |w| positional.append(rt.a, w) catch {};
     const ask_id = if (positional.items.len > 0) positional.items[0] else null;
     const body = str(a, "body") orelse (if (positional.items.len > 1) positional.items[1] else null);
-    if (ask_id == null or ask_id.?.len == 0 or body == null or body.?.len == 0) return rt.fail(null, "usage: pack-leader reply ASK_ID --body \"answer\" [--free]", .{});
+    if (ask_id == null or ask_id.?.len == 0 or body == null or body.?.len == 0) return rt.fail(null, "usage: lodestar reply ASK_ID --body \"answer\" [--free]", .{});
     const run = try currentRun(a);
     const m = try inbox.reply(run, ask_id.?, body.?, .{ .free = has(a, "free") });
     shared.outObj(json.object(.{.{ "reply", m }}));
 }
 
 fn send(a: *const Args) !void {
-    const worker_mode = rt.getenvNonEmpty("PACK_WORKER") != null;
+    const worker_mode = rt.getenvNonEmpty("LODESTAR_WORKER") != null;
     if (!worker_mode) {
         var flags: std.ArrayListUnmanaged([]const u8) = .empty;
         for ([_][]const u8{ "worker", "task", "dispatch" }) |f| if (has(a, f)) flags.append(rt.a, rt.concat(&.{ "--", f })) catch {};
-        if (flags.items.len > 0) return rt.fail(null, "{s} require worker mode (PACK_WORKER)", .{std.mem.join(rt.a, ", ", flags.items) catch ""});
+        if (flags.items.len > 0) return rt.fail(null, "{s} require worker mode (LODESTAR_WORKER)", .{std.mem.join(rt.a, ", ", flags.items) catch ""});
     }
     const name = a.pos(0);
     const words = if (a.positional.len > 1) a.positional[1..] else a.positional[0..0];
     const body = str(a, "body") orelse joinPositional(words);
-    if (name == null or name.?.len == 0 or body.len == 0) return rt.fail(null, "usage: pack-leader send NAME|@all|@idle|@KIND \"text\" [--now]", .{});
+    if (name == null or name.?.len == 0 or body.len == 0) return rt.fail(null, "usage: lodestar send NAME|@all|@idle|@KIND \"text\" [--now]", .{});
     const now_flag = has(a, "now");
     var sub: ?state.Run = null;
     if (worker_mode) {

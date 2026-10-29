@@ -62,14 +62,14 @@ Not edited here (owned by the cli/docs worker); please apply:
    > are free text and take the next word whatever it is (`reply m5 --body "--no"`).
 
 2. `README.md`, the bullet "State is one JSON file under
-   `~/.local/state/herdr/plugins/pack-leader/`, written atomically under a
+   `~/.local/state/herdr/plugins/lodestar/`, written atomically under a
    lock; ...", replace with:
 
-   > - State is one JSON file under `~/.local/state/herdr/plugins/pack-leader/`
+   > - State is one JSON file under `~/.local/state/herdr/plugins/lodestar/`
    >   (`$HERDR_PLUGIN_STATE_DIR` wins when set; if both hold a state.json, a
    >   `state.dir_divergent` event is logged), written atomically (fsync + rename)
    >   under a lock that records its holder's pid, so a crashed command's lock is
-   >   swept at once; every `pack-leader` command is a short-lived process.
+   >   swept at once; every `lodestar` command is a short-lived process.
    >   `events.jsonl` rotates to `events.jsonl.1` at 2 MB.
 
 3. `docs/review/findings-status.md`, the "Totals" line: this branch moves 13

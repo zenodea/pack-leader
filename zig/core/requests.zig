@@ -63,8 +63,8 @@ fn beginTx(ctx: BeginCtx, s: state.State) !?*Obj {
         if (!rt.eqlOpt(r.str("command"), ctx.command) or !rt.eqlOpt(r.str("fingerprint"), ctx.fp)) return rt.fail("request_conflict", "request {s} was used for a different command ({s}); use a new id", .{ ctx.id, r.str("command") orelse "undefined" });
         if (rt.eqlOpt(r.str("status"), "completed")) return r;
         const pid = r.int("pid") orelse 0;
-        if (rt.eqlOpt(r.str("host"), rt.hostname) and state.processAlive(pid)) return rt.fail("request_running", "request {s} is still running (pid {d}); wait for it, then check `pack-leader request show {s}`", .{ ctx.id, pid, ctx.id });
-        return rt.fail("request_outcome_unknown", "request {s} started at {s} but its process ended before recording a result; it may have taken effect. Inspect the run (`pack-leader status`, `task list`, `worker list`) and retry with a new id only if it did not", .{ ctx.id, r.str("started_at") orelse "undefined" });
+        if (rt.eqlOpt(r.str("host"), rt.hostname) and state.processAlive(pid)) return rt.fail("request_running", "request {s} is still running (pid {d}); wait for it, then check `lodestar request show {s}`", .{ ctx.id, pid, ctx.id });
+        return rt.fail("request_outcome_unknown", "request {s} started at {s} but its process ended before recording a result; it may have taken effect. Inspect the run (`lodestar status`, `task list`, `worker list`) and retry with a new id only if it did not", .{ ctx.id, r.str("started_at") orelse "undefined" });
     }
     requests.put(ctx.id, json.object(.{
         .{ "id", ctx.id },

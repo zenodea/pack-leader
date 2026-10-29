@@ -4,7 +4,7 @@ const fs = @import("fs.zig");
 
 pub var home: []const u8 = "";
 pub var plugin_root: []const u8 = "";
-pub var pack_leader_bin: []const u8 = "";
+pub var lodestar_bin: []const u8 = "";
 pub var guide_file: []const u8 = "";
 pub var skill_stub_file: []const u8 = "";
 pub var herdr_home: []const u8 = "";
@@ -25,7 +25,7 @@ fn envOr(name: []const u8, fallback: []const u8) []const u8 {
 }
 
 fn findPluginRoot() []const u8 {
-    if (rt.getenvNonEmpty("PACK_LEADER_ROOT")) |r| return r;
+    if (rt.getenvNonEmpty("LODESTAR_ROOT")) |r| return r;
     const exe = std.process.executableDirPathAlloc(rt.io, rt.a) catch return rt.cwd();
     var dir: []const u8 = exe;
     while (true) {
@@ -42,18 +42,36 @@ pub fn init() void {
     const xdg_config = envOr("XDG_CONFIG_HOME", fs.join(&.{ home, ".config" }));
     const xdg_state = envOr("XDG_STATE_HOME", fs.join(&.{ home, ".local", "state" }));
     plugin_root = findPluginRoot();
-    pack_leader_bin = fs.join(&.{ plugin_root, "bin", "pack-leader" });
+    lodestar_bin = fs.join(&.{ plugin_root, "bin", "lodestar" });
     guide_file = fs.join(&.{ plugin_root, "docs", "guide.md" });
     skill_stub_file = fs.join(&.{ plugin_root, "skill", "SKILL.md" });
     herdr_home = fs.join(&.{ xdg_config, "herdr" });
     herdr_state = fs.join(&.{ xdg_state, "herdr" });
     herdr_bin = envOr("HERDR_BIN_PATH", "herdr");
-    config_dir = envOr("HERDR_PLUGIN_CONFIG_DIR", fs.join(&.{ herdr_home, "plugins", "config", "pack-leader" }));
-    setStateDir(resolveStateDir());
+    config_dir = envOr("HERDR_PLUGIN_CONFIG_DIR", fs.join(&.{ herdr_home, "plugins", "config", "lodestar" }));
+    migrateOldName(config_dir);
+    const state = resolveStateDir();
+    migrateOldName(state);
+    setStateDir(state);
     local_bin = fs.join(&.{ home, ".local", "bin" });
-    skill_claude = fs.join(&.{ envOr("CLAUDE_CONFIG_DIR", fs.join(&.{ home, ".claude" })), "skills", "pack-leader" });
-    skill_codex = fs.join(&.{ envOr("CODEX_HOME", fs.join(&.{ home, ".codex" })), "skills", "pack-leader" });
-    skill_pi = fs.join(&.{ envOr("PI_CODING_AGENT_DIR", fs.join(&.{ home, ".pi", "agent" })), "skills", "pack-leader" });
+    skill_claude = fs.join(&.{ envOr("CLAUDE_CONFIG_DIR", fs.join(&.{ home, ".claude" })), "skills", "lodestar" });
+    skill_codex = fs.join(&.{ envOr("CODEX_HOME", fs.join(&.{ home, ".codex" })), "skills", "lodestar" });
+    skill_pi = fs.join(&.{ envOr("PI_CODING_AGENT_DIR", fs.join(&.{ home, ".pi", "agent" })), "skills", "lodestar" });
+}
+
+/// Lodestar used to be called Pack Leader. The first run under the new name moves the old
+/// state or settings folder (`.../pack-leader`, next to `dir`) into place, unless `dir` already
+/// has something in it. Only folders named after the plugin are touched.
+fn migrateOldName(dir: []const u8) void {
+    if (!rt.eql(fs.basename(dir), "lodestar")) return;
+    const old = fs.join(&.{ fs.dirname(dir), "pack-leader" });
+    if (!fs.isDir(old)) return;
+    if (fs.isDir(dir)) {
+        const entries = fs.listDir(dir) catch return;
+        if (entries.len != 0) return;
+        fs.rmdir(dir) catch return;
+    }
+    fs.rename(old, dir) catch {};
 }
 
 pub fn setStateDir(dir: []const u8) void {
@@ -65,7 +83,7 @@ pub fn setStateDir(dir: []const u8) void {
 
 pub fn defaultStateDir() []const u8 {
     const xdg_state = envOr("XDG_STATE_HOME", fs.join(&.{ home, ".local", "state" }));
-    return fs.join(&.{ xdg_state, "herdr", "plugins", "pack-leader" });
+    return fs.join(&.{ xdg_state, "herdr", "plugins", "lodestar" });
 }
 
 pub fn resolveStateDir() []const u8 {

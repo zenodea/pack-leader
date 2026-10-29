@@ -22,10 +22,10 @@ pub const WorkerContext = struct { run_id: []const u8, worker: []const u8, task_
 pub const WorkerContextOpts = struct { task: ?[]const u8 = null, dispatch: ?[]const u8 = null, worker: ?[]const u8 = null, run: ?[]const u8 = null };
 
 pub fn workerContext(flags: WorkerContextOpts) !WorkerContext {
-    const worker = flags.worker orelse rt.getenv("PACK_WORKER");
-    const run_id = flags.run orelse rt.getenv("PACK_RUN_ID");
-    if (worker == null or worker.?.len == 0 or run_id == null or run_id.?.len == 0) return rt.fail(null, "not a pack-leader worker pane (PACK_WORKER/PACK_RUN_ID unset); pass --worker and --run", .{});
-    return .{ .run_id = run_id.?, .worker = worker.?, .task_id = flags.task orelse rt.getenv("PACK_TASK_ID"), .dispatch_id = flags.dispatch orelse rt.getenv("PACK_DISPATCH_ID") };
+    const worker = flags.worker orelse rt.getenv("LODESTAR_WORKER");
+    const run_id = flags.run orelse rt.getenv("LODESTAR_RUN_ID");
+    if (worker == null or worker.?.len == 0 or run_id == null or run_id.?.len == 0) return rt.fail(null, "not a lodestar worker pane (LODESTAR_WORKER/LODESTAR_RUN_ID unset); pass --worker and --run", .{});
+    return .{ .run_id = run_id.?, .worker = worker.?, .task_id = flags.task orelse rt.getenv("LODESTAR_TASK_ID"), .dispatch_id = flags.dispatch orelse rt.getenv("LODESTAR_DISPATCH_ID") };
 }
 
 const MAX_MESSAGES: usize = 2000;
@@ -166,7 +166,7 @@ pub fn nudgeOrchestrator(run: Run, text: []const u8) bool {
 }
 
 pub fn renudgeMs() i64 {
-    return envMs("PACK_RENUDGE_MS", 60_000);
+    return envMs("LODESTAR_RENUDGE_MS", 60_000);
 }
 
 const RENUDGE_TYPES = [_][]const u8{ "done", "ask", "note", "escalation" };
@@ -342,18 +342,20 @@ fn shellQuote(x: []const u8) []const u8 {
 pub fn replyHint(ask_msg: Message) []const u8 {
     const opts = ask_msg.strs("options");
     const hint = if (opts.len > 0) shellQuote(opts[0]) else "\"...\"";
-    return rt.fmt("pack-leader reply {s} --body {s}", .{ ask_msg.str("id") orelse "undefined", hint });
+    return rt.fmt("lodestar reply {s} --body {s}", .{ ask_msg.str("id") orelse "undefined", hint });
 }
 
 // ---- worker reports ----
 
-pub const DoneOpts = struct { outcome: []const u8, summary: []const u8, files: []const []const u8, reportPath: ?[]const u8 };
+pub const DoneOpts = struct { outcome: []const u8, summary: []const u8, files: []const []const u8, reportPath: ?[]const u8, commit: ?*Obj = null };
 
 const DoneCtx = struct { ctx: WorkerContext, o: DoneOpts };
 const MsgRun = struct { msg: Message, run: Run };
 
-fn doneTx(c: DoneCtx, s: State) !MsgRun {
-    const ctx = c.ctx;
+const DoneTarget = struct { cur: Current, task: *Obj, dispatch_id: ?[]const u8 };
+
+/// Everything `done` refuses, checked without changing state.
+fn validateDone(ctx: WorkerContext, s: State) !DoneTarget {
     const raw_run = state.getRun(s, ctx.run_id) orelse return rt.fail(null, "no run {s}", .{ctx.run_id});
     const run_id = raw_run.str("id") orelse ctx.run_id;
     if (!rt.eqlOpt(raw_run.str("status"), "active")) return rt.fail(null, "run {s} is closed", .{run_id});
@@ -380,8 +382,24 @@ fn doneTx(c: DoneCtx, s: State) !MsgRun {
         var ids: std.ArrayListUnmanaged([]const u8) = .empty;
         for (open) |r| ids.append(rt.a, r.str("id") orelse "") catch {};
         const many = open.len > 1;
-        return rt.fail(null, "you still coordinate sub-run{s} {s}: settle {s} workers and close {s} with `pack-leader run close --run <id>` (or --release) before you report", .{ if (many) "s" else "", joinStrs(ids.items, ", "), if (many) "their" else "its", if (many) "them" else "it" });
+        return rt.fail(null, "you still coordinate sub-run{s} {s}: settle {s} workers and close {s} with `lodestar run close --run <id>` (or --release) before you report", .{ if (many) "s" else "", joinStrs(ids.items, ", "), if (many) "their" else "its", if (many) "them" else "it" });
     }
+    return .{ .cur = cur, .task = t, .dispatch_id = disp };
+}
+
+/// The task a `done` from this context would settle; fails exactly as `done` would.
+pub fn doneTaskId(ctx: WorkerContext) ![]const u8 {
+    const d = try validateDone(ctx, try state.load());
+    return d.task.str("id") orelse "";
+}
+
+fn doneTx(c: DoneCtx, s: State) !MsgRun {
+    const ctx = c.ctx;
+    const d = try validateDone(ctx, s);
+    const cur = d.cur;
+    const t = d.task;
+    const tid = t.str("id") orelse "";
+    const disp = d.dispatch_id;
     t.putStr("status", c.o.outcome);
     t.putStr("updated_at", state.now());
     t.put("outcome", json.object(.{ .{ "summary", c.o.summary }, .{ "files_modified", json.strArr(c.o.files) }, .{ "report_path", json.optStr(c.o.reportPath) } }).val());
@@ -399,13 +417,14 @@ fn doneTx(c: DoneCtx, s: State) !MsgRun {
         .{ "files_modified", json.strArr(c.o.files) },
         .{ "report_path", json.optStr(c.o.reportPath) },
     }));
+    if (c.o.commit) |cm| msg.put("commit", cm.val());
     return .{ .msg = msg, .run = cur.run };
 }
 
 pub fn done(ctx: WorkerContext, o: DoneOpts) !Message {
     const r = try state.update(MsgRun, DoneCtx{ .ctx = ctx, .o = o }, doneTx);
     state.log(json.object(.{ .{ "event", "worker.done" }, .{ "run", r.run.get("id") }, .{ "worker", ctx.worker }, .{ "task", r.msg.get("task_id") }, .{ "outcome", o.outcome } }));
-    _ = nudgeOrchestrator(r.run, rt.fmt("Pack Leader: worker {s} reported {s} on task {s}. Run `pack-leader check --wait --timeout 540000` and continue the run.", .{ ctx.worker, o.outcome, tpl(r.msg.str("task_id")) }));
+    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: worker {s} reported {s} on task {s}. Run `lodestar check --wait --timeout 540000` and continue the run.", .{ ctx.worker, o.outcome, tpl(r.msg.str("task_id")) }));
     return r.msg;
 }
 
@@ -445,7 +464,7 @@ pub fn note(ctx: WorkerContext, body: []const u8) !Message {
     const r = try state.update(MsgRun, BodyCtx{ .ctx = ctx, .body = body, .kind = "note" }, workerMessageTx);
     const id = r.msg.str("id") orelse "";
     state.log(json.object(.{ .{ "event", "worker.note" }, .{ "run", r.run.get("id") }, .{ "worker", ctx.worker }, .{ "id", id } }));
-    _ = nudgeOrchestrator(r.run, rt.fmt("Pack Leader: worker {s} left a note ({s}); it is not waiting on you. Run `pack-leader check --wait --timeout 540000` and ack it with `--ack {s}`.", .{ ctx.worker, id, id }));
+    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: worker {s} left a note ({s}); it is not waiting on you. Run `lodestar check --wait --timeout 540000` and ack it with `--ack {s}`.", .{ ctx.worker, id, id }));
     return r.msg;
 }
 
@@ -454,7 +473,7 @@ pub fn escalate(ctx: WorkerContext, body: []const u8) !Message {
     const id = r.msg.str("id") orelse "";
     state.log(json.object(.{ .{ "event", "worker.escalation" }, .{ "run", r.run.get("id") }, .{ "worker", ctx.worker }, .{ "id", id } }));
     const gist = state.utf16Slice(jsTrim(collapseWs(body)), 200);
-    _ = nudgeOrchestrator(r.run, rt.fmt("Pack Leader: worker {s} escalates ({s}) and needs you to act: {s}. Run `pack-leader check --wait --timeout 540000`, act on it, and ack it with `--ack {s}`.", .{ ctx.worker, id, gist, id }));
+    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: worker {s} escalates ({s}) and needs you to act: {s}. Run `lodestar check --wait --timeout 540000`, act on it, and ack it with `--ack {s}`.", .{ ctx.worker, id, gist, id }));
     return r.msg;
 }
 
@@ -471,7 +490,7 @@ pub fn say(run: Run, body: []const u8) !Message {
     const msg = try state.update(Message, SayCtx{ .run_id = run_id, .body = body }, sayTx);
     const id = msg.str("id") orelse "";
     state.log(json.object(.{ .{ "event", "user.say" }, .{ "run", run_id }, .{ "id", id } }));
-    _ = nudgeOrchestrator(run, rt.fmt("Pack Leader: the user says ({s}): {s}. Run `pack-leader check --wait --timeout 540000`, act on it, and ack it with `--ack {s}`.", .{ id, jsTrim(collapseWs(body)), id }));
+    _ = nudgeOrchestrator(run, rt.fmt("Lodestar: the user says ({s}): {s}. Run `lodestar check --wait --timeout 540000`, act on it, and ack it with `--ack {s}`.", .{ id, jsTrim(collapseWs(body)), id }));
     return msg;
 }
 
@@ -511,7 +530,7 @@ fn resumeTx(c: ResumeCtx, s: State) !Message {
     const ctx = c.ctx;
     const a = findMessage(s, c.ask_id);
     if (a == null or !isType(a.?, "ask") or !rt.eqlOpt(a.?.str("run_id"), ctx.run_id) or !rt.eqlOpt(a.?.str("from"), ctx.worker)) {
-        return rt.fail(null, "no ask {s} from worker \"{s}\" in run {s}; pass the id your `pack-leader ask` printed", .{ c.ask_id, ctx.worker, ctx.run_id });
+        return rt.fail(null, "no ask {s} from worker \"{s}\" in run {s}; pass the id your `lodestar ask` printed", .{ c.ask_id, ctx.worker, ctx.run_id });
     }
     var answered: ?Message = null;
     for (state.messages(s).objs()) |m| if (isType(m, "reply") and rt.eqlOpt(m.str("reply_to"), c.ask_id)) {
@@ -546,7 +565,7 @@ pub fn ask(ctx: WorkerContext, o: AskOpts) !AskResult {
         ask_id = r.msg.str("id") orelse "";
         state.log(json.object(.{ .{ "event", "worker.ask" }, .{ "run", ctx.run_id }, .{ "worker", ctx.worker }, .{ "id", ask_id } }));
         const choices = if (options.len > 0) rt.fmt(" Options: {s} (answer with one, a unique prefix, or --free for free text).", .{formatOptions(options)}) else "";
-        _ = nudgeOrchestrator(r.run, rt.fmt("Pack Leader: worker {s} asks a question ({s}).{s} Run `pack-leader check --wait --timeout 540000` and answer it with `{s}`.", .{ ctx.worker, ask_id, choices, replyHint(r.msg) }));
+        _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: worker {s} asks a question ({s}).{s} Run `lodestar check --wait --timeout 540000` and answer it with `{s}`.", .{ ctx.worker, ask_id, choices, replyHint(r.msg) }));
     } else {
         ask_id = o.resumeId.?;
         const a = try state.update(Message, ResumeCtx{ .ctx = ctx, .ask_id = ask_id }, resumeTx);
@@ -838,13 +857,13 @@ fn deliveryClaimIsActive(claim: *Obj) bool {
     return pid > 0 and state.processAlive(pid);
 }
 
-const CONTINUE_REMINDER = "[Then carry on with your task. When it is finished, report with `pack-leader done` as your dispatch preamble says; do not end your turn without reporting.]";
+const CONTINUE_REMINDER = "[Then carry on with your task. When it is finished, report with `lodestar done` as your dispatch preamble says; do not end your turn without reporting.]";
 
 fn followupPrompt(id: []const u8, body: []const u8, from: []const u8, owes_report: bool) []const u8 {
     const head = if (rt.eql(from, "orchestrator"))
-        rt.fmt("[Pack Leader follow-up from the orchestrator] {s}\n[Pack Leader message id: {s}]", .{ body, id })
+        rt.fmt("[Lodestar follow-up from the orchestrator] {s}\n[Lodestar message id: {s}]", .{ body, id })
     else
-        rt.fmt("[pack-leader follow-up from worker {s}] {s}\n[Pack Leader message id: {s}]", .{ from, body, id });
+        rt.fmt("[lodestar follow-up from worker {s}] {s}\n[Lodestar message id: {s}]", .{ from, body, id });
     return if (owes_report) rt.concat(&.{ head, "\n", CONTINUE_REMINDER }) else head;
 }
 
@@ -856,7 +875,7 @@ fn deliveryTarget(w: Worker, worker: []const u8) []const u8 {
 fn remoteHostKey(host: Value) []const u8 {
     const h = host.asObj() orelse return "[null,null,null,null,null]";
     const key = json.newArr();
-    for ([_][]const u8{ "name", "ssh_target", "workspace_id", "herdr_socket", "pack_leader" }) |k| {
+    for ([_][]const u8{ "name", "ssh_target", "workspace_id", "herdr_socket", "lodestar" }) |k| {
         key.push(h.get(k) orelse .null);
     }
     return json.stringify(key.val(), false);
@@ -1117,7 +1136,7 @@ pub fn envMs(name: []const u8, fallback: i64) i64 {
 }
 
 pub fn stallMs() i64 {
-    return envMs("PACK_STALL_MS", configuredStallMinutes() * 60_000);
+    return envMs("LODESTAR_STALL_MS", configuredStallMinutes() * 60_000);
 }
 
 const DEFAULT_STALL_MINUTES: i64 = 20;
@@ -1265,13 +1284,13 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
                 }
                 if (!recent) {
                     const body = if (blocked and !owes)
-                        rt.fmt("{s} is blocked on an approval or question in its own UI (pane {s}) after reporting{s}. Inspect with `pack-leader worker read {s}`.", .{ name, pane_id, if (task) |tk| rt.fmt(" on task {s}", .{tk.str("id") orelse ""}) else "", name })
+                        rt.fmt("{s} is blocked on an approval or question in its own UI (pane {s}) after reporting{s}. Inspect with `lodestar worker read {s}`.", .{ name, pane_id, if (task) |tk| rt.fmt(" on task {s}", .{tk.str("id") orelse ""}) else "", name })
                     else if (blocked)
-                        rt.fmt("{s} is blocked on an approval or question in its own UI (pane {s}); it should have used `pack-leader ask`. Inspect with `pack-leader worker read {s}`.", .{ name, pane_id, name })
+                        rt.fmt("{s} is blocked on an approval or question in its own UI (pane {s}); it should have used `lodestar ask`. Inspect with `lodestar worker read {s}`.", .{ name, pane_id, name })
                     else if (exited)
                         rt.fmt("{s}'s pane {s} is gone without a report.", .{ name, pane_id })
                     else
-                        rt.fmt("{s} is {s} without having reported on task {s}. Read its screen with `pack-leader worker read {s}`; if it finished, re-prompt it to run `pack-leader done`.", .{ name, status, task.?.str("id") orelse "", name });
+                        rt.fmt("{s} is {s} without having reported on task {s}. Read its screen with `lodestar worker read {s}`; if it finished, re-prompt it to run `lodestar done`.", .{ name, status, task.?.str("id") orelse "", name });
                     out.append(rt.a, message(s, attentionFields(w, body, status))) catch {};
                 }
             }
@@ -1285,7 +1304,7 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
 
         if (owes and rt.eqlOpt(w.str("liveness"), "unverifiable") and !rt.eqlOpt(w.str("unverifiable_dispatch"), w.str("dispatch_id"))) {
             w.put("unverifiable_dispatch", w.get("dispatch_id") orelse .null);
-            const body = rt.fmt("{s}'s pane {s} is alive but no agent has been seen in it for over {d}s (agent gone, pane alive); it owes a report on task {s}. Read its screen with `pack-leader worker read {s}`, then re-prompt it or `pack-leader worker release {s} --force`.", .{ name, pane_id, @divTrunc(START_GRACE_MS, 1000), task.?.str("id") orelse "", name, name });
+            const body = rt.fmt("{s}'s pane {s} is alive but no agent has been seen in it for over {d}s (agent gone, pane alive); it owes a report on task {s}. Read its screen with `lodestar worker read {s}`, then re-prompt it or `lodestar worker release {s} --force`.", .{ name, pane_id, @divTrunc(START_GRACE_MS, 1000), task.?.str("id") orelse "", name, name });
             out.append(rt.a, message(s, attentionFields(w, body, "unverifiable"))) catch {};
         }
 
@@ -1300,7 +1319,7 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
         if (owes and c.stall_limit > 0 and rt.eqlOpt(w.str("liveness"), "live") and !w.truthy("stalled_since") and !asking and silent_for != null and silent_for.? > c.stall_limit) {
             w.putStr("stalled_since", state.now());
             const mins = jsRound(@as(f64, @floatFromInt(silent_for.?)) / 60_000.0);
-            const body = rt.fmt("{s} has shown no sign of life for {d} min (no heartbeat, question or herdr state change) while task {s} is open. Read its screen with `pack-leader worker read {s}`.", .{ name, mins, task.?.str("id") orelse "", name });
+            const body = rt.fmt("{s} has shown no sign of life for {d} min (no heartbeat, question or herdr state change) while task {s} is open. Read its screen with `lodestar worker read {s}`.", .{ name, mins, task.?.str("id") orelse "", name });
             out.append(rt.a, message(s, attentionFields(w, body, "stalled"))) catch {};
         }
 
@@ -1343,7 +1362,7 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
         else
             rt.fmt("{d} messages, oldest a {s} from {s} ({s})", .{ stale.items.len, oldest.str("type").?, tpl(oldest.str("from")), tpl(oldest.str("id")) });
         const rid = r.str("id") orelse "";
-        c.renudge.append(rt.a, .{ .run = rid, .pane = pane.?, .text = rt.fmt("Pack Leader: run {s} has {s} still unread. Run `pack-leader check --wait --timeout 540000` and continue the run.", .{ rid, what }) }) catch {};
+        c.renudge.append(rt.a, .{ .run = rid, .pane = pane.?, .text = rt.fmt("Lodestar: run {s} has {s} still unread. Run `lodestar check --wait --timeout 540000` and continue the run.", .{ rid, what }) }) catch {};
     }
     return out.items;
 }
@@ -1512,7 +1531,7 @@ pub fn check(run: Run, o: CheckOpts) !*Obj {
     if (!o.wait) return warned(simple("empty"), run_id);
 
     const deadline = rt.monoMs() + o.timeoutMs;
-    const every = o.heartbeatMs orelse envMs("PACK_WAIT_HEARTBEAT_MS", 15_000);
+    const every = o.heartbeatMs orelse envMs("LODESTAR_WAIT_HEARTBEAT_MS", 15_000);
     var next_beat: ?i64 = if (every > 0) rt.monoMs() + every else null;
     var link_up: ?bool = null;
     const sub = mux.subscribe(&.{ .pane_updated, .pane_closed, .pane_exited, .tab_closed });
@@ -1611,8 +1630,8 @@ test "options, replies and whitespace follow the TypeScript" {
     try std.testing.expectError(error.Fail, matchOption(opts, "zzz"));
     try std.testing.expectEqualStrings("a b c", jsTrim(collapseWs("  a \t\n b\u{a0}c  ")));
     const m = json.object(.{ .{ "id", "m3" }, .{ "options", json.strArr(&.{"say \"$x\""}) } });
-    try std.testing.expectEqualStrings("pack-leader reply m3 --body \"say \\\"\\$x\\\"\"", replyHint(m));
-    try std.testing.expectEqualStrings("pack-leader reply m4 --body \"...\"", replyHint(json.object(.{.{ "id", "m4" }})));
+    try std.testing.expectEqualStrings("lodestar reply m3 --body \"say \\\"\\$x\\\"\"", replyHint(m));
+    try std.testing.expectEqualStrings("lodestar reply m4 --body \"...\"", replyHint(json.object(.{.{ "id", "m4" }})));
 }
 
 test "checkTypes, envMs and heartbeat shape" {
@@ -1622,12 +1641,12 @@ test "checkTypes, envMs and heartbeat shape" {
     rt.initForTest(arena.allocator(), &map);
     try std.testing.expectError(error.Fail, checkTypes(&.{ "done", "bogus", "x" }));
     try std.testing.expectEqualStrings("unknown --types values \"bogus\", \"x\"; valid: done, ask, attention, note, user, escalation", rt.last.message);
-    try map.put("PACK_T_MS", "250");
-    try std.testing.expectEqual(@as(i64, 250), envMs("PACK_T_MS", 9));
-    try map.put("PACK_T_MS", "-1");
-    try std.testing.expectEqual(@as(i64, 9), envMs("PACK_T_MS", 9));
-    try map.put("PACK_T_MS", "");
-    try std.testing.expectEqual(@as(i64, 9), envMs("PACK_T_MS", 9));
+    try map.put("LODESTAR_T_MS", "250");
+    try std.testing.expectEqual(@as(i64, 250), envMs("LODESTAR_T_MS", 9));
+    try map.put("LODESTAR_T_MS", "-1");
+    try std.testing.expectEqual(@as(i64, 9), envMs("LODESTAR_T_MS", 9));
+    try map.put("LODESTAR_T_MS", "");
+    try std.testing.expectEqual(@as(i64, 9), envMs("LODESTAR_T_MS", 9));
     const s = state.emptyState();
     state.runs(s).put("r1", json.object(.{ .{ "id", "r1" }, .{ "status", "active" }, .{ "herdr_unreachable_since", "2026-01-01T00:00:00.000Z" } }).val());
     state.workers(s).put("a", json.object(.{ .{ "name", "a" }, .{ "run_id", "r1" }, .{ "liveness", "live" } }).val());

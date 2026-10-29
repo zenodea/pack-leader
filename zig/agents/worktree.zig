@@ -73,12 +73,12 @@ fn mainCheckout(dir: []const u8) ![]const u8 {
 }
 
 pub fn worktreeParent(repo: []const u8) []const u8 {
-    if (rt.getenvNonEmpty("PACK_WORKTREE_DIR")) |d| return fs.resolveCwd(d);
+    if (rt.getenvNonEmpty("LODESTAR_WORKTREE_DIR")) |d| return fs.resolveCwd(d);
     return fs.join(&.{ fs.dirname(repo), rt.concat(&.{ fs.basename(repo), "-wt" }) });
 }
 
 pub fn defaultBranch(run_id: []const u8, worker: []const u8) []const u8 {
-    return rt.concat(&.{ "pack/", run_id, "/", worker });
+    return rt.concat(&.{ "lodestar/", run_id, "/", worker });
 }
 
 fn info(path: []const u8, branch: ?[]const u8, base: []const u8, created_by_pack: bool, repo: []const u8) WorktreeInfo {
@@ -143,7 +143,7 @@ pub const WorktreeChoice = struct { worktree: ?[]const u8 = null, note: ?[]const
 
 /// `mode` is "on" | "off" | "ask" (WorktreeMode).
 pub fn worktreeForMode(mode: []const u8, flag: ?[]const u8, cwd: []const u8, remote: bool) !WorktreeChoice {
-    if (rt.eql(mode, "off") and flag != null and flag.?.len > 0) return rt.fail(null, "worktrees are off in Pack Leader settings (`pack-leader settings`); start the worker without --worktree", .{});
+    if (rt.eql(mode, "off") and flag != null and flag.?.len > 0) return rt.fail(null, "worktrees are off in Lodestar settings (`lodestar settings`); start the worker without --worktree", .{});
     if (!rt.eql(mode, "on") or (flag != null and flag.?.len > 0) or remote) return .{ .worktree = flag };
     _ = repoRoot(cwd) catch return .{ .note = rt.fmt("worktrees are on, but {s} is not in a git repository, so this worker shares it", .{cwd}) };
     return .{ .worktree = "new" };
@@ -169,9 +169,9 @@ test "worktree planning in a fresh repository" {
     try fs.mkdirp(repo, 0o700);
     _ = try git(repo, &.{"init"});
     _ = try git(repo, &.{ "-c", "user.email=a@b", "-c", "user.name=t", "commit", "--allow-empty", "-m", "x" });
-    rt.setenv("PACK_WORKTREE_DIR", "");
+    rt.setenv("LODESTAR_WORKTREE_DIR", "");
     const wt = try planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .worker = "w" });
-    try std.testing.expectEqualStrings("pack/r1/w", wt.str("branch").?);
+    try std.testing.expectEqualStrings("lodestar/r1/w", wt.str("branch").?);
     try std.testing.expect(wt.boolean("created_by_pack").?);
     try std.testing.expect(rt.endsWith(wt.str("path").?, "repo-wt/w"));
     try std.testing.expectError(error.Fail, planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .worker = "w", .branch = "bad..name" }));
@@ -184,6 +184,6 @@ test "worktree planning in a fresh repository" {
     const shared = try worktreeForMode("on", null, tmp, false);
     try std.testing.expect(shared.note != null and shared.worktree == null);
     try std.testing.expectError(error.Fail, worktreeForMode("off", "new", repo, false));
-    try std.testing.expectEqualStrings("pack/r/w", defaultBranch("r", "w"));
+    try std.testing.expectEqualStrings("lodestar/r/w", defaultBranch("r", "w"));
     try std.testing.expect(rt.endsWith(worktreeIdentityPath(fs.join(&.{ repo, "missing", "deeper" })), "repo/missing/deeper"));
 }

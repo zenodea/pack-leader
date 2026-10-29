@@ -10,11 +10,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    const exe = b.addExecutable(.{ .name = "pack-leader", .root_module = exe_mod });
+    const exe = b.addExecutable(.{ .name = "lodestar", .root_module = exe_mod });
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
-    b.step("run", "Run pack-leader").dependOn(&run.step);
+    b.step("run", "Run lodestar").dependOn(&run.step);
 
     const test_mod = b.createModule(.{
         .root_source_file = b.path("zig/tests.zig"),

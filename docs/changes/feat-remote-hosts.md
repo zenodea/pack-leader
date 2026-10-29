@@ -1,6 +1,6 @@
 # Remote execution hosts
 
-Remote workers can now be placed with `pack-leader worker start NAME --host HOST --cwd /remote/absolute/path --spec ...` (or `--task ...`). Add trusted SSH profiles with `host add/list/show/remove`; profiles store SSH targets and remote workspace/socket/executable coordinates, never credentials.
+Remote workers can now be placed with `lodestar worker start NAME --host HOST --cwd /remote/absolute/path --spec ...` (or `--task ...`). Add trusted SSH profiles with `host add/list/show/remove`; profiles store SSH targets and remote workspace/socket/executable coordinates, never credentials.
 
 The leader keeps the only authoritative state and dispatch history. Each remote worker/dispatch stores a profile snapshot, and all remote herdr operations (start, prompt/redispatch/resend, queued delivery, observation, read/archive, focus, stop and owned-resource release) route through a bounded SSH stdio RPC helper and the host's Unix socket. If a remote socket is omitted, the helper uses the normal `herdrSocketPath()` resolution on that host. Worker callbacks return over reciprocal SSH through a strict `done/ask/note/heartbeat/send/inbox` relay, preserving stdout, errors, exit status and blocking asks while the normal worker authority checks fence stale dispatches. Callback subprocesses receive the leader's resolved state directory/socket before module initialization, and relative report paths resolve against the remote worker's cwd.
 

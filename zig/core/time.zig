@@ -51,7 +51,7 @@ fn digits(s: []const u8, at: usize, n: usize) ?i64 {
     return v;
 }
 
-/// `Date.parse` for the ISO forms Pack Leader writes and reads: YYYY-MM-DD[THH:MM[:SS[.sss]]][Z|±HH:MM].
+/// `Date.parse` for the ISO forms Lodestar writes and reads: YYYY-MM-DD[THH:MM[:SS[.sss]]][Z|±HH:MM].
 pub fn parse(s: []const u8) ?i64 {
     const y = digits(s, 0, 4) orelse return null;
     if (s.len == 4) return daysFromCivil(y, 1, 1) * 86_400_000;

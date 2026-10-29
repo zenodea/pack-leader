@@ -1,6 +1,6 @@
 # feat/worktree: a git worktree per worker
 
-`pack-leader worker start NAME --worktree new|PATH [--base REF] [--branch B]` gives a
+`lodestar worker start NAME --worktree new|PATH [--base REF] [--branch B]` gives a
 worker its own working tree, so two workers never share one.
 
 ## What changed
@@ -24,7 +24,7 @@ worker its own working tree, so two workers never share one.
 ## Decisions
 
 - **Where:** `<main checkout parent>/<main checkout basename>-wt/<worker>`, or
-  `$PACK_WORKTREE_DIR/<worker>`. The main checkout (from `git rev-parse
+  `$LODESTAR_WORKTREE_DIR/<worker>`. The main checkout (from `git rev-parse
   --git-common-dir`) is used even when the run's cwd is itself a linked worktree,
   so every worker lands next to the repo. Nothing goes inside the repo.
 - **Base:** default is HEAD of the checkout at the run's cwd (or `--cwd`),
@@ -36,7 +36,7 @@ worker its own working tree, so two workers never share one.
 - **herdr first:** with the default hidden-tab placement, herdr's `worktree.create`
   (or `worktree.open` for `--worktree PATH`) makes the checkout show up as a herdr
   workspace, and the worker's tab is created in that workspace (with the
-  `PACK_*` env, which `worktree.create` cannot set). The workspace's own shell tab
+  `LODESTAR_*` env, which `worktree.create` cannot set). The workspace's own shell tab
   stays, so after release the worktree is still a workspace you can open. A herdr
   without the worktree API (`invalid_request: unknown variant`) falls back to
   `git worktree add`. `--placement split` always uses `git worktree add`, since the

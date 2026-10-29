@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # The two-row worker bar. Click (release), Enter, o or space returns to the leader;
-# q closes it. PACK_RUN_ID pins navigation even when several runs share a workspace.
+# q closes it. LODESTAR_RUN_ID pins navigation even when several runs share a workspace.
 set -u
-run="${PACK_RUN_ID:-}"
-worker="${PACK_WORKER:-}"
-objective="${PACK_OBJECTIVE:-}"
-where="${PACK_WHERE:-}"
-where_label="${PACK_WHERE_LABEL:-Where}"
-task="${PACK_TASK:-}"
+run="${LODESTAR_RUN_ID:-}"
+worker="${LODESTAR_WORKER:-}"
+objective="${LODESTAR_OBJECTIVE:-}"
+where="${LODESTAR_WHERE:-}"
+where_label="${LODESTAR_WHERE_LABEL:-Where}"
+task="${LODESTAR_TASK:-}"
 here="$(cd "$(dirname "$0")" && pwd)"
-pl="${HERDR_PLUGIN_ROOT:-$(dirname "$here")}/bin/pack-leader"
+pl="${HERDR_PLUGIN_ROOT:-$(dirname "$here")}/bin/lodestar"
 error=""
 cols=80
 redraw=0
 
 accent() {
-  if [[ "${PACK_ACCENT:-}" =~ ^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$ ]]; then
+  if [[ "${LODESTAR_ACCENT:-}" =~ ^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$ ]]; then
     printf '\033[38;2;%d;%d;%dm' "$((16#${BASH_REMATCH[1]}))" "$((16#${BASH_REMATCH[2]}))" "$((16#${BASH_REMATCH[3]}))"
   else
     printf '\033[36m'
@@ -55,9 +55,9 @@ go() {
   if output=$(
     # The host pins its own HERDR_* paths on plugin panes; restore the creator's
     # private aliases only for navigation, never for a worker callback or SSH relay.
-    [[ -z "${PACK_LEADER_STATE_DIR:-}" ]] || export HERDR_PLUGIN_STATE_DIR="$PACK_LEADER_STATE_DIR"
-    [[ -z "${PACK_LEADER_SOCKET_PATH:-}" ]] || export HERDR_SOCKET_PATH="$PACK_LEADER_SOCKET_PATH"
-    export PACK_ROLE=bar PACK_REMOTE_CALLBACK_TARGET=""
+    [[ -z "${LODESTAR_STATE_DIR:-}" ]] || export HERDR_PLUGIN_STATE_DIR="$LODESTAR_STATE_DIR"
+    [[ -z "${LODESTAR_SOCKET_PATH:-}" ]] || export HERDR_SOCKET_PATH="$LODESTAR_SOCKET_PATH"
+    export LODESTAR_ROLE=bar LODESTAR_REMOTE_CALLBACK_TARGET=""
     "$pl" leader ${run:+--run "$run"} </dev/null 2>&1
   ); then
     error=""

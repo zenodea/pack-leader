@@ -56,23 +56,23 @@ pub fn runRemoteCallbackRelay() !void {
     try validateCallbackAuthority(req);
     const ctx = req.obj("context").?;
     const exe = std.process.executablePathAlloc(rt.io, rt.a) catch {
-        rt.writeStdout(rt.concat(&.{ json.stringify(json.object(.{ .{ "stdout", "" }, .{ "stderr", "leader callback relay cannot locate the Pack Leader CLI entrypoint\n" }, .{ "exit_code", 1 } }).val(), false), "\n" }));
+        rt.writeStdout(rt.concat(&.{ json.stringify(json.object(.{ .{ "stdout", "" }, .{ "stderr", "leader callback relay cannot locate the Lodestar CLI entrypoint\n" }, .{ "exit_code", 1 } }).val(), false), "\n" }));
         return;
     };
     var extra: std.ArrayListUnmanaged([2][]const u8) = .empty;
     try extra.appendSlice(rt.a, &.{
         .{ "HERDR_PLUGIN_STATE_DIR", req.str("state_dir").? },
         .{ "HERDR_SOCKET_PATH", req.str("leader_socket").? },
-        .{ "PACK_REMOTE_CALLBACK_CWD", req.str("cwd").? },
-        .{ "PACK_ROLE", "worker" },
-        .{ "PACK_REMOTE_CALLBACK_ACTIVE", "1" },
-        .{ "PACK_RUN_ID", ctx.str("run_id").? },
-        .{ "PACK_WORKER", ctx.str("worker").? },
+        .{ "LODESTAR_REMOTE_CALLBACK_CWD", req.str("cwd").? },
+        .{ "LODESTAR_ROLE", "worker" },
+        .{ "LODESTAR_REMOTE_CALLBACK_ACTIVE", "1" },
+        .{ "LODESTAR_RUN_ID", ctx.str("run_id").? },
+        .{ "LODESTAR_WORKER", ctx.str("worker").? },
     });
     var unset: std.ArrayListUnmanaged([]const u8) = .empty;
-    try unset.appendSlice(rt.a, &.{ "HERDR_SESSION", "HERDR_PLUGIN_ID", "HERDR_PLUGIN_CONTEXT_JSON", "PACK_REMOTE_CALLBACK_TARGET", "PACK_REMOTE_CALLBACK_LEADER_BIN", "PACK_REMOTE_CALLBACK_STATE_DIR", "PACK_REMOTE_CALLBACK_LEADER_SOCKET", "PACK_REMOTE_CALLBACK_CWD" });
-    if (ctx.str("task_id")) |t| try extra.append(rt.a, .{ "PACK_TASK_ID", t }) else try unset.append(rt.a, "PACK_TASK_ID");
-    if (ctx.str("dispatch_id")) |d| try extra.append(rt.a, .{ "PACK_DISPATCH_ID", d }) else try unset.append(rt.a, "PACK_DISPATCH_ID");
+    try unset.appendSlice(rt.a, &.{ "HERDR_SESSION", "HERDR_PLUGIN_ID", "HERDR_PLUGIN_CONTEXT_JSON", "LODESTAR_REMOTE_CALLBACK_TARGET", "LODESTAR_REMOTE_CALLBACK_LEADER_BIN", "LODESTAR_REMOTE_CALLBACK_STATE_DIR", "LODESTAR_REMOTE_CALLBACK_LEADER_SOCKET", "LODESTAR_REMOTE_CALLBACK_CWD" });
+    if (ctx.str("task_id")) |t| try extra.append(rt.a, .{ "LODESTAR_TASK_ID", t }) else try unset.append(rt.a, "LODESTAR_TASK_ID");
+    if (ctx.str("dispatch_id")) |d| try extra.append(rt.a, .{ "LODESTAR_DISPATCH_ID", d }) else try unset.append(rt.a, "LODESTAR_DISPATCH_ID");
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     try argv.append(rt.a, exe);
     try argv.appendSlice(rt.a, req.arr("argv").?.strs());

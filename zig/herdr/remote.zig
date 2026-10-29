@@ -97,7 +97,7 @@ pub fn remoteHerdr(host: HostProfile, method: []const u8, params: *Obj, timeout_
         .{ "params", params },
         .{ "timeout_ms", budget },
     });
-    const r = try sshStdio(profile.str("ssh_target").?, profile.str("pack_leader") orelse "pack-leader", "__remote-rpc", json.stringify(request.val(), false), budget + 12_000);
+    const r = try sshStdio(profile.str("ssh_target").?, profile.str("lodestar") orelse "lodestar", "__remote-rpc", json.stringify(request.val(), false), budget + 12_000);
     const reply = json.parse(r.stdout) catch return rt.fail("remote_bad_reply", "remote RPC helper returned invalid JSON", .{});
     const o = reply.asObj();
     if (o) |x| if (x.get("error")) |e| if (e.truthy()) {
@@ -178,7 +178,7 @@ fn socketRequest(socket_path: ?[]const u8, method: []const u8, params: *Obj, tim
     const deadline = rt.monoMs() + timeout_ms;
     var conn = sock.connect(path) catch |err| return rt.fail("unreachable", "remote herdr is not reachable ({s})", .{rt.errMessage(err)});
     defer conn.close();
-    const id = rt.fmt("pack-leader:remote:{d}:{d}", .{ rt.pid, rt.nowMs() });
+    const id = rt.fmt("lodestar:remote:{d}:{d}", .{ rt.pid, rt.nowMs() });
     const req = json.object(.{ .{ "id", id }, .{ "method", method }, .{ "params", params } });
     conn.writeAll(rt.concat(&.{ json.stringify(req.val(), false), "\n" })) catch return rt.fail("disconnected", "remote herdr closed during {s}", .{method});
     while (true) {
@@ -213,21 +213,21 @@ fn absNoControl(v: ?[]const u8) bool {
 pub fn forwardWorkerCallback(argv: []const []const u8) !void {
     const command = if (argv.len > 0) argv[0] else null;
     if (command == null or !isCallbackCommand(command.?)) return rt.fail("remote_callback_denied", "remote worker callback does not allow {s}", .{command orelse "an empty command"});
-    const target = rt.getenvNonEmpty("PACK_REMOTE_CALLBACK_TARGET");
-    const executable = rt.getenvNonEmpty("PACK_REMOTE_CALLBACK_LEADER_BIN") orelse "pack-leader";
-    const state_dir = rt.getenvNonEmpty("PACK_REMOTE_CALLBACK_STATE_DIR");
-    const leader_socket = rt.getenvNonEmpty("PACK_REMOTE_CALLBACK_LEADER_SOCKET");
+    const target = rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_TARGET");
+    const executable = rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_LEADER_BIN") orelse "lodestar";
+    const state_dir = rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_STATE_DIR");
+    const leader_socket = rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_LEADER_SOCKET");
     if (target == null or state_dir == null or leader_socket == null) return rt.fail("remote_callback_unconfigured", "remote worker callback is missing its leader SSH target, state directory or resolved leader socket", .{});
     _ = try hosts.validateSshTargetField(target.?, "leader SSH target");
     if (!absNoControl(state_dir)) return rt.fail("remote_callback_unconfigured", "leader state directory must be an absolute path without control characters", .{});
     if (!absNoControl(leader_socket)) return rt.fail("remote_callback_unconfigured", "leader herdr socket must be an absolute path without control characters", .{});
-    const run_id = rt.getenv("PACK_RUN_ID") orelse "";
-    const worker = rt.getenv("PACK_WORKER") orelse "";
+    const run_id = rt.getenv("LODESTAR_RUN_ID") orelse "";
+    const worker = rt.getenv("LODESTAR_WORKER") orelse "";
     const context = json.object(.{
         .{ "run_id", run_id },
         .{ "worker", worker },
-        .{ "task_id", json.optStr(rt.getenv("PACK_TASK_ID")) },
-        .{ "dispatch_id", json.optStr(rt.getenv("PACK_DISPATCH_ID")) },
+        .{ "task_id", json.optStr(rt.getenv("LODESTAR_TASK_ID")) },
+        .{ "dispatch_id", json.optStr(rt.getenv("LODESTAR_DISPATCH_ID")) },
     });
     if (run_id.len == 0 or worker.len == 0) return rt.fail("remote_callback_unconfigured", "remote worker callback is missing its run/worker identity", .{});
     const payload = json.object(.{

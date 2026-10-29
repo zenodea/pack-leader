@@ -114,7 +114,7 @@ fn step(sel: usize, by: i64, n: usize) usize {
 
 /// Interactive fuzzy picker; null when cancelled.
 pub fn pick(o: PickOptions) !?[]const u8 {
-    if (!term.isTty(0) or !term.isTty(1)) return rt.fail(null, "pack-leader settings needs a terminal", .{});
+    if (!term.isTty(0) or !term.isTty(1)) return rt.fail(null, "lodestar settings needs a terminal", .{});
     var query: []const u8 = "";
     var sel: usize = indexOfValue(o.items, o.current) orelse 0;
     var visible = fuzzyFilter(query, o.items);

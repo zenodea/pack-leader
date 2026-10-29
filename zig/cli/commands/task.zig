@@ -18,7 +18,7 @@ const has = args_mod.has;
 
 fn actsAsWorker(s: State, run: *Obj) bool {
     if (shared.coordinatesSubRun(run)) return false;
-    if (rt.eqlOpt(rt.getenv("PACK_ROLE"), "worker") or rt.getenvNonEmpty("PACK_WORKER") != null) return true;
+    if (rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "worker") or rt.getenvNonEmpty("LODESTAR_WORKER") != null) return true;
     const pane = shared.here().pane_id orelse return false;
     for (state.workers(s).objValues()) |w| if (!w.truthy("execution_host") and rt.eqlOpt(w.str("pane_id"), pane)) return true;
     return false;
@@ -48,7 +48,7 @@ fn transitionAllowed(from: []const u8, to: []const u8) bool {
 pub fn refuseTransition(t: *Obj, to: []const u8, force: bool) !void {
     const status = t.str("status") orelse "undefined";
     const id = t.str("id") orelse "";
-    if (rt.eql(status, "dispatched")) return rt.fail(null, "task {s} is dispatched to {s}; it settles through `pack-leader done` or `pack-leader worker release --force`", .{ id, t.str("worker") orelse "null" });
+    if (rt.eql(status, "dispatched")) return rt.fail(null, "task {s} is dispatched to {s}; it settles through `lodestar done` or `lodestar worker release --force`", .{ id, t.str("worker") orelse "null" });
     if (rt.eql(status, to) or transitionAllowed(status, to)) return;
     if (rt.eql(status, "succeeded") and force) return;
     if (rt.eql(status, "succeeded")) return rt.fail(null, "task {s} is {s}; pass --force to set it {s}", .{ id, status, to });
@@ -223,13 +223,13 @@ fn handleTask(a: *const Args) !void {
         const status = str(a, "status");
         const change_parent = has(a, "parent");
         const parent_arg = str(a, "parent");
-        if (id == null or (status == null and !change_parent)) return rt.fail(null, "usage: pack-leader task update ID [--status pending|blocked|failed|succeeded] [--parent ID|none] [--summary S] [--force]", .{});
+        if (id == null or (status == null and !change_parent)) return rt.fail(null, "usage: lodestar task update ID [--status pending|blocked|failed|succeeded] [--parent ID|none] [--summary S] [--force]", .{});
         if (status) |st| if (!isSettable(st)) return rt.fail(null, "bad status {s}", .{st});
         const t = try state.update(*Obj, UpdateCtx{ .a = a, .id = id.?, .status = status, .change_parent = change_parent, .parent_arg = parent_arg }, updateTx);
         shared.outObj(json.object(.{.{ "task", workers.taskSummary(t, try state.load()) }}));
         return;
     }
-    return rt.fail(null, "unknown: pack-leader task {s}", .{sub});
+    return rt.fail(null, "unknown: lodestar task {s}", .{sub});
 }
 
 fn handleGate(a: *const Args) !void {
@@ -238,7 +238,7 @@ fn handleGate(a: *const Args) !void {
     if (rt.eql(sub, "create")) {
         const task_id = str(a, "task");
         const reason = str(a, "reason");
-        if (task_id == null or reason == null) return rt.fail(null, "usage: pack-leader gate create --task ID --reason \"TEXT\" [--options \"a,b,c\"]", .{});
+        if (task_id == null or reason == null) return rt.fail(null, "usage: lodestar gate create --task ID --reason \"TEXT\" [--options \"a,b,c\"]", .{});
         const s = try state.load();
         const run = try shared.currentRun(a, s, false);
         try requireGateCoordinator(s, run);
@@ -262,7 +262,7 @@ fn handleGate(a: *const Args) !void {
         return;
     }
     if (rt.eql(sub, "show")) {
-        const gid = id orelse return rt.fail(null, "usage: pack-leader gate show ID", .{});
+        const gid = id orelse return rt.fail(null, "usage: lodestar gate show ID", .{});
         const s = try state.load();
         const run = try shared.currentRun(a, s, true);
         const run_id = run.str("id") orelse "";
@@ -274,7 +274,7 @@ fn handleGate(a: *const Args) !void {
     if (rt.eql(sub, "resolve")) {
         const choice = str(a, "choice");
         const decision = str(a, "decision") orelse (if (choice != null) @as(?[]const u8, "approve") else null);
-        if (id == null or decision == null or !(rt.eql(decision.?, "approve") or rt.eql(decision.?, "reject"))) return rt.fail(null, "usage: pack-leader gate resolve ID --decision approve|reject | --choice OPTION [--reason \"TEXT\"]", .{});
+        if (id == null or decision == null or !(rt.eql(decision.?, "approve") or rt.eql(decision.?, "reject"))) return rt.fail(null, "usage: lodestar gate resolve ID --decision approve|reject | --choice OPTION [--reason \"TEXT\"]", .{});
         const s = try state.load();
         const run = try shared.currentRun(a, s, false);
         try requireGateCoordinator(s, run);
@@ -282,7 +282,7 @@ fn handleGate(a: *const Args) !void {
         shared.outObj(json.object(.{.{ "gate", gate }}));
         return;
     }
-    return rt.fail(null, "unknown: pack-leader gate {s}", .{sub});
+    return rt.fail(null, "unknown: lodestar gate {s}", .{sub});
 }
 
 pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {

@@ -12,7 +12,7 @@ path and whether output was truncated. Stdout/stderr capture is capped at 256 Ki
 nonzero exits, timeouts and spawn/log failures block the worker and include the log
 path in the CLI error. Existing and dirty checkouts are preserved on failure.
 After timeout, process-group termination and pipe-close waiting are bounded; if a
-detached descendant retains stdout/stderr, Pack Leader closes its local pipes,
+detached descendant retains stdout/stderr, Lodestar closes its local pipes,
 marks output truncated, records the cleanup error, and returns. Setup is not
 sandboxed, so a descendant that deliberately escapes its process group may outlive
 the timeout.

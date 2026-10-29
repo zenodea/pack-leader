@@ -20,7 +20,7 @@ pub fn assertTaskGatesApproved(s: State, task_id: []const u8) !void {
     if (blockers.len == 0) return;
     var parts: std.ArrayListUnmanaged([]const u8) = .empty;
     for (blockers) |g| parts.append(rt.a, rt.fmt("{s} ({s})", .{ g.str("id") orelse "", g.str("status") orelse "undefined" })) catch {};
-    return gateErr("task_gate_blocked", "task {s} is blocked by unapproved gate{s}: {s}; resolve every gate with `pack-leader gate resolve`", .{ task_id, if (blockers.len == 1) "" else "s", joinStrs(parts.items, ", ") });
+    return gateErr("task_gate_blocked", "task {s} is blocked by unapproved gate{s}: {s}; resolve every gate with `lodestar gate resolve`", .{ task_id, if (blockers.len == 1) "" else "s", joinStrs(parts.items, ", ") });
 }
 
 fn lower(s: []const u8) []const u8 {

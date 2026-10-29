@@ -12,6 +12,7 @@ const remote = @import("../../herdr/remote.zig");
 const inbox = @import("../../messaging/inbox.zig");
 const observer = @import("../../agents/observer.zig");
 const worktree = @import("../../agents/worktree.zig");
+const shared_worktree = @import("../../agents/shared_worktree.zig");
 const spawn = @import("../../agents/spawn.zig");
 const adoption = @import("../../agents/adoption.zig");
 const workers = @import("../../agents/workers.zig");
@@ -66,6 +67,12 @@ fn retainTx(c: RetainCtx, s: state.State) !void {
     (try runWorker(c.a, c.name, s, false)).putBool("retained", true);
 }
 
+/// Worktrees set to shared: a local worker with no --worktree or --cwd of its own joins the run's shared checkout.
+fn usesSharedWorktree(a: *const Args) bool {
+    if (has(a, "worktree") or has(a, "cwd") or str(a, "host") != null) return false;
+    return rt.eql(config.worktreeMode(), "shared");
+}
+
 pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
     _ = from_action;
     if (rt.eql(command, "worker")) return handleWorker(a);
@@ -78,7 +85,7 @@ fn handleWorker(a: *const Args) !void {
     const name_opt = a.pos(1);
     if (rt.eql(sub, "adopt")) {
         try shared.requireHerdr();
-        const name = name_opt orelse return rt.fail(null, "usage: pack-leader worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]", .{});
+        const name = name_opt orelse return rt.fail(null, "usage: lodestar worker adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]", .{});
         const r = try adoption.adoptWorker(.{ .run = try shared.currentRunLoaded(a), .name = name, .taskId = str(a, "task"), .spec = str(a, "spec"), .title = str(a, "title"), .targetPane = str(a, "target-pane") });
         const w = r.obj("worker").?;
         shared.outObj(json.object(.{
@@ -89,14 +96,28 @@ fn handleWorker(a: *const Args) !void {
         return;
     }
     if (rt.eql(sub, "start")) {
-        const name = name_opt orelse return rt.fail(null, "usage: pack-leader worker start NAME --spec \"...\" | --task ID", .{});
+        const name = name_opt orelse return rt.fail(null, "usage: lodestar worker start NAME --spec \"...\" | --task ID", .{});
         if (has(a, "dry-run")) {
             const s = try state.load();
-            shared.outObj(try workers.previewDispatch(s, .{ .run = try shared.currentRun(a, s, false), .name = name, .taskId = str(a, "task"), .spec = str(a, "spec"), .title = str(a, "title"), .retry = has(a, "retry"), .redispatch = false, .cwd = str(a, "cwd"), .worktree = str(a, "worktree"), .base = str(a, "base"), .branch = str(a, "branch") }));
+            var run = try shared.currentRun(a, s, false);
+            var cwd = str(a, "cwd");
+            if (usesSharedWorktree(a)) {
+                const sw = try shared_worktree.plan(run);
+                run = run.clone();
+                run.put("shared_worktree", sw.val());
+                cwd = sw.str("path");
+            }
+            shared.outObj(try workers.previewDispatch(s, .{ .run = run, .name = name, .taskId = str(a, "task"), .spec = str(a, "spec"), .title = str(a, "title"), .retry = has(a, "retry"), .redispatch = false, .cwd = cwd, .worktree = str(a, "worktree"), .base = str(a, "base"), .branch = str(a, "branch") }));
             return;
         }
         try shared.requireHerdr();
-        const run = try shared.currentRunLoaded(a);
+        var run = try shared.currentRunLoaded(a);
+        var start_cwd = str(a, "cwd");
+        if (usesSharedWorktree(a)) {
+            const sw = try shared_worktree.ensure(run.str("id") orelse "");
+            run = state.getRun(try state.load(), run.str("id") orelse "") orelse run;
+            start_cwd = sw.str("path");
+        }
         const direction = str(a, "direction") orelse "right";
         if (!rt.eql(direction, "right") and !rt.eql(direction, "down")) return rt.fail(null, "--direction must be right or down", .{});
         const cfg = try config.loadConfig();
@@ -118,7 +139,7 @@ fn handleWorker(a: *const Args) !void {
             .title = str(a, "title"),
             .taskId = str(a, "task"),
             .retry = has(a, "retry"),
-            .cwd = str(a, "cwd"),
+            .cwd = start_cwd,
             .host = str(a, "host"),
             .placement = placement,
             .packLayout = pack_layout,
@@ -176,7 +197,7 @@ fn handleWorker(a: *const Args) !void {
         shared.outObj(o);
         return;
     }
-    const name = name_opt orelse return rt.fail(null, "usage: pack-leader worker {s} NAME", .{sub});
+    const name = name_opt orelse return rt.fail(null, "usage: lodestar worker {s} NAME", .{sub});
     if (rt.eql(sub, "show")) {
         _ = inbox.sync(.{}) catch {};
         const s = try state.load();
@@ -261,7 +282,7 @@ fn handleWorker(a: *const Args) !void {
             const ids = json.newArr();
             for (children) |c| ids.pushStr(c.str("id") orelse "");
             o.put("sub_runs_left_open", ids.val());
-            o.putStr("hint", "close them with `pack-leader run close --run <id> --release` once you know what their workers are doing");
+            o.putStr("hint", "close them with `lodestar run close --run <id> --release` once you know what their workers are doing");
         }
         shared.outObj(o);
         return;
@@ -308,7 +329,7 @@ fn handleWorker(a: *const Args) !void {
         if (warning != null) rt.exit_code = 1;
         return;
     }
-    return rt.fail(null, "unknown: pack-leader worker {s}", .{sub});
+    return rt.fail(null, "unknown: lodestar worker {s}", .{sub});
 }
 
 fn handleDispatch(a: *const Args) !void {
@@ -335,12 +356,12 @@ fn handleDispatch(a: *const Args) !void {
         if (has(a, "preamble")) writeText(d.?.str("preamble") orelse "") else shared.outObj(json.object(.{.{ "dispatch", dispatch.dispatchView(d.?) }}));
         return;
     }
-    return rt.fail(null, "unknown: pack-leader dispatch {s}", .{sub});
+    return rt.fail(null, "unknown: lodestar dispatch {s}", .{sub});
 }
 
 fn handleSpawn(a: *const Args) !void {
     try shared.requireHerdr();
-    const name = a.pos(0) orelse return rt.fail(null, "usage: pack-leader spawn NAME --prompt \"...\" [--kind K] [--model M] [--thinking L] [--cwd D] [--worktree new|PATH [--base REF] [--branch B]]", .{});
+    const name = a.pos(0) orelse return rt.fail(null, "usage: lodestar spawn NAME --prompt \"...\" [--kind K] [--model M] [--thinking L] [--cwd D] [--worktree new|PATH [--base REF] [--branch B]]", .{});
     if (has(a, "worktree") and blank(str(a, "worktree"))) return rt.fail(null, "--worktree takes new or a path", .{});
     const cfg = try config.loadConfig();
     const kind = str(a, "kind") orelse cfg.str("kind") orelse workers.DEFAULT_KIND;
@@ -362,6 +383,6 @@ fn handleSpawn(a: *const Args) !void {
         .noDefaultArgs = has(a, "no-default-args"),
         .timeoutMs = try numInt(a, "timeout", 45_000),
     });
-    shared.outObj(json.object(.{ .{ "spawned", r }, .{ "note", "unsupervised: no run, task or report; the agent owns the work. Pack Leader never releases this tab or removes its worktree." } }));
+    shared.outObj(json.object(.{ .{ "spawned", r }, .{ "note", "unsupervised: no run, task or report; the agent owns the work. Lodestar never releases this tab or removes its worktree." } }));
     if (r.strNonEmpty("warning") != null) rt.exit_code = 1;
 }

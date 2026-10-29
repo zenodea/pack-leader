@@ -15,7 +15,7 @@ pub const PackSplit = struct { target: []const u8, direction: []const u8 };
 
 const LOCK_STALE_MS: i64 = 60_000;
 const LOCK_WAIT_MS: i64 = 90_000;
-const HOLD_TAB = "pack-leader-hold";
+const HOLD_TAB = "lodestar-hold";
 
 fn isSplit(n: LayoutNode) bool {
     return rt.eqlOpt(n.str("type"), "split");

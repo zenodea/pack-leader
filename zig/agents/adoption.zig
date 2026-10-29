@@ -94,7 +94,7 @@ fn protectPane(s: State, pane_id: []const u8, except_dispatch: ?[]const u8) !voi
         if (!rt.eqlOpt(run.str("status"), "active")) continue;
         const run_id = run.str("id") orelse "";
         if (rt.eqlOpt(state.orchestratorPane(run), pane_id)) return fail("adoption_protected_pane", "pane {s} is the orchestrator pane for run {s}", .{ pane_id, run_id });
-        if (rt.eqlOpt(run.str("sidebar_pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is a Pack Leader sidebar pane for run {s}", .{ pane_id, run_id });
+        if (rt.eqlOpt(run.str("sidebar_pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is a Lodestar sidebar pane for run {s}", .{ pane_id, run_id });
         if (run.obj("observer")) |ob| if (rt.eqlOpt(ob.str("pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is the observer pane for run {s}", .{ pane_id, run_id });
     }
     for (state.workers(s).objValues()) |w| {
@@ -426,7 +426,7 @@ test "isPluginPane recognises plugin markers" {
     defer arena.deinit();
     testInit(&arena);
     try std.testing.expect(!isPluginPane(json.object(.{ .{ "pane_id", "w:1" }, .{ "plugin_id", "" }, .{ "plugin", false } })));
-    try std.testing.expect(isPluginPane(json.object(.{.{ "plugin_id", "pack-leader" }})));
+    try std.testing.expect(isPluginPane(json.object(.{.{ "plugin_id", "lodestar" }})));
     try std.testing.expect(isPluginPane(json.object(.{.{ "isPlugin", true }})));
     try std.testing.expect(isPluginPane(json.object(.{.{ "metadata", json.object(.{.{ "plugin_pane", json.newObj() }}) }})));
     try std.testing.expect(!isPluginPane(json.object(.{.{ "metadata", json.object(.{.{ "plugin", json.nul }}) }})));

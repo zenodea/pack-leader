@@ -17,7 +17,7 @@ const str = args_mod.str;
 const has = args_mod.has;
 
 const PLACEMENTS = [_][]const u8{ "tab", "split" };
-const WORKTREE_MODES = [_][]const u8{ "on", "off", "leader" };
+const WORKTREE_MODES = config.WORKTREE_MODES;
 
 fn configFile() []const u8 {
     return fs.join(&.{ paths.config_dir, "config.json" });
@@ -47,10 +47,11 @@ fn applySettingFlags(c: *Obj, a: *const Args) !void {
         c.putStr("placement", p);
     }
     if (str(a, "worktree-mode")) |w| {
-        if (!inList(w, &WORKTREE_MODES)) return rt.fail(null, "--worktree-mode takes on, off, leader", .{});
+        if (!inList(w, &WORKTREE_MODES)) return rt.fail(null, "--worktree-mode takes on, off, leader, shared", .{});
         c.putStr("worktree", w);
     }
     if (has(a, "observer")) c.putBool("observer", try onOff(a, "observer"));
+    if (has(a, "review")) c.putBool("review", try onOff(a, "review"));
     if (has(a, "stall-minutes")) {
         const n = args_mod.jsNumber(str(a, "stall-minutes") orelse "x");
         if (n == null or !std.math.isFinite(n.?) or @floor(n.?) != n.? or n.? < 0) return rt.fail(null, "--stall-minutes takes a whole number of minutes, 0 for off", .{});
@@ -81,12 +82,12 @@ fn showPayload(c: *Obj) *Obj {
 
 fn openSettings(from_action: bool) !void {
     const c = try settings_ui.runSettings();
-    if (from_action) mux.notify("Pack Leader", settings_ui.describeSettings(c), "none");
+    if (from_action) mux.notify("Lodestar", settings_ui.describeSettings(c), "none");
     shared.outObj(showPayload(c));
 }
 
 const KIND_FLAGS = [_][]const u8{ "kind", "model", "thinking", "clear-model", "clear-thinking", "default" };
-const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "observer", "stall-minutes", "handoff", "handoff-at" };
+const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "observer", "review", "stall-minutes", "handoff", "handoff-at" };
 
 fn anyFlag(a: *const Args, names: []const []const u8) bool {
     for (names) |n| if (has(a, n)) return true;
@@ -136,5 +137,5 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
         return;
     }
     if (rt.eql(sub, "pick")) return openSettings(from_action);
-    return rt.fail(null, "unknown: pack-leader config {s}", .{sub});
+    return rt.fail(null, "unknown: lodestar config {s}", .{sub});
 }

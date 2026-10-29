@@ -37,36 +37,49 @@ pub fn installSkill() !*json.Obj {
         skills.pushStr(stub_path);
     }
     if (skills.len() == 0) note.pushStr("no harness directory found (~/.claude, ~/.codex, ~/.pi/agent)");
+    // The skill used to be called pack-leader: remove those copies so agents don't load both.
+    for ([_][]const u8{ paths.skill_claude, paths.skill_codex, paths.skill_pi }) |dir| {
+        const old = fs.join(&.{ fs.dirname(dir), "pack-leader" });
+        const old_stub = fs.readFileOpt(fs.join(&.{ old, "SKILL.md" })) orelse continue;
+        if (!rt.contains(old_stub, "name: pack-leader")) continue;
+        fs.rmrf(old);
+        note.pushStr(rt.fmt("removed the old pack-leader skill at {s}", .{old}));
+    }
 
     var bin: ?[]const u8 = null;
     link: {
         fs.mkdirp(paths.local_bin, 0o777) catch |err| {
-            note.pushStr(rt.fmt("could not link pack-leader into {s}: {s}", .{ paths.local_bin, fs.errText(err) }));
+            note.pushStr(rt.fmt("could not link lodestar into {s}: {s}", .{ paths.local_bin, fs.errText(err) }));
             break :link;
         };
-        const link = fs.join(&.{ paths.local_bin, "pack-leader" });
+        const link = fs.join(&.{ paths.local_bin, "lodestar" });
         if (fs.exists(link) or isLink(link)) {
-            if (isLink(link) and rt.eqlOpt(fs.readlink(link), paths.pack_leader_bin)) {
+            if (isLink(link) and rt.eqlOpt(fs.readlink(link), paths.lodestar_bin)) {
                 bin = link;
             } else if (isLink(link)) {
                 fs.unlink(link) catch |err| {
-                    note.pushStr(rt.fmt("could not link pack-leader into {s}: {s}", .{ paths.local_bin, fs.errText(err) }));
+                    note.pushStr(rt.fmt("could not link lodestar into {s}: {s}", .{ paths.local_bin, fs.errText(err) }));
                     break :link;
                 };
-                fs.symlink(paths.pack_leader_bin, link) catch |err| {
-                    note.pushStr(rt.fmt("could not link pack-leader into {s}: {s}", .{ paths.local_bin, fs.errText(err) }));
+                fs.symlink(paths.lodestar_bin, link) catch |err| {
+                    note.pushStr(rt.fmt("could not link lodestar into {s}: {s}", .{ paths.local_bin, fs.errText(err) }));
                     break :link;
                 };
                 bin = link;
             } else note.pushStr(rt.fmt("{s} exists and is not a symlink; left alone", .{link}));
         } else {
-            fs.symlink(paths.pack_leader_bin, link) catch |err| {
-                note.pushStr(rt.fmt("could not link pack-leader into {s}: {s}", .{ paths.local_bin, fs.errText(err) }));
+            fs.symlink(paths.lodestar_bin, link) catch |err| {
+                note.pushStr(rt.fmt("could not link lodestar into {s}: {s}", .{ paths.local_bin, fs.errText(err) }));
                 break :link;
             };
             bin = link;
         }
     }
+    // And the old command name, when it is our link.
+    const old_link = fs.join(&.{ paths.local_bin, "pack-leader" });
+    if (isLink(old_link)) if (fs.readlink(old_link)) |target| if (rt.endsWith(target, "/bin/pack-leader")) {
+        if (fs.unlink(old_link)) |_| note.pushStr(rt.fmt("removed the old {s} link", .{old_link})) else |_| {}
+    };
     if (bin != null) {
         var on_path = false;
         var it = std.mem.splitScalar(u8, rt.getenv("PATH") orelse "", ':');

@@ -26,13 +26,13 @@ code: 13 fixed in wave 1, 17 in wave 2, 25 fixed on this branch, 44 still open
   combining marks 0; `truncate` cuts on grapheme boundaries by cell width (a
   wide glyph that does not fit leaves the line one cell short, never long).
 - **skill/SKILL.md** check accepts the same environment as `requireHerdr()`.
-- **bin/pack-leader** refuses Node older than 22.18 with a readable message.
+- **bin/lodestar** refuses Node older than 22.18 with a readable message.
 - **skill.ts**: the not-on-PATH note includes the `export PATH=...` line.
-- **Docs**: guide Commands block matches `pack-leader help` (added
+- **Docs**: guide Commands block matches `lodestar help` (added
   `skill | sidebar | help`), the false "Unknown flags are errors" is replaced
   by what the parser really does, and the flags `help` leaves out are listed
   below the block; README install bootstraps through `herdr plugin action
-  invoke install-skill --plugin pack-leader`, says where `Bash(pack-leader:*)`
+  invoke install-skill --plugin lodestar`, says where `Bash(lodestar:*)`
   goes, fixes the keybinding TOML (agent keys under `[keys]`), redraws the
   diagram, and lists all sidebar keys; "sibling panes" wording fixed.
 - **cli.ts header comment** only: `--no-sidebar`, `--ack ID[,ID]`.

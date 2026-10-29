@@ -42,7 +42,7 @@ pub fn failedStreak(s: State, task: *Obj) []const []const u8 {
 
 pub fn assertRetryBudget(s: State, task: *Obj) !void {
     var limit = MAX_FAILED_ATTEMPTS;
-    if (rt.getenv("PACK_MAX_FAILED_ATTEMPTS")) |raw| {
+    if (rt.getenv("LODESTAR_MAX_FAILED_ATTEMPTS")) |raw| {
         if (args_mod.jsNumber(raw)) |n| {
             if (std.math.isFinite(n) and @floor(n) == n and n >= 0) limit = @intFromFloat(n);
         }
@@ -51,7 +51,7 @@ pub fn assertRetryBudget(s: State, task: *Obj) !void {
     const failed = failedStreak(s, task);
     if (@as(i64, @intCast(failed.len)) >= limit) {
         const id = task.str("id") orelse "";
-        return rt.fail("retry_limit", "task {s} failed {d} attempts in a row ({s}); no further dispatch. Rewrite the work as a new task, or reset the count deliberately with `pack-leader task update {s} --status pending`", .{ id, failed.len, std.mem.join(rt.a, ", ", failed) catch "", id });
+        return rt.fail("retry_limit", "task {s} failed {d} attempts in a row ({s}); no further dispatch. Rewrite the work as a new task, or reset the count deliberately with `lodestar task update {s} --status pending`", .{ id, failed.len, std.mem.join(rt.a, ", ", failed) catch "", id });
     }
 }
 

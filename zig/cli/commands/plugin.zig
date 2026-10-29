@@ -55,7 +55,7 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
             const r = try skill.installSkill();
             if (from_action) {
                 const bin = r.get("bin") orelse json.Value.null;
-                mux.notify("Pack Leader", if (bin.truthy()) "skill installed, pack-leader on PATH" else rt.concat(&.{ "skill installed; ", joinNotes(r.arr("note").?) }), "none");
+                mux.notify("Lodestar", if (bin.truthy()) "skill installed, lodestar on PATH" else rt.concat(&.{ "skill installed; ", joinNotes(r.arr("note").?) }), "none");
             }
             shared.outObj(r);
         } else rt.writeStdout(rt.concat(&.{ try skill.guide(), guideSettings() }));

@@ -2,20 +2,20 @@
 
 ## What changed
 
-- `pack-leader run prune [--keep N] [--older-than D] [--all] [--dry-run]`
+- `lodestar run prune [--keep N] [--older-than D] [--all] [--dry-run]`
   (`pruneRuns` in `src/runs.ts`) deletes closed runs and every record that
   carries their `run_id`. The sweep is generic: any top-level array, or map of
   records, on the state whose entries have `run_id` is pruned, so records other
   branches add (leases, dispatches, ...) go with their run without changes here.
   Active runs are never touched.
-- `pack-leader run close` (`closeRun` in `src/runs.ts`): refuses an already
+- `lodestar run close` (`closeRun` in `src/runs.ts`): refuses an already
   closed run unless `--force`; refuses while a worker has a dispatched task
   unless `--release` or `--force`; marks dispatched tasks failed ("run closed");
   releases workers with `--release`, then deletes every remaining worker record
   of the run; closes the `sidebar_pane_id` pane if alive (`pane.get`, then
   `pane.close`, errors swallowed) and clears the field. Output is now
   `{ closed, released: [{worker, closed_pane, closed_tab}], forgotten, failed_tasks, closed_sidebar }`.
-- `resolveRun` takes `allowClosed`. An explicit `--run`/`PACK_RUN_ID` naming a
+- `resolveRun` takes `allowClosed`. An explicit `--run`/`LODESTAR_RUN_ID` naming a
   closed run is an error ("run X is closed") unless the caller is read-only
   (`run show`, `run list`, `task show`, `task list`, `status`, `worker show`,
   `worker read`). Worker-pane matching ignores closed runs.

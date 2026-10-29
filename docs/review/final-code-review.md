@@ -40,7 +40,7 @@ the reason), **deferred** (real, with the reason it was left).
   prompt threw, the command printed a herdr error; the task stayed dispatched, `worker prompt` again
   was refused ("still on task"), and nothing said `worker resend` would recover it.
 - Fix: the failure is caught; `worker prompt` prints the dispatch plus a `warning` naming
-  `pack-leader worker resend NAME` and exits 1, as `worker start` already does. The worker keeps
+  `lodestar worker resend NAME` and exits 1, as `worker start` already does. The worker keeps
   `awaiting_prompt`, so followups do not overtake the dispatch (F4).
 - Test: `F3: a redispatch whose prompt fails returns a warning naming resend, and the dispatch stays resendable`.
 
@@ -52,7 +52,7 @@ the reason), **deferred** (real, with the reason it was left).
   then its dispatch. The claim in `deliver()` only stops double delivery, not this ordering.
 - Fix: a worker carries `awaiting_prompt` from being recorded (start) or redispatched until its
   dispatch prompt went in; while set, followups queue (even with `--now`) for the next idle sync or
-  `pack-leader inbox`. Older state files have no field and behave as before.
+  `lodestar inbox`. Older state files have no field and behave as before.
 - Test: `F4: a followup sent while a worker is starting waits for its preamble`.
 
 ### F5. Two concurrent starts could claim the same task or the same worker name
@@ -73,7 +73,7 @@ the reason), **deferred** (real, with the reason it was left).
   before the tab; if `tab.create`/`pane.split` then failed, the dispatch was settled but the empty
   checkout stayed on disk, unreported, and blocked the next `--worktree new` for that name
   ("already exists").
-- Fix: a checkout Pack Leader created for that start is removed again (never forced; the branch is
+- Fix: a checkout Lodestar created for that start is removed again (never forced; the branch is
   kept), its record is marked, and the error says what happened to it.
 - Test: `F6: a worktree created for a start that then fails is removed again`.
 
@@ -227,7 +227,7 @@ Read top to bottom as a fresh worker would (`src/workers.ts:18-42`). It is coher
 IDs, the one channel, then one rule per command in the order a worker needs them, then the spec.
 Points checked against `docs/guide.md` "Worker obligations":
 - The ask rule (10 min wait, `ask --id`, `--options`) matches the code (`600_000`) and the guide.
-- "Do not start or steer other agents" sits next to "`pack-leader send <worker>`": consistent, since
+- "Do not start or steer other agents" sits next to "`lodestar send <worker>`": consistent, since
   a send informs, it does not steer; the guide words it the same way.
 - The worktree line (branch or detached HEAD, install dependencies yourself) matches the worktree
   section of the guide.
@@ -254,7 +254,7 @@ For the owner of `docs/guide.md` (and README where it repeats these). Exact word
    naming what may still be open."
 2. In "Completion accounting", after item 1 (reuse), add:
    "If `worker prompt` prints a `warning` (it exits 1), the dispatch is recorded but the worker may
-   not have received it: read its screen, then `pack-leader worker resend <name>`."
+   not have received it: read its screen, then `lodestar worker resend <name>`."
 3. In "Messaging", after "the result lists every recipient with its `delivered` flag.", add:
    "A recipient released while a group send was going out is listed with an `error` and nothing is
    sent to it; the others still get theirs. A worker that has not yet received its dispatch prompt
@@ -263,7 +263,7 @@ For the owner of `docs/guide.md` (and README where it repeats these). Exact word
    "An `--ack` that matches nothing adds `acked: 0` and `ack_warning` to the same result."
 5. In "Closing and pruning runs", after "Active runs are never pruned,", add:
    "nor is a run closed less than an hour ago whose workers a `run close` is still releasing; it is
-   listed under `skipped` with the command to finish it (`pack-leader run close --run <id> --force`),"
+   listed under `skipped` with the command to finish it (`lodestar run close --run <id> --force`),"
 6. In "Authority and safety floor", replace "All commands print JSON. Read IDs from the output; do not
    predict them." with:
    "Commands print JSON (except `skill`, `help`, `dispatch show --preamble`, `status` on a terminal,

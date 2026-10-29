@@ -27,7 +27,7 @@ pub fn now() []u8 {
 }
 
 pub fn maxRunDepth() i64 {
-    const raw = rt.getenv("PACK_MAX_RUN_DEPTH") orelse return 1;
+    const raw = rt.getenv("LODESTAR_MAX_RUN_DEPTH") orelse return 1;
     const n = std.fmt.parseInt(i64, rt.trim(raw), 10) catch return if (rt.trim(raw).len == 0) 0 else 1;
     return if (n >= 0) n else 1;
 }
@@ -226,7 +226,7 @@ pub fn acquire(dir: []const u8, timeout_ms: i64) !void {
             } else |_| {}
             continue;
         }
-        if (rt.nowMs() - start > timeout_ms) return rt.fail(null, "pack-leader state is locked by another command; try again", .{});
+        if (rt.nowMs() - start > timeout_ms) return rt.fail(null, "lodestar state is locked by another command; try again", .{});
         rt.sleepMs(25 + @as(i64, @intFromFloat(rt.random() * 50)));
     }
 }
@@ -245,7 +245,7 @@ pub fn release(dir: []const u8) void {
 var divergence_logged = false;
 
 /// `update(fn)`: lock, load (quarantining a corrupt file), run `func(ctx, state)`, save, unlock.
-/// `func` must not do I/O that can block on another pack-leader command.
+/// `func` must not do I/O that can block on another lodestar command.
 pub fn update(comptime T: type, ctx: anytype, comptime func: fn (@TypeOf(ctx), State) anyerror!T) !T {
     return updateFile(T, paths.state_file, ctx, func);
 }
@@ -367,13 +367,13 @@ pub fn orchestratorPane(r: Run) ?[]const u8 {
 }
 
 pub fn resolveRun(s: State, opts: ResolveOpts) !Run {
-    const is_worker = rt.eqlOpt(rt.getenv("PACK_ROLE"), "worker") or rt.getenvNonEmpty("PACK_WORKER") != null;
+    const is_worker = rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "worker") or rt.getenvNonEmpty("LODESTAR_WORKER") != null;
     if (opts.run_id == null and opts.pane_id != null and is_worker) {
         for (activeRuns(s)) |r| {
             if (r.truthy("parent") and rt.eqlOpt(orchestratorPane(r), opts.pane_id)) return r;
         }
     }
-    const id = if (opts.run_id) |x| (if (x.len > 0) x else rt.getenvNonEmpty("PACK_RUN_ID")) else rt.getenvNonEmpty("PACK_RUN_ID");
+    const id = if (opts.run_id) |x| (if (x.len > 0) x else rt.getenvNonEmpty("LODESTAR_RUN_ID")) else rt.getenvNonEmpty("LODESTAR_RUN_ID");
     if (id) |rid| {
         const r = getRun(s, rid) orelse return rt.fail(null, "no run {s}", .{rid});
         if (rt.eqlOpt(r.str("status"), "closed") and !opts.allow_closed) return rt.fail(null, "run {s} is closed", .{rid});
@@ -405,7 +405,7 @@ pub fn resolveRun(s: State, opts: ResolveOpts) !Run {
         if (n == 1) return found.?;
     }
     if (active.len == 1) return active[0];
-    if (active.len == 0) return rt.fail(null, "no active run: create one with `pack-leader run create --objective \"...\"`", .{});
+    if (active.len == 0) return rt.fail(null, "no active run: create one with `lodestar run create --objective \"...\"`", .{});
     var ids: std.ArrayListUnmanaged(u8) = .empty;
     for (active, 0..) |r, i| {
         if (i > 0) ids.appendSlice(rt.a, ", ") catch {};

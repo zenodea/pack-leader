@@ -1,8 +1,8 @@
 # Automatic model routing
 
-Pack Leader can ask **OpenAI Decisions** or **TypeSafe Jev** which approved model
+Lodestar can ask **OpenAI Decisions** or **TypeSafe Jev** which approved model
 profile should handle a new worker's task. Routing is **off by default**. You
-choose the active provider; Pack Leader does not silently switch providers.
+choose the active provider; Lodestar does not silently switch providers.
 
 The router chooses a **model and optional effort**, not a harness. Your selected
 harness (`--kind`, then the configured default) stays in control. Existing worker
@@ -42,14 +42,14 @@ IDs and effort levels with values accepted by your installed harness. Use
 Import the file:
 
 ```bash
-pack-leader config set --routing-config /path/to/routing.json
-pack-leader config show
+lodestar config set --routing-config /path/to/routing.json
+lodestar config show
 ```
 
 Profiles are grouped by harness under `kinds`. Add a separate entry for `claude`
 or `codex` to route those workers; their model names and effort settings may
 differ. Every configured harness needs a `fallback` naming one of its profiles.
-Pack Leader never accepts an arbitrary model name returned by a decision model.
+Lodestar never accepts an arbitrary model name returned by a decision model.
 A profile with no `thinking` field keeps the per-harness effort default; set
 `"thinking": null` to suppress that configured effort and let the harness decide.
 
@@ -65,11 +65,11 @@ model/effort defaults and no decision request is sent.
 
 ### OpenAI Decisions
 
-Make `OPENAI_API_KEY` available in the environment where the Pack Leader command
+Make `OPENAI_API_KEY` available in the environment where the Lodestar command
 runs, then select OpenAI:
 
 ```bash
-pack-leader config set --router openai
+lodestar config set --router openai
 ```
 
 The adapter uses `POST https://api.openai.com/v1/decisions` with decision model
@@ -81,14 +81,14 @@ OpenAI currently documents Decisions as a public beta.
 Make `TYPESAFE_API_KEY` available in the leader's environment, then select Jev:
 
 ```bash
-pack-leader config set --router jev
+lodestar config set --router jev
 ```
 
 The adapter uses `POST https://api.typesafe.ai/v1/systemone` with decision model
 `jev-latest`. Use TypeSafe's official API; similarly named third-party Jev sites
 are not interchangeable API endpoints.
 
-Keys are read from the leader's environment, not saved in Pack Leader's
+Keys are read from the leader's environment, not saved in Lodestar's
 configuration or copied into remote worker launch arguments. Do not put keys in
 task specs or profile descriptions.
 
@@ -97,20 +97,20 @@ task specs or profile descriptions.
 Start workers normally once routing is configured:
 
 ```bash
-pack-leader worker start tests --spec "Add regression tests for the CSV parser"
+lodestar worker start tests --spec "Add regression tests for the CSV parser"
 ```
 
 Select a different provider for one start without changing saved settings:
 
 ```bash
-pack-leader worker start parser --router jev --spec "Implement the CSV parser"
+lodestar worker start parser --router jev --spec "Implement the CSV parser"
 ```
 
 Disable routing for one worker or globally:
 
 ```bash
-pack-leader worker start parser --router off --spec "Implement the CSV parser"
-pack-leader config set --router off
+lodestar worker start parser --router off --spec "Implement the CSV parser"
+lodestar config set --router off
 ```
 
 Precedence:
@@ -151,13 +151,13 @@ selection/fallback status, profile, confidence when valid, and a bounded reason
 code. Inspect an attempt with:
 
 ```bash
-pack-leader dispatch list
-pack-leader dispatch show DISPATCH_ID
+lodestar dispatch list
+lodestar dispatch show DISPATCH_ID
 ```
 
 Confidence is a decision signal, not a guarantee of task success. Test profile
 selection on representative tasks and compare actual completion quality,
-latency, and total cost before relying on expected savings. Pack Leader's normal
+latency, and total cost before relying on expected savings. Lodestar's normal
 reporting, approval gates, and human review remain authoritative.
 
 ## References

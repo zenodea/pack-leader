@@ -40,7 +40,7 @@ pub const MuxEvent = union(enum) {
 
 pub const Capabilities = struct {
     /// native: the multiplexer reports status and state_change_seq; hooks: agents report it through
-    /// `pack-leader __agent-status` (kinds without hooks stay "unknown"); none: never known.
+    /// `lodestar __agent-status` (kinds without hooks stay "unknown"); none: never known.
     agent_status: enum { native, hooks, none },
     events: bool,
     layout_tree: bool,

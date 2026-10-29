@@ -7,7 +7,7 @@ const state = @import("../core/state.zig");
 
 const Obj = json.Obj;
 
-/// { name, ssh_target, workspace_id, leader_ssh_target, herdr_socket?, pack_leader?, leader_pack_leader? }
+/// { name, ssh_target, workspace_id, leader_ssh_target, herdr_socket?, lodestar?, leader_lodestar? }
 pub const HostProfile = *Obj;
 
 pub fn hostsFile() []const u8 {
@@ -68,8 +68,8 @@ fn validateProfile(name: []const u8, value: ?json.Value) !HostProfile {
         if (!rt.startsWith(socket, "/")) return hostErr("{s} must be an absolute remote path", .{field});
         p.putStr("herdr_socket", socket);
     }
-    if (raw.get("pack_leader")) |v| p.putStr("pack_leader", try safeText(v, rt.fmt("hosts.{s}.pack_leader", .{name}), 4096));
-    if (raw.get("leader_pack_leader")) |v| p.putStr("leader_pack_leader", try safeText(v, rt.fmt("hosts.{s}.leader_pack_leader", .{name}), 4096));
+    if (raw.get("lodestar")) |v| p.putStr("lodestar", try safeText(v, rt.fmt("hosts.{s}.lodestar", .{name}), 4096));
+    if (raw.get("leader_lodestar")) |v| p.putStr("leader_lodestar", try safeText(v, rt.fmt("hosts.{s}.leader_lodestar", .{name}), 4096));
     return p;
 }
 
@@ -99,7 +99,7 @@ pub fn listHosts() ![]HostProfile {
 pub fn getHost(name: []const u8) !HostProfile {
     _ = try validateHostName(name);
     const profiles = try readProfiles();
-    const p = profiles.obj(name) orelse return hostErr("unknown execution host \"{s}\"; add it with `pack-leader host add {s} ...`", .{ name, name });
+    const p = profiles.obj(name) orelse return hostErr("unknown execution host \"{s}\"; add it with `lodestar host add {s} ...`", .{ name, name });
     return p.clone();
 }
 

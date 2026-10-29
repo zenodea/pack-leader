@@ -15,6 +15,8 @@ const dispatch = @import("../core/dispatch.zig");
 const routing = @import("../core/routing.zig");
 const pack_layout = @import("pack_layout.zig");
 const worktree = @import("worktree.zig");
+const shared_worktree = @import("shared_worktree.zig");
+const config = @import("../core/config.zig");
 const setup = @import("setup.zig");
 
 const Obj = json.Obj;
@@ -156,7 +158,7 @@ const HostScope = struct {
 // ---------------------------------------------------------------- agent arguments
 
 pub fn defaultAgentArgs(kind: []const u8) []const []const u8 {
-    if (rt.eql(kind, "claude")) return &.{ "--allowedTools", "Bash(pack-leader:*)" };
+    if (rt.eql(kind, "claude")) return &.{ "--allowedTools", "Bash(lodestar:*)" };
     return &.{};
 }
 
@@ -236,7 +238,7 @@ fn shellQuote(v: []const u8) []const u8 {
 pub const ExplicitWorkerContextOpts = struct { worker: []const u8, run: Run, task: Task, dispatchId: []const u8 };
 
 pub fn explicitWorkerContext(p: ExplicitWorkerContextOpts) []const u8 {
-    return rt.fmt("env PACK_ROLE=worker HERDR_PLUGIN_STATE_DIR={s} PACK_RUN_ID={s} PACK_WORKER={s} PACK_TASK_ID={s} PACK_DISPATCH_ID={s} pack-leader", .{
+    return rt.fmt("env LODESTAR_ROLE=worker HERDR_PLUGIN_STATE_DIR={s} LODESTAR_RUN_ID={s} LODESTAR_WORKER={s} LODESTAR_TASK_ID={s} LODESTAR_DISPATCH_ID={s} lodestar", .{
         shellQuote(paths.state_dir), shellQuote(runId(p.run)), shellQuote(p.worker), shellQuote(p.task.str("id") orelse ""), shellQuote(p.dispatchId),
     });
 }
@@ -254,7 +256,7 @@ pub const PreambleOpts = struct {
 };
 
 pub fn preamble(p: PreambleOpts) []const u8 {
-    const channel = "An orchestrator agent coordinates several workers in parallel. It cannot see your screen; the only channel is the `pack-leader` CLI";
+    const channel = "An orchestrator agent coordinates several workers in parallel. It cannot see your screen; the only channel is the `lodestar` CLI";
     const task_id = p.task.str("id") orelse "";
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
     const add = struct {
@@ -262,42 +264,49 @@ pub fn preamble(p: PreambleOpts) []const u8 {
             l.append(rt.a, s) catch @panic("out of memory");
         }
     }.f;
-    add(&lines, rt.fmt("[pack-leader dispatch] You are worker \"{s}\" in run {s}, on task {s} (\"{s}\"), dispatch {s}.", .{ p.worker, runId(p.run), task_id, p.task.str("title") orelse "", p.dispatchId }));
+    add(&lines, rt.fmt("[lodestar dispatch] You are worker \"{s}\" in run {s}, on task {s} (\"{s}\"), dispatch {s}.", .{ p.worker, runId(p.run), task_id, p.task.str("title") orelse "", p.dispatchId }));
     if (p.explicitContext) {
         add(&lines, if (p.redispatch)
             rt.concat(&.{ channel, ". This is a new dispatch in your existing adopted session; use the fresh explicit context prefix below, not any earlier IDs." })
         else
-            rt.concat(&.{ channel, ". This existing session was adopted and does not inherit Pack Leader's worker environment." }));
+            rt.concat(&.{ channel, ". This existing session was adopted and does not inherit Lodestar's worker environment." }));
     } else {
         add(&lines, if (p.redispatch)
-            rt.fmt("{s}. This is a new dispatch in your existing session and your pane's environment still names the previous one: pass --task {s} --dispatch {s} to every pack-leader command for it.", .{ channel, task_id, p.dispatchId })
+            rt.fmt("{s}. This is a new dispatch in your existing session and your pane's environment still names the previous one: pass --task {s} --dispatch {s} to every lodestar command for it.", .{ channel, task_id, p.dispatchId })
         else
             rt.concat(&.{ channel, ", which already knows your IDs from the environment." }));
     }
     add(&lines, "");
     add(&lines, "Rules:");
-    add(&lines, rt.fmt("- Do only this task, in {s}. Do not start or steer other agents, unless the task spec asks you to coordinate workers of your own: then `pack-leader run create` from this pane makes a sub-run you lead (see `pack-leader skill`, \"Sub-runs\").", .{p.cwd}));
+    add(&lines, rt.fmt("- Do only this task, in {s}. Do not start or steer other agents, unless the task spec asks you to coordinate workers of your own: then `lodestar run create` from this pane makes a sub-run you lead (see `lodestar skill`, \"Sub-runs\").", .{p.cwd}));
     if (p.explicitContext) {
         const ctx = explicitWorkerContext(.{ .worker = p.worker, .run = p.run, .task = p.task, .dispatchId = p.dispatchId });
-        add(&lines, rt.fmt("- Prefix every Pack Leader worker command with `{s}` (append the command and its arguments).", .{ctx}));
+        add(&lines, rt.fmt("- Prefix every Lodestar worker command with `{s}` (append the command and its arguments).", .{ctx}));
     }
     if (p.worktree) |wt| add(&lines, worktreeRule(wt));
+    const in_shared = p.worktree == null and p.remoteHost == null and shared_worktree.contains(p.run, p.cwd);
+    if (in_shared) add(&lines, sharedWorktreeRule(shared_worktree.of(p.run).?));
+    if (!config.reviewFor(p.run)) add(&lines, "- Nobody reviews your work after you report: the orchestrator accepts it as you describe it. Run the acceptance check yourself before `lodestar done`, and report failed when it does not pass.");
     if (p.remoteHost) |h| {
-        add(&lines, rt.fmt("- You run on remote execution host \"{s}\" in its existing directory {s}; the local leader owns authoritative Pack Leader state.", .{ h.str("name") orelse "", p.cwd }));
-        add(&lines, "- The remote Pack Leader CLI forwards only done/ask/note/heartbeat/send/inbox through the authenticated callback; do not expect arbitrary local admin commands to work here.");
+        add(&lines, rt.fmt("- You run on remote execution host \"{s}\" in its existing directory {s}; the local leader owns authoritative Lodestar state.", .{ h.str("name") orelse "", p.cwd }));
+        add(&lines, "- The remote Lodestar CLI forwards only done/ask/note/heartbeat/send/inbox through the authenticated callback; do not expect arbitrary local admin commands to work here.");
     }
-    add(&lines, "- Blocking question for the orchestrator: `pack-leader ask \"<question>\"` (with fixed choices, add `--options \"a,b,c\"` and the answer is one of them). It waits for the answer (up to 10 minutes); on timeout, run `pack-leader ask --id <id>` to keep waiting. Never stop on a question the orchestrator cannot see.");
-    add(&lines, "- Non-blocking blocker, finding, or \"taking longer because ...\": `pack-leader note \"<text>\"`; keep working.");
-    add(&lines, "- Something the orchestrator must act on while you keep working (the spec is wrong, you conflict with another worker, a risk it must decide on): `pack-leader escalate \"<text>\"`.");
-    add(&lines, "- Something another worker of this run needs to know: `pack-leader send <worker> \"<text>\"` (one worker by name; it arrives as a follow-up).");
-    add(&lines, "- Read follow-ups at natural checkpoints (before starting a new file, after a test run) and once more right before reporting: `pack-leader inbox`.");
-    add(&lines, "- During long work, about every 10 minutes: `pack-leader heartbeat \"<one line on progress>\" --phase investigating|implementing|reviewing|waiting`.");
-    add(&lines, "- When finished, exactly once: `pack-leader done --outcome succeeded|failed --summary \"<three sentences: what changed, how it was verified, what is left>\" [--files-modified a,b] [--report-path <file>]`. Say failed explicitly when the acceptance check did not pass.");
-    add(&lines, "- After `pack-leader done`, end your turn and wait. Do not start new work until prompted.");
+    add(&lines, "- Blocking question for the orchestrator: `lodestar ask \"<question>\"` (with fixed choices, add `--options \"a,b,c\"` and the answer is one of them). It waits for the answer (up to 10 minutes); on timeout, run `lodestar ask --id <id>` to keep waiting. Never stop on a question the orchestrator cannot see.");
+    add(&lines, "- Non-blocking blocker, finding, or \"taking longer because ...\": `lodestar note \"<text>\"`; keep working.");
+    add(&lines, "- Something the orchestrator must act on while you keep working (the spec is wrong, you conflict with another worker, a risk it must decide on): `lodestar escalate \"<text>\"`.");
+    add(&lines, "- Something another worker of this run needs to know: `lodestar send <worker> \"<text>\"` (one worker by name; it arrives as a follow-up).");
+    add(&lines, "- Read follow-ups at natural checkpoints (before starting a new file, after a test run) and once more right before reporting: `lodestar inbox`.");
+    add(&lines, "- During long work, about every 10 minutes: `lodestar heartbeat \"<one line on progress>\" --phase investigating|implementing|reviewing|waiting`.");
+    add(&lines, "- When finished, exactly once: `lodestar done --outcome succeeded|failed --summary \"<three sentences: what changed, how it was verified, what is left>\" [--files-modified a,b] [--report-path <file>]`. Say failed explicitly when the acceptance check did not pass.");
+    add(&lines, "- After `lodestar done`, end your turn and wait. Do not start new work until prompted.");
     add(&lines, "");
     add(&lines, "Task spec:");
     add(&lines, rt.trim(p.task.str("spec") orelse ""));
     return joinStrs(lines.items, "\n");
+}
+
+fn sharedWorktreeRule(sw: *Obj) []const u8 {
+    return rt.fmt("- You share the git worktree {s} (branch {s}) with the other workers of this run, and their uncommitted edits are in it too. Edit only the files your task owns. Do not commit, stash, reset, checkout, rebase or switch branches, and never `git add -A`, `git add .` or `git commit -a`. On success, `lodestar done --files-modified a,b` commits exactly those files on {s} for you: list every file you created, changed or deleted.", .{ sw.str("path") orelse "", sw.str("branch") orelse "", sw.str("branch") orelse "" });
 }
 
 fn worktreeRule(wt: WorktreeInfo) []const u8 {
@@ -348,18 +357,18 @@ pub const StartOptions = struct {
 
 fn openLeaderBar(run: Run, name: []const u8, pane_id: []const u8, where: []const u8, where_label: []const u8, task_title: []const u8) ?[]const u8 {
     const env = json.object(.{
-        .{ "PACK_RUN_ID", runId(run) },
-        .{ "PACK_WORKER", name },
-        .{ "PACK_OBJECTIVE", oneLine(run.str("objective") orelse "") },
-        .{ "PACK_WHERE", where },
-        .{ "PACK_WHERE_LABEL", where_label },
-        .{ "PACK_TASK", oneLine(task_title) },
-        .{ "PACK_LEADER_STATE_DIR", paths.state_dir },
-        .{ "PACK_LEADER_SOCKET_PATH", paths.herdrSocketPath() },
-        .{ "PACK_ROLE", "bar" },
-        .{ "PACK_REMOTE_CALLBACK_TARGET", "" },
+        .{ "LODESTAR_RUN_ID", runId(run) },
+        .{ "LODESTAR_WORKER", name },
+        .{ "LODESTAR_OBJECTIVE", oneLine(run.str("objective") orelse "") },
+        .{ "LODESTAR_WHERE", where },
+        .{ "LODESTAR_WHERE_LABEL", where_label },
+        .{ "LODESTAR_TASK", oneLine(task_title) },
+        .{ "LODESTAR_STATE_DIR", paths.state_dir },
+        .{ "LODESTAR_SOCKET_PATH", paths.herdrSocketPath() },
+        .{ "LODESTAR_ROLE", "bar" },
+        .{ "LODESTAR_REMOTE_CALLBACK_TARGET", "" },
     });
-    if (theme.loadTheme().accent) |accent| env.putStr("PACK_ACCENT", accent);
+    if (theme.loadTheme().accent) |accent| env.putStr("LODESTAR_ACCENT", accent);
     const bar = mux.openToolPane(json.object(.{ .{ "entrypoint", "bar" }, .{ "target_pane_id", pane_id }, .{ "direction", "down" }, .{ "env", env } })) catch |err| {
         mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "worker", name }, .{ "pane", pane_id } }));
         return null;
@@ -729,7 +738,7 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
     const dispatch_id = admitted.dispatch_id;
     const claim = ClaimCtx{ .o = &o, .task_id = task_id, .dispatch_id = dispatch_id };
 
-    const env = json.object(.{ .{ "PACK_ROLE", "worker" }, .{ "PACK_RUN_ID", rid }, .{ "PACK_WORKER", o.name }, .{ "PACK_TASK_ID", task_id }, .{ "PACK_DISPATCH_ID", dispatch_id }, .{ "HERDR_PLUGIN_STATE_DIR", paths.state_dir } });
+    const env = json.object(.{ .{ "LODESTAR_ROLE", "worker" }, .{ "LODESTAR_RUN_ID", rid }, .{ "LODESTAR_WORKER", o.name }, .{ "LODESTAR_TASK_ID", task_id }, .{ "LODESTAR_DISPATCH_ID", dispatch_id }, .{ "HERDR_PLUGIN_STATE_DIR", paths.state_dir } });
     var p: Progress = .{};
     startStages(&o, task, dispatch_id, wt, cwd, env, setup_timeout_ms, &claim, &p) catch |err| {
         var c = Caught.of(err);
@@ -743,7 +752,7 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
     const pane_id = p.pane.?.str("pane_id").?;
     const sel = p.selection.?;
 
-    const bar_pane: ?[]const u8 = if (rt.eqlOpt(rt.getenv("PACK_LEADER_BAR"), "0") or o.packLayout) null else blk: {
+    const bar_pane: ?[]const u8 = if (rt.eqlOpt(rt.getenv("LODESTAR_BAR"), "0") or o.packLayout) null else blk: {
         const br = if (wt) |w| w.strNonEmpty("branch") else null;
         break :blk openLeaderBar(o.run, o.name, pane_id, br orelse (if (wt) |w| w.str("branch") else null) orelse fs.basename(cwd), if (br != null) "Branch" else "Dir", task.str("title") orelse "");
     };
@@ -803,7 +812,7 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
     if (try clearStartupDialog(pane_id)) {
         try assertCurrentStart(auth, cleanup);
         logEvent(.{ .{ "event", "worker.blocked_at_start" }, .{ "run", rid }, .{ "worker", o.name }, .{ "pane", pane_id } });
-        return startResult(worker, sel, task, pane_id, rt.fmt("{s} is blocked on a dialog in pane {s} and has not received its task. Read it with `pack-leader worker read {s}`, answer it with `herdr agent send-keys {s} <keys>` only if it is safe, then `pack-leader worker resend {s}`.", .{ o.name, pane_id, o.name, o.name, o.name }));
+        return startResult(worker, sel, task, pane_id, rt.fmt("{s} is blocked on a dialog in pane {s} and has not received its task. Read it with `lodestar worker read {s}`, answer it with `herdr agent send-keys {s} <keys>` only if it is safe, then `lodestar worker resend {s}`.", .{ o.name, pane_id, o.name, o.name, o.name }));
     }
     const seq = try baseline(o.name, pane_id);
     var prompt_warning: ?[]const u8 = null;
@@ -823,7 +832,7 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
             const c = Caught.of(err);
             try assertCurrentStart(auth, cleanup);
             logEvent(.{ .{ "event", "worker.prompt_failed" }, .{ "run", rid }, .{ "worker", o.name }, .{ "error", c.message() } });
-            prompt_warning = rt.fmt("{s} started but did not receive its task ({s}: {s}). Read it with `pack-leader worker read {s}`, then `pack-leader worker resend {s}`.", .{ o.name, c.code() orelse "error", c.message(), o.name, o.name });
+            prompt_warning = rt.fmt("{s} started but did not receive its task ({s}: {s}). Read it with `lodestar worker read {s}`, then `lodestar worker resend {s}`.", .{ o.name, c.code() orelse "error", c.message(), o.name, o.name });
         }
     }
     if (prompt_warning) |w| return startResult(worker, sel, task, pane_id, w);
@@ -947,15 +956,15 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
     const task_id = task.str("id").?;
     const dispatch_id = admitted.dispatch_id;
     const callback_env = json.object(.{
-        .{ "PACK_ROLE", "worker" },
-        .{ "PACK_RUN_ID", rid },
-        .{ "PACK_WORKER", o.name },
-        .{ "PACK_TASK_ID", task_id },
-        .{ "PACK_DISPATCH_ID", dispatch_id },
-        .{ "PACK_REMOTE_CALLBACK_TARGET", profile.str("leader_ssh_target") orelse "" },
-        .{ "PACK_REMOTE_CALLBACK_LEADER_BIN", profile.str("leader_pack_leader") orelse "pack-leader" },
-        .{ "PACK_REMOTE_CALLBACK_STATE_DIR", paths.state_dir },
-        .{ "PACK_REMOTE_CALLBACK_LEADER_SOCKET", paths.herdrSocketPath() },
+        .{ "LODESTAR_ROLE", "worker" },
+        .{ "LODESTAR_RUN_ID", rid },
+        .{ "LODESTAR_WORKER", o.name },
+        .{ "LODESTAR_TASK_ID", task_id },
+        .{ "LODESTAR_DISPATCH_ID", dispatch_id },
+        .{ "LODESTAR_REMOTE_CALLBACK_TARGET", profile.str("leader_ssh_target") orelse "" },
+        .{ "LODESTAR_REMOTE_CALLBACK_LEADER_BIN", profile.str("leader_lodestar") orelse "lodestar" },
+        .{ "LODESTAR_REMOTE_CALLBACK_STATE_DIR", paths.state_dir },
+        .{ "LODESTAR_REMOTE_CALLBACK_LEADER_SOCKET", paths.herdrSocketPath() },
     });
     var sel: Selection = undefined;
     const opened = blk: {
@@ -1028,7 +1037,7 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
         defer scope.leave();
         break :blk try clearStartupDialog(opened.pane_id);
     };
-    if (blocked) return startResult(worker, sel, task, opened.pane_id, rt.fmt("{s} is blocked on a dialog in remote pane {s} and has not received its task; inspect it with `pack-leader worker read {s}`, answer it safely, then run `pack-leader worker resend {s}`.", .{ o.name, opened.pane_id, o.name, o.name }));
+    if (blocked) return startResult(worker, sel, task, opened.pane_id, rt.fmt("{s} is blocked on a dialog in remote pane {s} and has not received its task; inspect it with `lodestar worker read {s}`, answer it safely, then run `lodestar worker resend {s}`.", .{ o.name, opened.pane_id, o.name, o.name }));
     const seq = blk: {
         const scope = try HostScope.enterObj(profile);
         defer scope.leave();
@@ -1045,9 +1054,9 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
         if (isRevoked(err)) return err;
         const c = Caught.of(err);
         const warning = if (rt.eqlOpt(c.code(), "remote_delivery_unknown"))
-            rt.fmt("{s} started remotely, but delivery of dispatch {s} is unknown. The dispatch remains authoritative. Do not resend yet: inspect with `pack-leader worker read {s}` and verify the remote pane's state before choosing `pack-leader worker prompt {s}`.", .{ o.name, dispatch_id, o.name, o.name })
+            rt.fmt("{s} started remotely, but delivery of dispatch {s} is unknown. The dispatch remains authoritative. Do not resend yet: inspect with `lodestar worker read {s}` and verify the remote pane's state before choosing `lodestar worker prompt {s}`.", .{ o.name, dispatch_id, o.name, o.name })
         else
-            rt.fmt("{s} started remotely but did not receive its task ({s}: {s}); run `pack-leader worker read {s}`, then `pack-leader worker resend {s}`.", .{ o.name, c.code() orelse "error", c.message(), o.name, o.name });
+            rt.fmt("{s} started remotely but did not receive its task ({s}: {s}); run `lodestar worker read {s}`, then `lodestar worker resend {s}`.", .{ o.name, c.code() orelse "error", c.message(), o.name, o.name });
         if (isRemoteUnavailable(err)) try state.update(void, &MarkUnreachableCtx{ .name = o.name, .dispatch_id = dispatch_id, .reason = rt.fmt("SSH/herdr host {s} became unreachable while prompting", .{pname}) }, markUnreachableTx);
         logEvent(.{ .{ "event", "worker.prompt_failed" }, .{ "run", rid }, .{ "worker", o.name }, .{ "dispatch", dispatch_id }, .{ "error", c.message() } });
         return startResult(worker, sel, task, opened.pane_id, warning);
@@ -1217,7 +1226,7 @@ fn deliver(run: Run, name: []const u8, r: *const RedispatchPlan, tries: i64) !bo
                 rt.fmt("task {s} is {s} again", .{ r.task.str("id").?, restored.status orelse b.str("status") orelse "" })
             else
                 rt.fmt("task {s} was not kept", .{r.task.str("id").?});
-            return rt.fail(null, "{s} did not receive dispatch {s} ({s}: {s}); it was rolled back and {s}. Check it with `pack-leader worker read {s}`, then run `pack-leader worker prompt {s}` again", .{ name, r.dispatch_id, c.code() orelse "error", c.message(), what, name, name });
+            return rt.fail(null, "{s} did not receive dispatch {s} ({s}: {s}); it was rolled back and {s}. Check it with `lodestar worker read {s}`, then run `lodestar worker prompt {s}` again", .{ name, r.dispatch_id, c.code() orelse "error", c.message(), what, name, name });
         }
     };
     return markPrompted(name, .{ .runId = rid, .taskId = r.task.str("id").?, .dispatchId = r.dispatch_id });
@@ -1255,7 +1264,7 @@ fn redispatchUnlocked(run: Run, name: []const u8, task_id: ?[]const u8, spec: ?[
         defer scope.leave();
         break :blk try mux.agentWait(known.str("pane_id") orelse "", &.{ "idle", "done" }, wait_ms);
     };
-    if (!mux.atRest(st)) return rt.fail(null, "{s} is {s} after waiting {d}s; nothing was dispatched. Check it with `pack-leader worker read {s}` and try again when it is idle", .{ name, if (rt.eql(st, "timeout")) "still busy" else st, @as(i64, @intFromFloat(@round(@as(f64, @floatFromInt(wait_ms)) / 1000.0))), name });
+    if (!mux.atRest(st)) return rt.fail(null, "{s} is {s} after waiting {d}s; nothing was dispatched. Check it with `lodestar worker read {s}` and try again when it is idle", .{ name, if (rt.eql(st, "timeout")) "still busy" else st, @as(i64, @intFromFloat(@round(@as(f64, @floatFromInt(wait_ms)) / 1000.0))), name });
     const r = try state.update(RedispatchPlan, &RedispatchCtx{ .run = run, .name = name, .task_id = task_id, .spec = spec, .title = title }, redispatchTx);
     var prompted: bool = undefined;
     if (r.w.truthy("adopted")) {
@@ -1302,7 +1311,7 @@ fn releaseRemoteTx(c: *const ReleaseRemoteCtx, s: State) !Worker {
     if (w == null or !rt.eqlOpt(w.?.str("run_id"), runId(c.run)) or !rt.eqlOpt(w.?.str("dispatch_id"), c.known.str("dispatch_id")) or !rt.eqlOpt(hostName(w.?), c.host_name)) return rt.fail(null, "remote worker {s} changed while release was in progress; retry after inspecting it", .{name});
     const wk = w.?;
     if (wk.strNonEmpty("task_id")) |tid| if (state.getTask(s, tid)) |task| if (rt.eqlOpt(task.str("status"), "dispatched")) {
-        if (!c.opts.force) return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `pack-leader done`, or pass --force", .{ name, tid });
+        if (!c.opts.force) return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `lodestar done`, or pass --force", .{ name, tid });
         task.putStr("status", "failed");
         task.putStr("updated_at", state.now());
         task.put("outcome", failedOutcome("released by the orchestrator before reporting"));
@@ -1337,7 +1346,7 @@ fn releaseRemoteWorker(run: Run, known: Worker, opts: ReleaseWorkerOpts) !*Obj {
     if (known.truthy("worktree")) return rt.fail(null, "remote worker {s} has unexpected local worktree metadata; refusing local cleanup", .{name});
     const current = try state.load();
     if (known.strNonEmpty("task_id")) |tid| if (state.getTask(current, tid)) |t| if (rt.eqlOpt(t.str("status"), "dispatched") and !opts.force)
-        return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `pack-leader done`, or pass --force", .{ name, tid });
+        return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `lodestar done`, or pass --force", .{ name, tid });
     const host = known.obj("execution_host").?;
     const pane_id = known.str("pane_id") orelse "";
     const scope = try HostScope.enterObj(host);
@@ -1491,7 +1500,7 @@ fn releaseLocalTx(c: *const ReleaseLocalCtx, s: State) !Worker {
         return rt.fail(null, "worker {s} changed while release was starting; retry after inspecting it", .{c.name});
     if (c.opts.removeWorktree and wk.truthy("worktree") and (c.opts.keepPane or wk.truthy("retained"))) return rt.fail(null, "{s}'s pane stays open in {s}; --remove-worktree cannot go with --keep-pane or a retained worker", .{ c.name, wtPath(wk) orelse "" });
     if (wk.strNonEmpty("task_id")) |tid| if (state.getTask(s, tid)) |t| if (rt.eqlOpt(t.str("status"), "dispatched")) {
-        if (!c.opts.force) return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `pack-leader done`, or pass --force", .{ c.name, tid });
+        if (!c.opts.force) return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `lodestar done`, or pass --force", .{ c.name, tid });
         t.putStr("status", "failed");
         t.putStr("updated_at", state.now());
         t.put("outcome", failedOutcome("released by the orchestrator before reporting"));
@@ -1616,7 +1625,7 @@ pub fn releaseWorker(run: Run, name: []const u8, opts: ReleaseWorkerOpts) !*Obj 
     if (opts.keepWorktree) {
         note = "kept (--keep-worktree)";
     } else if (!wt.truthy("created_by_pack")) {
-        note = "not created by pack-leader, so it was left in place";
+        note = "not created by lodestar, so it was left in place";
     } else if (pane_stays) {
         note = "kept: its pane stays open";
     } else if (released.str("close_error")) |ce| {
@@ -1627,7 +1636,7 @@ pub fn releaseWorker(run: Run, name: []const u8, opts: ReleaseWorkerOpts) !*Obj 
         removed = cleanup.removed;
         if (removed) {
             logEvent(.{ .{ "event", "worktree.removed" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", json.optStr(owner) }, .{ "path", wt.str("path") orelse "" } });
-        } else if (cleanup.note != null and !rt.eql(cleanup.note.?, "not created by pack-leader, so it was left in place")) {
+        } else if (cleanup.note != null and !rt.eql(cleanup.note.?, "not created by lodestar, so it was left in place")) {
             note = if (rt.contains(cleanup.note.?, "ownership changed"))
                 cleanup.note
             else
@@ -1808,7 +1817,7 @@ fn cleanupOwnedWorktree(wt: WorktreeInfo, run_id: []const u8, worker: []const u8
     var already_missing = false;
     var note: ?[]const u8 = null;
     if (!wt.truthy("created_by_pack")) {
-        note = "not created by pack-leader, so it was left in place";
+        note = "not created by lodestar, so it was left in place";
     } else if (!fs.exists(path)) {
         removed = true;
         already_missing = true;
@@ -2108,7 +2117,7 @@ pub fn promptWithRetry(target: []const u8, text: []const u8, seq_before: ?i64, t
                 if (!clear_blocked_dialog or try clearStartupDialog(target)) return c.rethrow();
                 continue;
             }
-            rt.sleepMs(@intFromFloat(@as(f64, @floatFromInt(inbox.envMs("PACK_PROMPT_RETRY_MS", 1000))) * @as(f64, @floatFromInt(i))));
+            rt.sleepMs(@intFromFloat(@as(f64, @floatFromInt(inbox.envMs("LODESTAR_PROMPT_RETRY_MS", 1000))) * @as(f64, @floatFromInt(i))));
         }
     }
 }
@@ -2212,13 +2221,13 @@ pub fn nextAction(s: State, w: Worker) ?[]const []const u8 {
     for (open) |m| if (rt.eqlOpt(m.str("type"), "ask")) {
         const opts = m.strs("options");
         const answer = if (opts.len > 0) rt.fmt("<one of: {s}>", .{joinStrs(opts, " | ")}) else "<answer>";
-        return rt.a.dupe([]const u8, &.{ "pack-leader", "reply", m.str("id") orelse "", "--body", answer }) catch null;
+        return rt.a.dupe([]const u8, &.{ "lodestar", "reply", m.str("id") orelse "", "--body", answer }) catch null;
     };
-    for (open) |m| if (rt.eqlOpt(m.str("type"), "escalation")) return rt.a.dupe([]const u8, &.{ "pack-leader", "send", name, "<what to do about it>" }) catch null;
+    for (open) |m| if (rt.eqlOpt(m.str("type"), "escalation")) return rt.a.dupe([]const u8, &.{ "lodestar", "send", name, "<what to do about it>" }) catch null;
     const t: ?Task = if (w.strNonEmpty("task_id")) |tid| state.getTask(s, tid) else null;
     const owing = if (t) |tk| rt.eqlOpt(tk.str("status"), "dispatched") or (rt.eqlOpt(tk.str("status"), "failed") and (if (tk.obj("outcome")) |oc| rt.eqlOpt(oc.str("summary"), inbox.EXITED_SUMMARY) else false)) else false;
-    if (rt.eqlOpt(w.str("liveness"), "exited") and owing) return rt.a.dupe([]const u8, &.{ "pack-leader", "worker", "release", name, "--force" }) catch null;
-    if (open.len > 0) return rt.a.dupe([]const u8, &.{ "pack-leader", "worker", "read", name }) catch null;
+    if (rt.eqlOpt(w.str("liveness"), "exited") and owing) return rt.a.dupe([]const u8, &.{ "lodestar", "worker", "release", name, "--force" }) catch null;
+    if (open.len > 0) return rt.a.dupe([]const u8, &.{ "lodestar", "worker", "read", name }) catch null;
     return null;
 }
 
@@ -2277,7 +2286,7 @@ test "sweepWorktrees removes a released, clean pack checkout and keeps protected
     paths.setStateDir(fs.join(&.{ tmp, "state" }));
     _ = try worktree.git(repo, &.{"init"});
     _ = try worktree.git(repo, &.{ "-c", "user.email=a@b", "-c", "user.name=t", "commit", "--allow-empty", "-m", "x" });
-    rt.setenv("PACK_WORKTREE_DIR", fs.join(&.{ tmp, "wts" }));
+    rt.setenv("LODESTAR_WORKTREE_DIR", fs.join(&.{ tmp, "wts" }));
     const wt = try worktree.planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .worker = "a" });
     try worktree.gitWorktreeAdd(wt);
     const path = wt.str("path").?;
@@ -2315,9 +2324,9 @@ test "preamble, summaries and next action" {
     const task = state.addTask(s, "r1", "  Do the thing\nwith care  ", null);
     const wt = json.object(.{ .{ "path", "/wt/a" }, .{ "branch", json.nul }, .{ "base", "0123456789abcdef" }, .{ "created_by_pack", true }, .{ "repo", "/repo" } });
     const text = preamble(.{ .worker = "a", .run = run, .task = task, .dispatchId = "d2", .cwd = "/wt/a", .worktree = wt, .explicitContext = true });
-    try std.testing.expect(rt.startsWith(text, "[pack-leader dispatch] You are worker \"a\" in run r1, on task t1 (\"Do the thing\"), dispatch d2.\n"));
+    try std.testing.expect(rt.startsWith(text, "[lodestar dispatch] You are worker \"a\" in run r1, on task t1 (\"Do the thing\"), dispatch d2.\n"));
     try std.testing.expect(rt.contains(text, "on a detached HEAD (0123456789ab)"));
-    try std.testing.expect(rt.contains(text, "PACK_RUN_ID='r1' PACK_WORKER='a' PACK_TASK_ID='t1' PACK_DISPATCH_ID='d2' pack-leader"));
+    try std.testing.expect(rt.contains(text, "LODESTAR_RUN_ID='r1' LODESTAR_WORKER='a' LODESTAR_TASK_ID='t1' LODESTAR_DISPATCH_ID='d2' lodestar"));
     try std.testing.expect(rt.endsWith(text, "Task spec:\nDo the thing\nwith care"));
     const worker = json.object(.{ .{ "name", "a" }, .{ "run_id", "r1" }, .{ "kind", "claude" }, .{ "pane_id", "w:2" }, .{ "cwd", "/wt/a" }, .{ "task_id", "t1" }, .{ "dispatch_id", "d2" }, .{ "last_status", "idle" }, .{ "retained", false } });
     state.workers(s).put("a", worker.val());

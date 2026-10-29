@@ -72,6 +72,7 @@ pub fn worktreeLabel(m: []const u8) []const u8 {
     if (rt.eql(m, "on")) return "on";
     if (rt.eql(m, "off")) return "off";
     if (rt.eql(m, "leader")) return "leader decides";
+    if (rt.eql(m, "shared")) return "one shared worktree";
     return "undefined";
 }
 
@@ -131,6 +132,9 @@ fn sWorktree(c: Config) []const u8 {
 fn sObserver(c: Config) bool {
     return settings(c).boolean("observer") orelse true;
 }
+fn sReview(c: Config) bool {
+    return settings(c).boolean("review") orelse true;
+}
 fn sStall(c: Config) i64 {
     return settings(c).int("stall_minutes") orelse 20;
 }
@@ -182,8 +186,8 @@ fn vWorktree(c: Config) []const u8 {
     return worktreeLabel(sWorktree(c));
 }
 fn cWorktree(c: Config, ask: Ask) anyerror!void {
-    const items = [_]PickItem{ .{ .value = "on", .label = "on" }, .{ .value = "off", .label = "off" }, .{ .value = "leader", .label = "leader decides" } };
-    const v = try ask(.{ .title = "A git worktree per worker", .items = &items, .current = sWorktree(c) });
+    const items = [_]PickItem{ .{ .value = "on", .label = "on" }, .{ .value = "off", .label = "off" }, .{ .value = "leader", .label = "leader decides" }, .{ .value = "shared", .label = "one shared worktree" } };
+    const v = try ask(.{ .title = "Git worktrees for workers", .items = &items, .current = sWorktree(c) });
     if (v) |x| if (x.len > 0) c.putStr("worktree", x);
 }
 
@@ -193,6 +197,14 @@ fn vObserver(c: Config) []const u8 {
 fn cObserver(c: Config, ask: Ask) anyerror!void {
     _ = ask;
     c.putBool("observer", !sObserver(c));
+}
+
+fn vReview(c: Config) []const u8 {
+    return onOff(sReview(c));
+}
+fn cReview(c: Config, ask: Ask) anyerror!void {
+    _ = ask;
+    c.putBool("review", !sReview(c));
 }
 
 fn vStall(c: Config) []const u8 {
@@ -236,11 +248,12 @@ pub const SETTINGS_ROWS = [_]SettingsRow{
     .{ .section = "Workers", .label = "Harness", .help = "The agent new workers run in. Model and effort below belong to this harness.", .value = vHarness, .change = cHarness },
     .{ .section = "Workers", .label = "Model", .help = "The model new workers get. Type a name that is not listed and press enter to use it.", .value = modelOrDefault, .change = cModel },
     .{ .section = "Workers", .label = "Effort", .help = "The thinking level new workers get.", .value = thinkingOrDefault, .change = cEffort },
-    .{ .section = "Workers", .label = "Placement", .help = "hidden tabs: each worker in its own tab, shown in the Pack sidebar. beside the leader: leader top left, observer below it, workers fill the right half; each new one splits the biggest worker the other way. Remote workers always get a tab.", .value = vPlacement, .change = cPlacement },
-    .{ .section = "Workers", .label = "Worktrees", .help = "on: every worker in a git repo gets its own worktree. off: no worker gets one. leader decides: the orchestrator picks per worker.", .value = vWorktree, .change = cWorktree },
+    .{ .section = "Workers", .label = "Placement", .help = "hidden tabs: each worker in its own tab, shown in the sidebar. beside the leader: leader top left, observer below it, workers fill the right half; each new one splits the biggest worker the other way. Remote workers always get a tab.", .value = vPlacement, .change = cPlacement },
+    .{ .section = "Workers", .label = "Worktrees", .help = "on: every worker in a git repo gets its own worktree. off: no worker gets one. leader decides: the orchestrator picks per worker. one shared worktree: all workers of a run edit one checkout on branch lodestar/<run>/shared; each `done` commits that worker's files (retrying while git is busy) and `lodestar run merge` merges the branch back.", .value = vWorktree, .change = cWorktree },
     .{ .section = "Orchestrator", .label = "Observer", .help = "The second agent under the leader that you can ask about the run. It never acts on the run.", .value = vObserver, .change = cObserver },
-    .{ .section = "Orchestrator", .label = "Stall alert", .help = "How long a worker that owes a report can stay silent before the leader is told. PACK_STALL_MS still wins when set.", .value = vStall, .change = cStall },
-    .{ .section = "Orchestrator", .label = "Handoff", .help = "Past the limit below, the leader writes a note, its session is cleared, and it resumes the run from the note and `pack-leader status`.", .value = vHandoff, .change = cHandoff },
+    .{ .section = "Orchestrator", .label = "Review", .help = "on: the leader checks each worker's work before accepting its report. off: the leader only assigns work, answers questions and unsticks workers; it accepts reports without reviewing the code, and workers are told to verify their own work.", .value = vReview, .change = cReview },
+    .{ .section = "Orchestrator", .label = "Stall alert", .help = "How long a worker that owes a report can stay silent before the leader is told. LODESTAR_STALL_MS still wins when set.", .value = vStall, .change = cStall },
+    .{ .section = "Orchestrator", .label = "Handoff", .help = "Past the limit below, the leader writes a note, its session is cleared, and it resumes the run from the note and `lodestar status`.", .value = vHandoff, .change = cHandoff },
     .{ .section = "Orchestrator", .label = "Handoff at", .help = "The leader's context size that triggers a handoff. Keep it below the harness's own auto-compact point.", .value = vHandoffAt, .change = cHandoffAt },
 };
 
@@ -262,7 +275,7 @@ pub fn describeSettings(c: Config) []const u8 {
     const handoff = sHandoff(c);
     const wk = joinNonEmpty(&.{ kindOf(c), d.str("model"), d.str("thinking"), placementLabel(sPlacement(c)), rt.concat(&.{ "worktrees ", worktreeLabel(sWorktree(c)) }) }, " · ");
     const handoff_text = if (handoff.boolean("enabled") orelse false) rt.concat(&.{ "handoff at ", config.formatTokens(atTokens(c)) }) else "handoff off";
-    const leader = joinNonEmpty(&.{ rt.concat(&.{ "observer ", onOff(sObserver(c)) }), rt.concat(&.{ "stall ", minutes(sStall(c)) }), handoff_text }, " · ");
+    const leader = joinNonEmpty(&.{ rt.concat(&.{ "observer ", onOff(sObserver(c)) }), rt.concat(&.{ "review ", onOff(sReview(c)) }), rt.concat(&.{ "stall ", minutes(sStall(c)) }), handoff_text }, " · ");
     return rt.concat(&.{ "workers: ", wk, " | leader: ", leader });
 }
 
@@ -270,6 +283,7 @@ fn worktreeRule(m: []const u8) []const u8 {
     if (rt.eql(m, "on")) return "on: every worker started in a git repository gets its own worktree without `--worktree`; pass `--worktree PATH` only to reuse a checkout.";
     if (rt.eql(m, "off")) return "off: `--worktree` is refused; keep workers on separate files instead.";
     if (rt.eql(m, "leader")) return "leader decides: pass `--worktree new` when two workers' edits could collide.";
+    if (rt.eql(m, "shared")) return "shared: every worker of the run starts in one shared worktree (see \"Run modes\"); `--worktree` or `--cwd` opts a worker out.";
     return "undefined";
 }
 
@@ -281,11 +295,12 @@ pub fn settingsInForce(c: Config) []const u8 {
         "",
         "## Settings in force",
         "",
-        "The user sets these on the Pack Leader settings page (`pack-leader settings`). Flags you pass still win, except that worktrees set to off refuse `--worktree`.",
+        "The user sets these on the Lodestar settings page (`lodestar settings`). Flags you pass still win, except that worktrees set to off refuse `--worktree`.",
         "",
         rt.fmt("- New workers: {s}, model {s}, effort {s}, {s}.", .{ kindOf(c), d.str("model") orelse "harness default", d.str("thinking") orelse "harness default", placementPhrase(sPlacement(c)) }),
         rt.concat(&.{ "- Worktrees ", worktreeRule(sWorktree(c)) }),
         rt.concat(&.{ "- Observer: ", if (sObserver(c)) "`run create` opens one under you." else "off; `run create` opens none." }),
+        rt.concat(&.{ "- Review: ", if (sReview(c)) "on: verify a worker's work before you accept its report." else "off (see \"Run modes\"): accept reports without reviewing the code; `run create --no-review` sets this per run too." }),
         rt.concat(&.{ "- Stall alert: ", if (stall != 0) rt.fmt("after {s} of silence.", .{minutes(stall)}) else "off." }),
         rt.concat(&.{ "- Handoff: ", if (handoff_on) rt.fmt("on, past {s} tokens of your context (see Handoff).", .{config.formatTokens(atTokens(c))}) else "off." }),
         "",
@@ -303,7 +318,7 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     for (SETTINGS_ROWS) |r| label_width = @max(label_width, r.label.len);
     label_width += 3;
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
-    lines.append(rt.a, ansi.bold("Pack Leader settings")) catch {};
+    lines.append(rt.a, ansi.bold("Lodestar settings")) catch {};
     var section: []const u8 = "";
     for (SETTINGS_ROWS, 0..) |row, i| {
         if (!rt.eql(row.section, section)) {
@@ -349,7 +364,7 @@ fn drawSettings(c: Config, sel: usize, notice: []const u8) void {
 
 /// The interactive settings page; returns the (saved) configuration when closed.
 pub fn runSettings() !Config {
-    if (!term.isTty(0) or !term.isTty(1)) return rt.fail(null, "pack-leader settings needs a terminal", .{});
+    if (!term.isTty(0) or !term.isTty(1)) return rt.fail(null, "lodestar settings needs a terminal", .{});
     const c = try config.loadConfig();
     var sel: usize = 0;
     var notice: []const u8 = "";

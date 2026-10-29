@@ -56,11 +56,12 @@ const empty: Schema = &.{};
 
 const groups = [_]Group{
     .{ .name = "run", .default = "show", .subs = &.{
-        .{ .name = "create", .flags = withRun(schema(&.{ "no-sidebar", "no-observer", "left", "another" }, &.{ "objective", "cwd" }, &.{})) },
+        .{ .name = "create", .flags = withRun(schema(&.{ "no-sidebar", "no-observer", "no-review", "left", "another" }, &.{ "objective", "cwd" }, &.{})) },
         .{ .name = "show", .flags = withRun(empty) },
         .{ .name = "list", .flags = withRun(empty) },
         .{ .name = "use", .flags = withRun(schema(&.{ "takeover", "another" }, &.{}, &.{})) },
         .{ .name = "close", .flags = withRun(schema(&.{ "release", "force" }, &.{}, &.{})) },
+        .{ .name = "merge", .flags = withRun(empty) },
         .{ .name = "prune", .flags = withRun(schema(&.{ "all", "dry-run" }, &.{ "keep", "older-than" }, &.{})) },
     } },
     .{ .name = "task", .default = "list", .subs = &.{
@@ -95,7 +96,7 @@ const groups = [_]Group{
         .{ .name = "resolve", .flags = withRun(schema(&.{}, &.{ "decision", "reason", "choice" }, &.{})) },
     } },
     .{ .name = "host", .default = "list", .subs = &.{
-        .{ .name = "add", .flags = schema(&.{}, &.{ "ssh-target", "workspace-id", "herdr-socket", "pack-leader", "leader-ssh-target", "leader-pack-leader" }, &.{}) },
+        .{ .name = "add", .flags = schema(&.{}, &.{ "ssh-target", "workspace-id", "herdr-socket", "lodestar", "leader-ssh-target", "leader-lodestar" }, &.{}) },
         .{ .name = "list", .flags = empty },
         .{ .name = "show", .flags = empty },
         .{ .name = "remove", .flags = empty },
@@ -135,7 +136,7 @@ const commands = [_]Cmd{
     .{ .name = "event", .flags = empty },
 };
 
-const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "observer", "stall-minutes", "handoff", "handoff-at" }, &.{});
+const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "observer", "review", "stall-minutes", "handoff", "handoff-at" }, &.{});
 
 fn findGroup(name: []const u8) ?*const Group {
     for (&groups) |*g| if (rt.eql(g.name, name)) return g;

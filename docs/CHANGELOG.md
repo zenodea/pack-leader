@@ -1,22 +1,35 @@
 # Changelog
 
+## Unreleased: renamed to Lodestar
+
+- Pack Leader is now **Lodestar**. The command is `lodestar`, the herdr plugin id is
+  `lodestar`, and the skill is installed as `lodestar`.
+- Environment variables use the `LODESTAR_` prefix instead of `PACK_` /
+  `PACK_LEADER_` (for example `LODESTAR_RUN_ID`, `LODESTAR_MUX`).
+- New worktree branches are `lodestar/<run>/<worker>` and `lodestar/spawn/<name>`.
+  Existing `pack/...` branches are left alone.
+- The sidebar pane is titled "Workers" and the worker bar "Worker bar".
+- On first run, Lodestar moves the old `pack-leader` state and settings folders to
+  their new names when the new ones are empty. `lodestar skill --install` removes
+  the old `pack-leader` skill copies and the old `~/.local/bin/pack-leader` link.
+
 ## Unreleased: orchestration parity with Orca
 
 - `check` returns the whole backlog in `messages` (oldest first, up to 50), so one
   wake handles every waiting report; `message` still holds the oldest.
-- `pack-leader spawn NAME --prompt "..."`: an unsupervised full handoff (new tab,
+- `lodestar spawn NAME --prompt "..."`: an unsupervised full handoff (new tab,
   optional worktree, prompt verbatim, no run or tracking).
 - `--retry-request ID` on mutating commands and `request show ID`: a retried
   command replays its recorded result instead of acting twice.
 - `worker abandon`: stop supervising without claiming the agent stopped.
 - Retry limit: three failed attempts in a row block further dispatch of a task
-  (`retry_limit`; `PACK_MAX_FAILED_ATTEMPTS`; reset with `task update --status pending`).
+  (`retry_limit`; `LODESTAR_MAX_FAILED_ATTEMPTS`; reset with `task update --status pending`).
 - `task list --ready --status --brief`, and a read-only `check --all [--limit N]`.
 - Decision gates: `gate create --options`, resolved with `gate resolve --choice`.
 - `escalate`: an escalation message that requires the orchestrator to act;
   heartbeats take `--phase`, shown on worker rows.
 - Sub-runs: a worker can lead workers of its own from its pane (`run create`),
-  depth-limited by `PACK_MAX_RUN_DEPTH` (default 1).
+  depth-limited by `LODESTAR_MAX_RUN_DEPTH` (default 1).
 - `run use ID [--takeover]`, `worker start|prompt --dry-run`, and
   `worker read --source transcript`.
 
@@ -24,7 +37,7 @@
 
 - A follow-up (from the orchestrator or another worker) delivered into a worker
   that still owes a report now ends with a reminder to carry on and report with
-  `pack-leader done`. Most "idle without having reported" attention alerts came
+  `lodestar done`. Most "idle without having reported" attention alerts came
   from workers answering a follow-up and then ending their turn.
 
 ## Unreleased: opt-in model routing
@@ -69,7 +82,7 @@ map is optional, `emptyState()` includes `dispatches` and `worktrees`, and
   its tab, falling back from a long unwrapped read to herdr's default read to
   the visible screen. `worker read NAME` falls back to the newest archive once
   the worker is gone; `--dispatch ID` reads a given one.
-- `pack-leader dispatch list [--task] [--worker]` and `dispatch show ID [--preamble]`;
+- `lodestar dispatch list [--task] [--worker]` and `dispatch show ID [--preamble]`;
   `task show` adds `dispatch_ids`, `status` counts dispatches per task.
 
 ### Liveness, stall alerts and next actions (feat/liveness)
@@ -78,26 +91,26 @@ map is optional, `emptyState()` includes `dispatches` and `worktrees`, and
   agent in its pane is live, pane alive without an agent past 30 s is
   unverifiable, pane absent from two consecutive syncs is exited.
 - New attention statuses `unverifiable` (once per dispatch) and `stalled`
-  (owes a report, no sign of life for `PACK_STALL_MS`, default 20 min, `0` off;
+  (owes a report, no sign of life for `LODESTAR_STALL_MS`, default 20 min, `0` off;
   never while its own question is open).
 - herdr unreachable: verdicts stay, the run records `herdr_unreachable_since`,
   and `check`, `status`, `worker list/show` print a `warning`.
 - Worker rows carry `last_seen`, `liveness`, `attention: {categories,
   requires_action}` and `next_action` (the argv to run next).
 - `check --wait` writes a JSON heartbeat to stderr every
-  `PACK_WAIT_HEARTBEAT_MS` (15 s, `0` off). Sidebar glyphs for `NO AGENT` and
+  `LODESTAR_WAIT_HEARTBEAT_MS` (15 s, `0` off). Sidebar glyphs for `NO AGENT` and
   `STALLED`.
 
 ### Run hygiene (feat/hygiene)
 
-- `pack-leader run prune [--keep N] [--older-than D] [--all] [--dry-run]` deletes
+- `lodestar run prune [--keep N] [--older-than D] [--all] [--dry-run]` deletes
   closed runs and every record carrying their `run_id` (generic over the state's
   maps and arrays). Plain `prune` keeps the 5 most recent.
 - `run close` refuses an already closed run without `--force`, refuses while a
   worker is dispatched unless `--release` or `--force`, fails dispatched tasks
   ("run closed"), releases with `--release`, forgets the rest, and closes the
   sidebar pane unless another active run shows it.
-- A closed run named by `--run`/`PACK_RUN_ID` is an error except for read-only
+- A closed run named by `--run`/`LODESTAR_RUN_ID` is an error except for read-only
   commands. Task and worker commands check the record belongs to the run.
 - `worker release` reports `closed_pane` and `closed_tab`; `status --all` lists
   closed runs.
@@ -114,9 +127,9 @@ map is optional, `emptyState()` includes `dispatches` and `worktrees`, and
 
 - `send` to `@all`, `@idle`, `@<kind>`, expanded at send time, one follow-up
   per recipient; an address that matches nobody is an error.
-- Worker side: `pack-leader note "text"` (non-blocking, surfaces in `check`) and
-  `pack-leader send <worker> "text"` to another worker of the same run, delivered
-  with a `[pack-leader follow-up from worker <sender>]` prefix.
+- Worker side: `lodestar note "text"` (non-blocking, surfaces in `check`) and
+  `lodestar send <worker> "text"` to another worker of the same run, delivered
+  with a `[lodestar follow-up from worker <sender>]` prefix.
 - `check --types` is validated against `done, ask, attention, note`.
 
 ### A worktree per worker (feat/worktree)
@@ -124,7 +137,7 @@ map is optional, `emptyState()` includes `dispatches` and `worktrees`, and
 - `worker start NAME --worktree new|PATH [--base REF] [--branch B]`, planned
   before anything is created; herdr's `worktree.create`/`open` with a
   `git worktree add` fallback; `state.worktrees` keeps the record after release.
-- `worker release --remove-worktree` removes only a worktree Pack Leader created,
+- `worker release --remove-worktree` removes only a worktree Lodestar created,
   never forced; the branch is never deleted. Two active workers never share one.
 
 ### How the features fit together
@@ -161,6 +174,6 @@ map is optional, `emptyState()` includes `dispatches` and `worktrees`, and
   `inbox`, `heartbeat`, `done`; the first line names the dispatch id. The
   stored dispatch preamble is exactly what was sent, so `resend` repeats the
   worktree line.
-- `pack-leader help`, the header of `src/cli.ts`, the Commands block of
+- `lodestar help`, the header of `src/cli.ts`, the Commands block of
   `docs/guide.md` and the README list every command and flag once, grouped as
   runs, tasks, workers, messaging and worker side.

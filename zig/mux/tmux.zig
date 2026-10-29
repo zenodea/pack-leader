@@ -1,5 +1,5 @@
 //! tmux backend. A tmux session is a workspace, a window is a tab, a pane is a pane. Ids are rewritten to
-//! herdr's shape so the rest of Pack Leader can parse them: session `$3` is `s3`, window `@7` is `w7`,
+//! herdr's shape so the rest of Lodestar can parse them: session `$3` is `s3`, window `@7` is `w7`,
 //! pane `%12` in session `$3` is `s3:p12`. Agent status comes from agent hooks (see agent_status.zig).
 
 const std = @import("std");
@@ -20,12 +20,12 @@ const AGENTS = [_][]const u8{ "claude", "codex", "pi" };
 const SEP = "\x1f";
 const PANE_FORMAT = "#{session_id}" ++ SEP ++ "#{window_id}" ++ SEP ++ "#{pane_id}" ++ SEP ++ "#{pane_current_path}" ++ SEP ++
     "#{pane_title}" ++ SEP ++ "#{pane_active}" ++ SEP ++ "#{window_active}" ++ SEP ++ "#{session_attached}" ++ SEP ++
-    "#{pane_dead}" ++ SEP ++ "#{pane_current_command}" ++ SEP ++ "#{window_name}" ++ SEP ++ "#{@pack_label}";
+    "#{pane_dead}" ++ SEP ++ "#{pane_current_command}" ++ SEP ++ "#{window_name}" ++ SEP ++ "#{@lodestar_label}";
 
 fn tmuxArgv(args: []const []const u8) []const []const u8 {
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     argv.append(rt.a, "tmux") catch @panic("out of memory");
-    if (rt.getenvNonEmpty("PACK_LEADER_TMUX_SOCKET")) |sock| argv.appendSlice(rt.a, &.{ "-S", sock }) catch @panic("out of memory");
+    if (rt.getenvNonEmpty("LODESTAR_TMUX_SOCKET")) |sock| argv.appendSlice(rt.a, &.{ "-S", sock }) catch @panic("out of memory");
     argv.appendSlice(rt.a, args) catch @panic("out of memory");
     return argv.items;
 }
@@ -53,7 +53,7 @@ var server_pid: ?[]const u8 = null;
 
 fn serverKey() ![]const u8 {
     if (server_pid) |p| return p;
-    if (rt.getenvNonEmpty("PACK_LEADER_TMUX_SOCKET") == null) if (agent_status.tmuxServerFromEnv()) |p| {
+    if (rt.getenvNonEmpty("LODESTAR_TMUX_SOCKET") == null) if (agent_status.tmuxServerFromEnv()) |p| {
         server_pid = rt.dupePerm(p);
         return server_pid.?;
     };
@@ -163,7 +163,7 @@ fn detectedAgent(cmd: []const u8) ?[]const u8 {
     return null;
 }
 
-/// The agent record for a pane: the hook-written status when Pack Leader started it, else a detected kind.
+/// The agent record for a pane: the hook-written status when Lodestar started it, else a detected kind.
 fn statusFor(r: Raw) ?*Obj {
     const key = serverKey() catch return null;
     // A record outlives its agent: once the pane is back at a shell, the agent has exited.
@@ -296,14 +296,14 @@ fn listPanes(workspace_id: ?[]const u8) anyerror![]*Obj {
 }
 
 fn appendEnv(argv: *std.ArrayListUnmanaged([]const u8), env: ?*Obj) void {
-    argv.appendSlice(rt.a, &.{ "-e", "PACK_LEADER_MUX=tmux" }) catch {};
+    argv.appendSlice(rt.a, &.{ "-e", "LODESTAR_MUX=tmux" }) catch {};
     // Processes in the new pane (workers, the sidebar, hooks) must use the same state as this leader.
-    for ([_][]const u8{ "HERDR_PLUGIN_STATE_DIR", "HERDR_PLUGIN_CONFIG_DIR", "PACK_LEADER_TMUX_SOCKET" }) |k| {
+    for ([_][]const u8{ "HERDR_PLUGIN_STATE_DIR", "HERDR_PLUGIN_CONFIG_DIR", "LODESTAR_TMUX_SOCKET" }) |k| {
         if (rt.getenvNonEmpty(k)) |v| argv.appendSlice(rt.a, &.{ "-e", rt.concat(&.{ k, "=", v }) }) catch {};
     }
     const e = env orelse return;
     for (e.keys(), e.values()) |k, v| {
-        if (rt.eql(k, "PACK_LEADER_SOCKET_PATH")) continue;
+        if (rt.eql(k, "LODESTAR_SOCKET_PATH")) continue;
         const s = v.asStr() orelse continue;
         argv.appendSlice(rt.a, &.{ "-e", rt.concat(&.{ k, "=", s }) }) catch {};
     }
@@ -346,10 +346,10 @@ fn paneFocus(pane_id: []const u8) anyerror!Value {
 fn renamePane(pane_id: []const u8, label: ?[]const u8) void {
     const t = paneTarget(pane_id);
     if (label) |l| {
-        _ = run(&.{ "set-option", "-p", "-t", t, "@pack_label", l }, null) catch {};
+        _ = run(&.{ "set-option", "-p", "-t", t, "@lodestar_label", l }, null) catch {};
         _ = run(&.{ "select-pane", "-t", t, "-T", l }, null) catch {};
     } else {
-        _ = run(&.{ "set-option", "-p", "-u", "-t", t, "@pack_label" }, null) catch {};
+        _ = run(&.{ "set-option", "-p", "-u", "-t", t, "@lodestar_label" }, null) catch {};
     }
 }
 
@@ -359,10 +359,10 @@ fn labelPane(pane_id: []const u8, title: ?[]const u8) void {
 
 fn toolCommand(entrypoint: []const u8) []const u8 {
     if (rt.eql(entrypoint, "bar")) return rt.concat(&.{ "exec bash ", shellQuote(rt.concat(&.{ paths.plugin_root, "/bin/leader-bar" })) });
-    return rt.concat(&.{ "exec ", shellQuote(paths.pack_leader_bin), " ", shellQuote(entrypoint) });
+    return rt.concat(&.{ "exec ", shellQuote(paths.lodestar_bin), " ", shellQuote(entrypoint) });
 }
 
-/// Pack Leader's own UI in a split: "sidebar" (a quarter-width column) or "bar" (two rows above the target).
+/// Lodestar's own UI in a split: "sidebar" (a quarter-width column) or "bar" (two rows above the target).
 /// Extra keys: `before` (bool) opens it left of/above the target.
 fn openToolPane(p: *Obj) anyerror!*Obj {
     try refuseRemote();
@@ -434,7 +434,7 @@ fn agentStart(p: *Obj) anyerror!Value {
     const key = try serverKey();
     var line: std.ArrayListUnmanaged(u8) = .empty;
     try line.appendSlice(rt.a, shellQuote(kind));
-    for (agent_status.hookArgs(kind, paths.pack_leader_bin)) |x| try line.appendSlice(rt.a, rt.concat(&.{ " ", shellQuote(x) }));
+    for (agent_status.hookArgs(kind, paths.lodestar_bin)) |x| try line.appendSlice(rt.a, rt.concat(&.{ " ", shellQuote(x) }));
     if (p.arr("args")) |args| for (args.strs()) |x| try line.appendSlice(rt.a, rt.concat(&.{ " ", shellQuote(x) }));
     const rec = try agent_status.write(key, r.pane, .{ .reset = true, .agent = kind, .name = p.str("name") });
     _ = rec;
@@ -468,7 +468,7 @@ fn agentPrompt(target: []const u8, text: []const u8) anyerror!Value {
         }
     };
     if (rec) |x| if (rt.eqlOpt(x.str("agent_status"), "blocked")) return rt.fail("agent_blocked", "agent in pane {s} is waiting on a dialog", .{target});
-    const buffer = rt.fmt("pack-leader-{d}", .{rt.pid});
+    const buffer = rt.fmt("lodestar-{d}", .{rt.pid});
     _ = try run(&.{ "load-buffer", "-b", buffer, "-" }, text);
     _ = try run(&.{ "paste-buffer", "-d", "-p", "-b", buffer, "-t", r.pane }, null);
     rt.sleepMs(150);
@@ -535,7 +535,7 @@ fn notify(title: []const u8, body: ?[]const u8, sound: []const u8) void {
     _ = run(&.{ "display-message", "-d", "5000", msg }, null) catch {};
 }
 
-// tmux has no event stream Pack Leader can use without attaching a client; callers poll instead.
+// tmux has no event stream Lodestar can use without attaching a client; callers poll instead.
 const NoEvents = struct { reported: bool = false };
 
 fn subFd(_: *anyopaque) ?i32 {
@@ -565,7 +565,7 @@ fn locate() ?types.Location {
 }
 
 fn reachable() bool {
-    return rt.getenvNonEmpty("TMUX") != null or rt.getenvNonEmpty("PACK_LEADER_TMUX_SOCKET") != null;
+    return rt.getenvNonEmpty("TMUX") != null or rt.getenvNonEmpty("LODESTAR_TMUX_SOCKET") != null;
 }
 
 pub const backend: types.Multiplexer = .{

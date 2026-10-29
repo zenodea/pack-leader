@@ -71,7 +71,7 @@ pub fn loadThemeFrom(file: []const u8, pack_accent: ?[]const u8) Theme {
 }
 
 pub fn loadTheme() Theme {
-    return loadThemeFrom(herdrConfigFile(), rt.getenv("PACK_ACCENT"));
+    return loadThemeFrom(herdrConfigFile(), rt.getenv("LODESTAR_ACCENT"));
 }
 
 test "parseTheme, hexColor and loadThemeFrom" {

@@ -1,8 +1,8 @@
 # feat/ask: structured questions
 
-`pack-leader ask "<question>" --options "a,b,c"` stores `options: string[]` on
+`lodestar ask "<question>" --options "a,b,c"` stores `options: string[]` on
 the ask message; the orchestrator's nudge lists them with a reply command.
-`pack-leader reply <id> --body "<answer>"` on such an ask must name one option
+`lodestar reply <id> --body "<answer>"` on such an ask must name one option
 (exact, then case-insensitive, then a unique case-insensitive prefix) unless
 `--free` is passed; a mismatch or an ambiguous prefix is an error listing the
 options, and leaves the ask unanswered. The reply message carries `answer` (the
@@ -22,7 +22,7 @@ normalised option) and `option_index`.
   the first option (double-quoted for the shell), or `"..."` without options.
 - `reply --free "text"` works too: the parser binds the next word to `--free`,
   and `reply` hands it back as the body.
-- `pack-leader inbox` shows `reply_to`, `answer` and `option_index` on late replies.
+- `lodestar inbox` shows `reply_to`, `answer` and `option_index` on late replies.
 - Sidebar: the box builder is `boxLines(worker, task, lastMessage, status, cols, selected?)`
   in src/sidebar.ts, and `lastMessageFor()` picks the message (the worker's
   last heartbeat/done/ask, or the last reply to it). An unanswered ask shows

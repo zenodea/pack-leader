@@ -13,15 +13,15 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
     const sub = a.pos(0) orelse "list";
     const name = a.pos(1);
     if (rt.eql(sub, "add")) {
-        const n = name orelse return rt.fail(null, "usage: pack-leader host add NAME --ssh-target ALIAS_OR_USER@HOST --workspace-id ID --leader-ssh-target TARGET", .{});
+        const n = name orelse return rt.fail(null, "usage: lodestar host add NAME --ssh-target ALIAS_OR_USER@HOST --workspace-id ID --leader-ssh-target TARGET", .{});
         const ssh_target = str(a, "ssh-target");
         const workspace_id = str(a, "workspace-id");
         const leader_target = str(a, "leader-ssh-target");
         if (ssh_target == null or workspace_id == null or leader_target == null) return rt.fail(null, "host add requires --ssh-target, --workspace-id and --leader-ssh-target", .{});
         const input = json.object(.{ .{ "name", n }, .{ "ssh_target", ssh_target.? }, .{ "workspace_id", workspace_id.? }, .{ "leader_ssh_target", leader_target.? } });
         input.putStrIf("herdr_socket", str(a, "herdr-socket"));
-        input.putStrIf("pack_leader", str(a, "pack-leader"));
-        input.putStrIf("leader_pack_leader", str(a, "leader-pack-leader"));
+        input.putStrIf("lodestar", str(a, "lodestar"));
+        input.putStrIf("leader_lodestar", str(a, "leader-lodestar"));
         const host = try hosts.addHost(input);
         shared.outObj(json.object(.{.{ "host", host }}));
         return;
@@ -33,15 +33,15 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
         return;
     }
     if (rt.eql(sub, "show")) {
-        const n = name orelse return rt.fail(null, "usage: pack-leader host show NAME", .{});
+        const n = name orelse return rt.fail(null, "usage: lodestar host show NAME", .{});
         shared.outObj(json.object(.{.{ "host", try hosts.getHost(n) }}));
         return;
     }
     if (rt.eql(sub, "remove")) {
-        const n = name orelse return rt.fail(null, "usage: pack-leader host remove NAME", .{});
+        const n = name orelse return rt.fail(null, "usage: lodestar host remove NAME", .{});
         try hosts.removeHost(n);
         shared.outObj(json.object(.{.{ "removed", n }}));
         return;
     }
-    return rt.fail(null, "unknown: pack-leader host {s}", .{sub});
+    return rt.fail(null, "unknown: lodestar host {s}", .{sub});
 }

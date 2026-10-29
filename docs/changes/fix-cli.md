@@ -29,8 +29,8 @@ them (1, 3, 4, 5), README.md.
 - **done --report-path (V4)**: resolved against the cwd `done` runs in, in
   cli.ts, before inbox.ts stores it. No inbox.ts change needed.
 - **usage() and guide (V7/S10)**: every accepted flag is in both, including a
-  `pack-leader COMMAND ... [--run ID]` line and a
-  `pack-leader WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]`
+  `lodestar COMMAND ... [--run ID]` line and a
+  `lodestar WORKER-COMMAND ... [--worker NAME] [--run ID] [--task ID] [--dispatch ID]`
   line (uppercase words are ignored by the drift test's command parser). The
   "Less common flags, not in the list above" list became "What the less obvious
   flags do". test/skill.test.ts needed no change.

@@ -34,8 +34,8 @@ A dispatch used to be only an id on Task/Worker/Message. Now it is a record.
   (last `--lines`, default 80; `total_lines` and `archive_path` for the rest).
   `--dispatch ID` reads that dispatch's archive. A live worker is read as before
   (raw text); a name with no archive falls through to the live read.
-- `pack-leader dispatch list [--task] [--worker]` (run-scoped, oldest first) and
-  `pack-leader dispatch show ID [--preamble]` (record with `preamble_length`;
+- `lodestar dispatch list [--task] [--worker]` (run-scoped, oldest first) and
+  `lodestar dispatch show ID [--preamble]` (record with `preamble_length`;
   `--preamble` prints the raw text exactly).
 - `task show` adds `dispatch_ids`; `status --json` / `run show` add
   `dispatches` per task; `status` text shows "(N dispatches)" when N > 1.

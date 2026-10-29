@@ -21,13 +21,13 @@ pub const atRest = types.atRest;
 
 const BACKENDS = [_]*const Multiplexer{ &herdr_backend.backend, &tmux_backend.backend };
 
-/// PACK_LEADER_MUX wins; otherwise herdr when its environment is present, tmux inside a tmux client, else herdr.
+/// LODESTAR_MUX wins; otherwise herdr when its environment is present, tmux inside a tmux client, else herdr.
 pub fn detectBackend() ![]const u8 {
-    if (rt.getenv("PACK_LEADER_MUX")) |raw| {
+    if (rt.getenv("LODESTAR_MUX")) |raw| {
         const want = rt.trim(raw);
         if (want.len > 0) {
             for (BACKENDS) |b| if (rt.eql(b.name, want)) return b.name;
-            return rt.fail("unknown_mux", "PACK_LEADER_MUX={s} is not a known multiplexer (known: herdr, tmux)", .{want});
+            return rt.fail("unknown_mux", "LODESTAR_MUX={s} is not a known multiplexer (known: herdr, tmux)", .{want});
         }
     }
     if (herdr_backend.backend.reachable()) return "herdr";
@@ -211,7 +211,7 @@ pub fn isRemotePromptReceiptErrorOn(err: anyerror, is_remote: bool) bool {
 
 /// Fails with code "remote_delivery_unknown"; `cause_code`/`cause_message` describe the transport error.
 pub fn promptDeliveryUnknown(target: []const u8, cause_code: ?[]const u8, cause_message: []const u8) error{Fail} {
-    return rt.fail("remote_delivery_unknown", "delivery of the remote prompt to pane {s} is unknown ({s}: {s}); do not resend automatically. Inspect the worker on its snapshotted execution host and confirm its task/dispatch state before using `pack-leader worker prompt`; the current attempt remains authoritative.", .{ target, cause_code orelse "error", cause_message });
+    return rt.fail("remote_delivery_unknown", "delivery of the remote prompt to pane {s} is unknown ({s}: {s}); do not resend automatically. Inspect the worker on its snapshotted execution host and confirm its task/dispatch state before using `lodestar worker prompt`; the current attempt remains authoritative.", .{ target, cause_code orelse "error", cause_message });
 }
 
 const KNOWN_STATUSES = [_][]const u8{ "idle", "working", "blocked", "done", "unknown" };

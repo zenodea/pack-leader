@@ -38,7 +38,7 @@ D1 and D3 of `docs/review/final-code-review.md`. Each one has a test in `test/re
   incarnation.
 - **sync**:
   - R11: it nudges an idle or done orchestrator once more about unacked done, ask and note
-    messages older than 60 s (`PACK_RENUDGE_MS`, 0 disables) and records `nudged_at` on each
+    messages older than 60 s (`LODESTAR_RENUDGE_MS`, 0 disables) and records `nudged_at` on each
     message.
   - R15: `blocked` raises an attention even after the report. There is one open alert per
     worker, dispatch and status, and a new episode after an ack raises again.
@@ -55,7 +55,7 @@ D1 and D3 of `docs/review/final-code-review.md`. Each one has a test in `test/re
   `undefined`. `logHerdrError()` writes a `herdr.error` event in each swallowed catch: labelPane,
   notify, nudges, release close, the F14 tab close, `agent.list` at start, and the sidebar close
   in closeRun.
-- New env knob for tests: `PACK_PROMPT_RETRY_MS` (base delay between prompt retries, default 1000).
+- New env knob for tests: `LODESTAR_PROMPT_RETRY_MS` (base delay between prompt retries, default 1000).
 
 ## Decisions
 
@@ -88,7 +88,7 @@ D1 and D3 of `docs/review/final-code-review.md`. Each one has a test in `test/re
     collected its answer, the error repeats it. If you are released while waiting, `ask` stops."
   - `check` / attention: "`blocked` is raised even after a worker reported (for example a
     permission prompt while handling a follow-up). An orchestrator that sits idle with unread
-    reports, questions or notes older than a minute is nudged once more (`PACK_RENUDGE_MS`)."
+    reports, questions or notes older than a minute is nudged once more (`LODESTAR_RENUDGE_MS`)."
   - Release and run close: "Followups and replies the worker never received are dropped with it."
   - Environment: "A worker's pane gets `HERDR_PLUGIN_STATE_DIR`, so it uses the orchestrator's
     state file."

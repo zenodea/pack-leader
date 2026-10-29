@@ -8,6 +8,7 @@ const mux = @import("../../mux/index.zig");
 const inbox = @import("../../messaging/inbox.zig");
 const observer = @import("../../agents/observer.zig");
 const workers = @import("../../agents/workers.zig");
+const shared_worktree = @import("../../agents/shared_worktree.zig");
 const args_mod = @import("../args.zig");
 const shared = @import("../shared.zig");
 
@@ -99,8 +100,8 @@ const SubRunParent = struct { parent: *Obj, depth: i64 };
 
 fn subRunParent(s: State, pane_id: ?[]const u8) !?SubRunParent {
     var w: ?*Obj = null;
-    if (rt.getenvNonEmpty("PACK_WORKER")) |name| if (state.getWorker(s, name)) |named| {
-        const want_run = rt.getenvNonEmpty("PACK_RUN_ID");
+    if (rt.getenvNonEmpty("LODESTAR_WORKER")) |name| if (state.getWorker(s, name)) |named| {
+        const want_run = rt.getenvNonEmpty("LODESTAR_RUN_ID");
         if (want_run == null or rt.eqlOpt(named.str("run_id"), want_run)) w = named;
     };
     if (w == null) if (pane_id) |p| for (state.workers(s).objValues()) |x| {
@@ -110,7 +111,7 @@ fn subRunParent(s: State, pane_id: ?[]const u8) !?SubRunParent {
         }
     };
     const worker = w orelse {
-        if (rt.eqlOpt(rt.getenv("PACK_ROLE"), "worker") or rt.getenvNonEmpty("PACK_WORKER") != null) return rt.fail(null, "this worker is not registered in an active run, so it cannot coordinate a sub-run", .{});
+        if (rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "worker") or rt.getenvNonEmpty("LODESTAR_WORKER") != null) return rt.fail(null, "this worker is not registered in an active run, so it cannot coordinate a sub-run", .{});
         return null;
     };
     const wrun = worker.str("run_id") orelse "";
@@ -121,7 +122,7 @@ fn subRunParent(s: State, pane_id: ?[]const u8) !?SubRunParent {
     if (task == null or !rt.eqlOpt(task.?.str("status"), "dispatched")) return rt.fail(null, "worker {s} has no dispatched task; a sub-run belongs to the task that needs it", .{name});
     const depth = (parent_run.?.int("depth") orelse 0) + 1;
     const max = state.maxRunDepth();
-    if (depth > max) return rt.fail("nested_depth_exceeded", "a sub-run here would be depth {d}, past the limit of {d} (PACK_MAX_RUN_DEPTH); do the work yourself or tell the orchestrator with `pack-leader escalate`", .{ depth, max });
+    if (depth > max) return rt.fail("nested_depth_exceeded", "a sub-run here would be depth {d}, past the limit of {d} (LODESTAR_MAX_RUN_DEPTH); do the work yourself or tell the orchestrator with `lodestar escalate`", .{ depth, max });
     return .{ .parent = json.object(.{ .{ "run_id", parent_run.?.get("id") orelse Value.null }, .{ "worker", name }, .{ "task_id", worker.get("task_id") orelse Value.null }, .{ "dispatch_id", worker.get("dispatch_id") orelse Value.null } }), .depth = depth };
 }
 
@@ -133,10 +134,20 @@ fn dispatchCount(s: State, run: *Obj, task_id: []const u8) i64 {
     return n;
 }
 
+/// How the run is led: whether the orchestrator reviews code, and where workers check out.
+fn modes(run: *Obj) *Obj {
+    return json.object(.{
+        .{ "review", config.reviewFor(run) },
+        .{ "worktree", config.worktreeMode() },
+        .{ "shared_worktree", if (shared_worktree.of(run)) |sw| sw.val() else Value.null },
+    });
+}
+
 fn view(s: State, run: *Obj) *Obj {
     const out = json.newObj();
     if (inbox.herdrWarning(run)) |w| out.putStr("warning", w);
     out.put("run", run.val());
+    out.put("modes", modes(run).val());
     const run_id = run.str("id") orelse "";
     const tasks = json.newArr();
     for (state.runTasks(s, run_id)) |t| {
@@ -161,8 +172,12 @@ fn statusText(s: State, run: *Obj) []const u8 {
     const run_id = run.str("id") orelse "";
     lines.append(rt.a, rt.concat(&.{ bold(run_id), " ", run.str("objective") orelse "" })) catch {};
     lines.append(rt.a, dim(rt.fmt("orchestrator {s} · {s}", .{ (if (orch) |o| o.str("pane_id") else null) orelse "?", (if (orch) |o| o.str("cwd") else null) orelse "undefined" }))) catch {};
+    var mode_parts: std.ArrayListUnmanaged([]const u8) = .empty;
+    if (!config.reviewFor(run)) mode_parts.append(rt.a, "review off") catch {};
+    if (shared_worktree.of(run)) |sw| mode_parts.append(rt.a, rt.fmt("shared worktree {s} · {s}", .{ sw.str("branch") orelse "", sw.str("path") orelse "" })) catch {};
+    if (mode_parts.items.len > 0) lines.append(rt.a, dim(joinStrs(mode_parts.items, " · "))) catch {};
     lines.append(rt.a, "") catch {};
-    if (inbox.herdrWarning(run)) |w| lines.insert(rt.a, 2, red(rt.fmt("warning: {s}", .{w}))) catch {};
+    if (inbox.herdrWarning(run)) |w| lines.insert(rt.a, @as(usize, 2) + @min(@as(usize, 1), mode_parts.items.len), red(rt.fmt("warning: {s}", .{w}))) catch {};
     for (state.runWorkers(s, run_id)) |w| {
         const t: ?*Obj = if (w.strNonEmpty("task_id")) |tid| state.getTask(s, tid) else null;
         const n: i64 = if (t) |x| dispatchCount(s, run, x.str("id") orelse "") else 0;
@@ -194,7 +209,7 @@ fn statusText(s: State, run: *Obj) []const u8 {
         for (box) |m| items.append(rt.a, rt.fmt("{s} {s} from {s}", .{ m.str("id") orelse "", m.str("type") orelse "", m.str("from") orelse "" })) catch {};
         lines.append(rt.a, rt.concat(&.{ yellow(rt.fmt("{d} unread: ", .{box.len})), joinStrs(items.items, ", ") })) catch {};
     } else lines.append(rt.a, dim("inbox empty")) catch {};
-    lines.append(rt.a, dim(rt.fmt("{d} messages · pack-leader check --wait to continue", .{state.runMessages(s, run_id).len}))) catch {};
+    lines.append(rt.a, dim(rt.fmt("{d} messages · lodestar check --wait to continue", .{state.runMessages(s, run_id).len}))) catch {};
     return rt.concat(&.{ joinStrs(lines.items, "\n"), "\n" });
 }
 
@@ -214,6 +229,7 @@ fn createTx(c: CreateCtx, s: State) !*Obj {
         .{ "orchestrator", json.object(.{ .{ "pane_id", json.optStr(c.h.pane_id) }, .{ "workspace_id", json.optStr(c.h.workspace_id) }, .{ "tab_id", json.optStr(c.h.tab_id) }, .{ "cwd", c.cwd } }) },
         .{ "mux", mux.runMuxTag() },
     });
+    if (has(c.a, "no-review")) run.putBool("review", false);
     if (parent) |p| {
         run.put("parent", p.parent.val());
         run.putInt("depth", p.depth);
@@ -239,7 +255,7 @@ const Extras = struct { sidebar: ?[]const u8 = null, observer: ?*Obj = null };
 
 fn afterCreate(a: *const Args, h: shared.Here, run_id: []const u8, ex: *Extras) !void {
     state.log(json.object(.{ .{ "event", "run.created" }, .{ "run", run_id }, .{ "pane", json.optStr(h.pane_id) } }));
-    if (h.pane_id) |p| mux.renamePane(p, "Pack Leader");
+    if (h.pane_id) |p| mux.renamePane(p, "Lodestar");
     if (h.tab_id) |tab| {
         const before: ?[]const u8 = blk: {
             const t = mux.tabGet(tab) catch break :blk null;
@@ -252,7 +268,7 @@ fn afterCreate(a: *const Args, h: shared.Here, run_id: []const u8, ex: *Extras) 
         ex.sidebar = shared.openSidebar(h.pane_id.?, has(a, "left"), false) catch null;
         if (ex.sidebar) |sb| {
             try state.update(void, SidebarCtx{ .run_id = run_id, .pane = sb }, sidebarTx);
-            mux.renamePane(sb, "Pack");
+            mux.renamePane(sb, "Workers");
         }
     }
     if (!has(a, "no-observer") and config.settingsOf(try config.loadConfig()).observer and h.pane_id != null) {
@@ -298,7 +314,7 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         if (run.obj("parent")) |p| {
             state.log(json.object(.{ .{ "event", "run.created" }, .{ "run", run_id }, .{ "pane", json.optStr(h.pane_id) }, .{ "parent", p.get("run_id") orelse Value.null }, .{ "worker", p.get("worker") orelse Value.null } }));
             const prun = p.str("run_id") orelse "";
-            shared.outObj(json.object(.{ .{ "run", run }, .{ "hint", rt.fmt("Sub-run of {s}, coordinated by you (worker {s}). Orchestrator commands from this pane now act on {s}; your own done/ask/note/escalate still go to {s}. Close it with `pack-leader run close --run {s}` before you report done.", .{ prun, p.str("worker") orelse "", run_id, prun, run_id }) } }));
+            shared.outObj(json.object(.{ .{ "run", run }, .{ "hint", rt.fmt("Sub-run of {s}, coordinated by you (worker {s}). Orchestrator commands from this pane now act on {s}; your own done/ask/note/escalate still go to {s}. Close it with `lodestar run close --run {s}` before you report done.", .{ prun, p.str("worker") orelse "", run_id, prun, run_id }) } }));
             return;
         }
         var ex: Extras = .{};
@@ -312,7 +328,8 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         const out = json.object(.{
             .{ "run", shown },
             .{ "observer", if (ex.observer) |o| o.val() else Value.null },
-            .{ "hint", rt.fmt("Workers start in hidden tabs of workspace {s}; the sidebar {s} shows them. PACK_RUN_ID={s} selects this run explicitly.", .{ h.workspace_id orelse "?", if (ex.sidebar) |sb| rt.fmt("(pane {s})", .{sb}) else "was not opened", run_id }) },
+            .{ "modes", modes(run) },
+            .{ "hint", rt.fmt("Workers start in hidden tabs of workspace {s}; the sidebar {s} shows them. LODESTAR_RUN_ID={s} selects this run explicitly.", .{ h.workspace_id orelse "?", if (ex.sidebar) |sb| rt.fmt("(pane {s})", .{sb}) else "was not opened", run_id }) },
         });
         if (warning) |w| out.putStr("warning", w);
         shared.outObj(out);
@@ -328,7 +345,7 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         try shared.requireHerdr();
         const id = a.pos(1) orelse str(a, "run");
         const h = shared.here();
-        if (id == null or h.pane_id == null) return rt.fail(null, "usage: pack-leader run use ID [--takeover] (from the pane that will lead it)", .{});
+        if (id == null or h.pane_id == null) return rt.fail(null, "usage: lodestar run use ID [--takeover] (from the pane that will lead it)", .{});
         const before = state.getRun(try state.load(), id.?) orelse return rt.fail(null, "no active run {s}", .{id.?});
         if (!rt.eqlOpt(before.str("status"), "active")) return rt.fail(null, "no active run {s}", .{id.?});
         const old = state.orchestratorPane(before);
@@ -342,7 +359,7 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         state.log(json.object(.{ .{ "event", "run.used" }, .{ "run", id.? }, .{ "from", json.optStr(old) }, .{ "pane", json.optStr(h.pane_id) }, .{ "takeover", old_open } }));
         const out = json.object(.{ .{ "run", id.? }, .{ "orchestrator", run.get("orchestrator") orelse Value.null }, .{ "previous_pane", json.optStr(old) } });
         if (old_open) out.putBool("took_over", true);
-        out.putStr("next", "Load the guide (`pack-leader skill`), run `pack-leader status`, then carry on with `pack-leader check --wait --timeout 540000`.");
+        out.putStr("next", "Load the guide (`lodestar skill`), run `lodestar status`, then carry on with `lodestar check --wait --timeout 540000`.");
         shared.outObj(out);
         return;
     }
@@ -366,12 +383,22 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         if (from_action) {
             var names: std.ArrayListUnmanaged([]const u8) = .empty;
             for (r.arr("released").?.objs()) |x| names.append(rt.a, x.str("worker") orelse "") catch {};
-            mux.notify("Pack Leader", rt.fmt("run {s} closed{s}", .{ run_id, if (names.items.len > 0) rt.fmt(", released {s}", .{joinStrs(names.items, ", ")}) else "" }), "none");
+            mux.notify("Lodestar", rt.fmt("run {s} closed{s}", .{ run_id, if (names.items.len > 0) rt.fmt(", released {s}", .{joinStrs(names.items, ", ")}) else "" }), "none");
         }
         const gc: *Obj = collectGarbage(.{}) catch |err| json.object(.{.{ "error", rt.errMessage(err) }});
         const out = r.clone();
+        const left_open = if (r.arr("forgotten")) |f| f.len() > 0 else false;
+        if (shared_worktree.cleanup(run, left_open)) |sw| out.put("shared_worktree", sw.val());
         out.put("garbage_collected", gc.val());
         shared.outObj(out);
+        return;
+    }
+    if (rt.eql(sub, "merge")) {
+        const run = try shared.currentRun(a, try state.load(), true);
+        const r = try shared_worktree.merge(run);
+        state.log(json.object(.{ .{ "event", "run.merge" }, .{ "run", run.get("id") }, .{ "merged", r.get("merged") }, .{ "conflict", r.get("conflict") } }));
+        shared.outObj(r);
+        if (r.boolean("merged") == false) rt.exit_code = 1;
         return;
     }
     if (rt.eql(sub, "prune")) {
@@ -394,7 +421,7 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         shared.outObj(try collectGarbage(opts));
         return;
     }
-    return rt.fail(null, "unknown: pack-leader run {s}", .{sub});
+    return rt.fail(null, "unknown: lodestar run {s}", .{sub});
 }
 
 fn handleStatus(a: *const Args) !void {
@@ -402,7 +429,7 @@ fn handleStatus(a: *const Args) !void {
     const s = try state.load();
     var run: ?*Obj = null;
     if (shared.currentRun(a, s, true)) |r| run = r else |err| {
-        if (str(a, "run") != null or rt.getenvNonEmpty("PACK_RUN_ID") != null) return err;
+        if (str(a, "run") != null or rt.getenvNonEmpty("LODESTAR_RUN_ID") != null) return err;
         const msg = rt.errMessage(err);
         if (err != error.Fail or !(rt.startsWith(msg, "no active run:") or rt.startsWith(msg, "several active runs ("))) return err;
     }
@@ -442,6 +469,6 @@ test "shell line quoting" {
     defer arena.deinit();
     var map = std.process.Environ.Map.init(arena.allocator());
     rt.initForTest(arena.allocator(), &map);
-    try std.testing.expectEqualStrings("pack-leader reply m1 --body 'it'\\''s ok'", shellLine(&.{ "pack-leader", "reply", "m1", "--body", "it's ok" }));
+    try std.testing.expectEqualStrings("lodestar reply m1 --body 'it'\\''s ok'", shellLine(&.{ "lodestar", "reply", "m1", "--body", "it's ok" }));
     try std.testing.expectEqualStrings("\x1b[2mx\x1b[22m", dim("x"));
 }

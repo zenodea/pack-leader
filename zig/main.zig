@@ -92,8 +92,8 @@ fn mainInner(argv: []const []const u8) !void {
     }
     const a = args_mod.parseArgs(rest);
     try command_args.validateCommandArgs(command, &a);
-    const from_action = rt.getenvNonEmpty("HERDR_PLUGIN_ID") != null and rt.getenvNonEmpty("PACK_ROLE") == null;
-    if (rt.getenvNonEmpty("PACK_REMOTE_CALLBACK_TARGET") != null and !rt.eqlOpt(rt.getenv("PACK_REMOTE_CALLBACK_ACTIVE"), "1")) {
+    const from_action = rt.getenvNonEmpty("HERDR_PLUGIN_ID") != null and rt.getenvNonEmpty("LODESTAR_ROLE") == null;
+    if (rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_TARGET") != null and !rt.eqlOpt(rt.getenv("LODESTAR_REMOTE_CALLBACK_ACTIVE"), "1")) {
         if (!isHelp(command) and !rt.eql(command, "skill")) return remote.forwardWorkerCallback(argv);
     }
     const request_id = args_mod.str(&a, "retry-request") orelse return runCommand(command, &a, from_action);

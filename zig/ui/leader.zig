@@ -7,7 +7,7 @@ pub const ResolveLeaderRunOpts = struct { runId: ?[]const u8 = null, paneId: ?[]
 pub fn resolveLeaderRun(s: state.State, opts: ResolveLeaderRunOpts) !state.Run {
     const run_id_given = opts.runId != null and opts.runId.?.len > 0;
     const pane_given = opts.paneId != null and opts.paneId.?.len > 0;
-    if (!run_id_given and rt.getenvNonEmpty("PACK_RUN_ID") == null and pane_given) {
+    if (!run_id_given and rt.getenvNonEmpty("LODESTAR_RUN_ID") == null and pane_given) {
         const pane = opts.paneId.?;
         var direct = false;
         for (state.runs(s).objValues()) |run| {

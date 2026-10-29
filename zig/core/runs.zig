@@ -86,7 +86,7 @@ pub fn pruneRuns(s: State, o: PruneRunsOpts) *Obj {
             continue;
         }
         const id = r.str("id") orelse "";
-        skipped.push(json.object(.{ .{ "id", id }, .{ "reason", rt.fmt("workers still recorded ({s}): a run close may still be releasing them. If none is, run `pack-leader run close --run {s} --force` to forget them, then prune again", .{ std.mem.join(rt.a, ", ", names.items) catch "", id }) } }).val());
+        skipped.push(json.object(.{ .{ "id", id }, .{ "reason", rt.fmt("workers still recorded ({s}): a run close may still be releasing them. If none is, run `lodestar run close --run {s} --force` to forget them, then prune again", .{ std.mem.join(rt.a, ", ", names.items) catch "", id }) } }).val());
     }
     var ids: std.StringHashMapUnmanaged(void) = .empty;
     for (doomed.items) |r| ids.put(rt.a, r.str("id") orelse "", {}) catch {};

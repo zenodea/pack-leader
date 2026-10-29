@@ -26,11 +26,11 @@ const TAIL_BYTES: usize = 512 * 1024;
 const CLAUDE_CANDIDATES: usize = 8;
 
 pub fn handoffIdleTimeoutMs() i64 {
-    return envNumber("PACK_HANDOFF_IDLE_MS", 10 * 60_000);
+    return envNumber("LODESTAR_HANDOFF_IDLE_MS", 10 * 60_000);
 }
 
 pub fn handoffSettleMs() i64 {
-    return envNumber("PACK_HANDOFF_SETTLE_MS", 2_000);
+    return envNumber("LODESTAR_HANDOFF_SETTLE_MS", 2_000);
 }
 
 fn envNumber(name: []const u8, fallback: i64) i64 {
@@ -151,13 +151,13 @@ fn isWord(ch: u8) bool {
     return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_';
 }
 
-/// `/\bpack-leader\s+check\b/`.
+/// `/\blodestar\s+check\b/`.
 pub fn mentionsCheck(command: []const u8) bool {
     var from: usize = 0;
-    while (std.mem.indexOfPos(u8, command, from, "pack-leader")) |at| {
+    while (std.mem.indexOfPos(u8, command, from, "lodestar")) |at| {
         from = at + 1;
         if (at > 0 and isWord(command[at - 1])) continue;
-        var i = at + "pack-leader".len;
+        var i = at + "lodestar".len;
         const ws_start = i;
         while (i < command.len and (command[i] == ' ' or command[i] == '\t' or command[i] == '\n' or command[i] == '\r' or command[i] == 0x0b or command[i] == 0x0c)) i += 1;
         if (i == ws_start) continue;
@@ -219,8 +219,8 @@ pub fn handoffInstructions(due: HandoffDue) []const u8 {
     const parts = [_][]const u8{
         rt.fmt("Your context passed {s} tokens ({s} now), so hand off before you wait again.", .{ config.formatTokens(due.at), config.formatTokens(roundThousands(due.tokens)) }),
         "Write a note for the session that replaces you: the user's goal, every instruction, decision and constraint they gave you, anything you promised them, and what you were about to do next.",
-        "Leave out tasks, workers, reports and messages: Pack Leader's state already holds them and the next session reads them with `pack-leader status`.",
-        "Save it with `pack-leader handoff --body \"<note>\"`, then end your turn with one line saying you are handing off. Pack Leader clears this session and starts the next one with your note.",
+        "Leave out tasks, workers, reports and messages: Lodestar's state already holds them and the next session reads them with `lodestar status`.",
+        "Save it with `lodestar handoff --body \"<note>\"`, then end your turn with one line saying you are handing off. Lodestar clears this session and starts the next one with your note.",
     };
     return std.mem.join(rt.a, " ", &parts) catch @panic("out of memory");
 }
@@ -230,12 +230,12 @@ pub fn resumePrompt(run: *Obj) []const u8 {
     const tokens = if (h) |x| x.int("tokens") orelse 0 else 0;
     const note = if (h) |x| (if (x.get("note")) |v| (if (v == .null) null else remoteText(v)) else null) else null;
     const parts = [_][]const u8{
-        rt.fmt("[pack-leader handoff] You are the orchestrator of Pack Leader run {s}: {s}", .{ run.str("id") orelse "", run.str("objective") orelse "" }),
+        rt.fmt("[lodestar handoff] You are the orchestrator of Lodestar run {s}: {s}", .{ run.str("id") orelse "", run.str("objective") orelse "" }),
         rt.fmt("Your previous session handed off at {s} tokens of context and left you this note:", .{config.formatTokens(roundThousands(tokens))}),
         "",
         note orelse "(no note)",
         "",
-        "Load the guide with `pack-leader skill`, read the run with `pack-leader status`, then carry on the supervised loop with `pack-leader check --wait --timeout 540000`.",
+        "Load the guide with `lodestar skill`, read the run with `lodestar status`, then carry on the supervised loop with `lodestar check --wait --timeout 540000`.",
     };
     return std.mem.join(rt.a, "\n", &parts) catch @panic("out of memory");
 }
@@ -244,7 +244,7 @@ fn remoteText(v: Value) []const u8 {
     return @import("../herdr/remote.zig").jsString(v) orelse "";
 }
 
-const PENDING_NEXT = "End your turn now with one line saying you are handing off; do not run `pack-leader check` again. Pack Leader clears this session once you are idle and resumes the run in a fresh one.";
+const PENDING_NEXT = "End your turn now with one line saying you are handing off; do not run `lodestar check` again. Lodestar clears this session once you are idle and resumes the run in a fresh one.";
 
 const SetHandoff = struct { run_id: []const u8, record: *Obj };
 
@@ -274,7 +274,7 @@ pub fn handoffGate(run: *Obj, home: ?[]const u8) !?*Obj {
         .{ "tokens", due.tokens },
         .{ "at", due.at },
         .{ "instructions", handoffInstructions(due) },
-        .{ "next", json.strArr(&.{ "pack-leader", "handoff", "--body", "<note>" }) },
+        .{ "next", json.strArr(&.{ "lodestar", "handoff", "--body", "<note>" }) },
     });
 }
 
@@ -306,9 +306,9 @@ pub fn saveHandoff(run: *Obj, note: []const u8) !*Obj {
     return json.object(.{ .{ "run", run_id }, .{ "agent", agent } });
 }
 
-/// Start `pack-leader handoff resume --run ID` in the background.
+/// Start `lodestar handoff resume --run ID` in the background.
 pub fn spawnResume(run_id: []const u8) !void {
-    const exe = std.process.executablePathAlloc(rt.io, rt.a) catch return rt.fail(null, "cannot locate the pack-leader executable", .{});
+    const exe = std.process.executablePathAlloc(rt.io, rt.a) catch return rt.fail(null, "cannot locate the lodestar executable", .{});
     try proc.spawnDetached(&.{ exe, "handoff", "resume", "--run", run_id }, .{});
 }
 
@@ -334,7 +334,7 @@ pub fn resumeAfterHandoff(run_id: []const u8) ![]const u8 {
         const message = rt.errMessage(err);
         state.update(void, ResumeCtx{ .run_id = run_id, .status = "failed", .err = message }, markResume) catch {};
         state.log(json.object(.{ .{ "event", "handoff.failed" }, .{ "run", run_id }, .{ "pane", pane }, .{ "error", message } }));
-        mux.notify("Pack Leader", rt.fmt("handoff of run {s} failed: {s}", .{ run_id, message }), "request");
+        mux.notify("Lodestar", rt.fmt("handoff of run {s} failed: {s}", .{ run_id, message }), "request");
         return "failed";
     };
     state.log(json.object(.{ .{ "event", "handoff.resumed" }, .{ "run", run_id }, .{ "pane", pane }, .{ "agent", agent } }));
@@ -383,13 +383,13 @@ test "lastToolCommand and the check matcher" {
     defer arena.deinit();
     testInit(&arena);
     const jsonl =
-        \\{"message":{"role":"assistant","content":[{"type":"tool_use","input":{"command":"ls"}},{"type":"tool_use","input":{"command":"pack-leader  check --wait"}}]}}
+        \\{"message":{"role":"assistant","content":[{"type":"tool_use","input":{"command":"ls"}},{"type":"tool_use","input":{"command":"lodestar  check --wait"}}]}}
         \\{"message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
     ;
-    try std.testing.expectEqualStrings("pack-leader  check --wait", lastToolCommand(jsonl).?);
+    try std.testing.expectEqualStrings("lodestar  check --wait", lastToolCommand(jsonl).?);
     try std.testing.expectEqual(@as(?[]const u8, null), lastToolCommand("{\"message\":{\"role\":\"user\"}}"));
-    try std.testing.expect(mentionsCheck("cd x && pack-leader check --wait"));
-    try std.testing.expect(!mentionsCheck("pack-leader checkout"));
-    try std.testing.expect(!mentionsCheck("xpack-leader check"));
-    try std.testing.expect(!mentionsCheck("pack-leader status"));
+    try std.testing.expect(mentionsCheck("cd x && lodestar check --wait"));
+    try std.testing.expect(!mentionsCheck("lodestar checkout"));
+    try std.testing.expect(!mentionsCheck("xlodestar check"));
+    try std.testing.expect(!mentionsCheck("lodestar status"));
 }
