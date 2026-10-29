@@ -58,7 +58,7 @@ pub fn assertRetryBudget(s: State, task: *Obj) !void {
 pub const CreateDispatchOpts = struct {
     id: []const u8,
     task: *Obj,
-    worker: []const u8,
+    crewmate: []const u8,
     preamble: []const u8,
     cwd: []const u8,
     worktreePath: ?[]const u8 = null,
@@ -76,7 +76,7 @@ pub fn createDispatch(s: State, d: CreateDispatchOpts) !*Obj {
         .{ "id", d.id },
         .{ "run_id", d.task.get("run_id") orelse json.Value.null },
         .{ "task_id", task_id },
-        .{ "worker", d.worker },
+        .{ "crewmate", d.crewmate },
         .{ "attempt", (d.task.int("attempts") orelse 0) + 1 },
         .{ "preamble", d.preamble },
         .{ "cwd", d.cwd },
@@ -84,7 +84,7 @@ pub fn createDispatch(s: State, d: CreateDispatchOpts) !*Obj {
     if (d.worktreePath) |p| if (p.len > 0) rec.putStr("worktree_path", p);
     if (d.paneId) |p| if (p.len > 0) rec.putStr("pane_id", p);
     if (d.executionHost) |h| rec.put("execution_host", h.clone().val());
-    if (state.getWorker(s, d.worker)) |w| if (rt.eqlOpt(w.str("run_id"), d.task.str("run_id"))) {
+    if (state.getCrewmate(s, d.crewmate)) |w| if (rt.eqlOpt(w.str("run_id"), d.task.str("run_id"))) {
         rec.put("runtime", json.object(.{ .{ "kind", w.get("kind") orelse json.Value.null }, .{ "model", nullish(w.get("model")) }, .{ "thinking", nullish(w.get("thinking")) } }).val());
         rec.put("routing", json.object(.{ .{ "provider", "off" }, .{ "status", "bypass" }, .{ "reason", "session_reused" }, .{ "elapsed_ms", 0 } }).val());
     };
@@ -148,7 +148,7 @@ pub fn readFullScreen(target: []const u8) !FullScreen {
     return rt.failMsg(null, std.mem.join(rt.a, "; ", errors.items) catch "");
 }
 
-pub const ArchiveScreenOpts = struct { run_id: []const u8, worker: []const u8, dispatch_id: ?[]const u8, target: []const u8 };
+pub const ArchiveScreenOpts = struct { run_id: []const u8, crewmate: []const u8, dispatch_id: ?[]const u8, target: []const u8 };
 pub const Archived = struct { path: []const u8, source: []const u8 };
 
 pub fn archiveScreen(p: ArchiveScreenOpts) !Archived {
@@ -156,27 +156,27 @@ pub fn archiveScreen(p: ArchiveScreenOpts) !Archived {
     const dir = archiveDir(p.run_id);
     fs.mkdirp(dir, 0o700) catch |err| return rt.fail(null, "cannot create {s}: {s}", .{ dir, fs.errText(err) });
     fs.chmod(dir, 0o700);
-    const path = fs.join(&.{ dir, rt.fmt("{s}-{s}.txt", .{ p.worker, p.dispatch_id orelse "none" }) });
+    const path = fs.join(&.{ dir, rt.fmt("{s}-{s}.txt", .{ p.crewmate, p.dispatch_id orelse "none" }) });
     const body = if (rt.endsWith(screen.text, "\n")) screen.text else rt.concat(&.{ screen.text, "\n" });
     fs.writeFile(path, body, 0o600) catch |err| return rt.fail(null, "cannot write {s}: {s}", .{ path, fs.errText(err) });
     fs.chmod(path, 0o600);
     return .{ .path = path, .source = screen.source };
 }
 
-pub const FindArchiveOpts = struct { runId: ?[]const u8, worker: ?[]const u8 = null, dispatchId: ?[]const u8 = null };
+pub const FindArchiveOpts = struct { runId: ?[]const u8, crewmate: ?[]const u8 = null, dispatchId: ?[]const u8 = null };
 
 pub fn findArchive(s: State, o: FindArchiveOpts) !?*Obj {
     if (o.dispatchId) |did| if (did.len > 0) {
         const d = state.getDispatch(s, did) orelse return rt.fail(null, "no dispatch {s}", .{did});
         if (!d.truthy("archive_path")) {
-            const detail = if (d.strNonEmpty("archive_error")) |e| rt.fmt(" ({s})", .{e}) else if (d.truthy("settled_at")) "" else "; its worker has not been released";
+            const detail = if (d.strNonEmpty("archive_error")) |e| rt.fmt(" ({s})", .{e}) else if (d.truthy("settled_at")) "" else "; its crewmate has not been released";
             return rt.fail(null, "dispatch {s} has no archive{s}", .{ d.str("id") orelse did, detail });
         }
         return d;
     };
     var mine: std.ArrayListUnmanaged(*Obj) = .empty;
     if (s.obj("dispatches")) |ds| for (ds.objValues()) |d| {
-        if (!rt.eqlOpt(d.str("worker"), o.worker) or !d.truthy("archive_path")) continue;
+        if (!rt.eqlOpt(d.str("crewmate"), o.crewmate) or !d.truthy("archive_path")) continue;
         if (o.runId) |r| if (r.len > 0 and !rt.eqlOpt(d.str("run_id"), r)) continue;
         mine.append(rt.a, d) catch {};
     };
@@ -202,7 +202,7 @@ pub fn readArchive(d: *Obj, lines: i64) !*Obj {
     const take = if (lines > 0) all.items[all.items.len -| @as(usize, @intCast(lines))..] else all.items;
     return json.object(.{
         .{ "source", "archive" },
-        .{ "worker", d.get("worker") orelse json.Value.null },
+        .{ "crewmate", d.get("crewmate") orelse json.Value.null },
         .{ "dispatch_id", d.get("id") orelse json.Value.null },
         .{ "task_id", d.get("task_id") orelse json.Value.null },
         .{ "archive_path", path },
@@ -219,10 +219,10 @@ test "dispatch records and retry budget" {
     const s = state.emptyState();
     const task = json.object(.{ .{ "id", "t1" }, .{ "run_id", "r1" }, .{ "status", "failed" }, .{ "dispatch_id", "d1" }, .{ "attempts", 1 } });
     state.tasks(s).put("t1", task.val());
-    state.workers(s).put("w", json.object(.{ .{ "name", "w" }, .{ "run_id", "r1" }, .{ "kind", "claude" } }).val());
-    const d = try createDispatch(s, .{ .id = "d2", .task = task, .worker = "w", .preamble = "pre", .cwd = "/x" });
+    state.crewmates(s).put("w", json.object(.{ .{ "name", "w" }, .{ "run_id", "r1" }, .{ "kind", "claude" } }).val());
+    const d = try createDispatch(s, .{ .id = "d2", .task = task, .crewmate = "w", .preamble = "pre", .cwd = "/x" });
     const text = json.stringify(d.val(), false);
-    try std.testing.expect(rt.startsWith(text, "{\"id\":\"d2\",\"run_id\":\"r1\",\"task_id\":\"t1\",\"worker\":\"w\",\"attempt\":2,\"preamble\":\"pre\",\"cwd\":\"/x\",\"runtime\":{\"kind\":\"claude\",\"model\":null,\"thinking\":null},\"routing\":{\"provider\":\"off\",\"status\":\"bypass\",\"reason\":\"session_reused\",\"elapsed_ms\":0},\"started_at\":"));
+    try std.testing.expect(rt.startsWith(text, "{\"id\":\"d2\",\"run_id\":\"r1\",\"task_id\":\"t1\",\"crewmate\":\"w\",\"attempt\":2,\"preamble\":\"pre\",\"cwd\":\"/x\",\"runtime\":{\"kind\":\"claude\",\"model\":null,\"thinking\":null},\"routing\":{\"provider\":\"off\",\"status\":\"bypass\",\"reason\":\"session_reused\",\"elapsed_ms\":0},\"started_at\":"));
     try std.testing.expect(rt.endsWith(text, "\"retry_of\":\"d1\"}"));
     const view = json.stringify(dispatchView(d).val(), false);
     try std.testing.expect(rt.endsWith(view, "\"preamble_length\":3}"));

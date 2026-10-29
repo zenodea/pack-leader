@@ -1,5 +1,6 @@
 const std = @import("std");
 const rt = @import("../rt.zig");
+const renames = @import("../core/renames.zig");
 
 pub const Flag = union(enum) { on, value: []const u8 };
 
@@ -49,11 +50,11 @@ pub fn parseArgs(argv: []const []const u8) Args {
         }
         if (rt.startsWith(x, "--")) {
             if (std.mem.indexOfScalar(u8, x, '=')) |eq| {
-                args.set(x[2..eq], .{ .value = x[eq + 1 ..] });
+                args.set(renames.flag(x[2..eq]), .{ .value = x[eq + 1 ..] });
             } else if (i + 1 < argv.len and !rt.eql(argv[i + 1], "--") and (isTextFlag(x[2..]) or !rt.startsWith(argv[i + 1], "--"))) {
                 i += 1;
-                args.set(x[2..], .{ .value = argv[i] });
-            } else args.set(x[2..], .on);
+                args.set(renames.flag(x[2..]), .{ .value = argv[i] });
+            } else args.set(renames.flag(x[2..]), .on);
         } else positional.append(rt.a, x) catch @panic("out of memory");
     }
     args.positional = positional.items;

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased: the crew and the navigator
+
+- Workers are now the **crew**, each one a **crewmate**: `lodestar crew start|list|show|…`
+  (was `lodestar worker …`), `--crewmate` (was `--worker`), `LODESTAR_CREWMATE` (was
+  `LODESTAR_WORKER`). The sidebar pane is titled "Crew".
+- The observer (the "Advisor" pane) is now the **navigator**: `lodestar navigator [--close]`,
+  `run create --no-navigator`, the `navigator` setting. `lodestar observe` is `lodestar survey`.
+- The old command names, flags and environment variables still work; old commands print
+  their new name.
+- state.json moves to version 2 on first use (`workers` → `crewmates` and the matching
+  fields); crewmate names are kept as they are.
+
 ## Unreleased: renamed to Lodestar
 
 - Pack Leader is now **Lodestar**. The command is `lodestar`, the herdr plugin id is

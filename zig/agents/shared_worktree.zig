@@ -9,8 +9,8 @@ const worktree = @import("worktree.zig");
 const Obj = json.Obj;
 const State = state.State;
 
-// Worktree mode "shared": every worker of a run edits one checkout, on branch
-// lodestar/<run>/shared next to the repo. `done` commits the worker's own files
+// Worktree mode "shared": every crewmate of a run edits one checkout, on branch
+// lodestar/<run>/shared next to the repo. `done` commits the crewmate's own files
 // there, and `run merge` merges the branch into the orchestrator's checkout.
 // Both retry while another git process holds the repository's locks.
 
@@ -43,7 +43,7 @@ pub fn plan(run: *const Obj) !*Obj {
     if (of(run)) |sw| return sw;
     const run_id = run.str("id") orelse "";
     const top = worktree.repoRoot(orchCwd(run)) catch
-        return rt.fail("shared_worktree_no_repo", "worktrees are set to shared, but the run's directory {s} is not inside a git repository; start the worker with --cwd <a directory in the repo>", .{orchCwd(run)});
+        return rt.fail("shared_worktree_no_repo", "worktrees are set to shared, but the run's directory {s} is not inside a git repository; start the crewmate with --cwd <a directory in the repo>", .{orchCwd(run)});
     const common = try worktree.git(top, &.{ "rev-parse", "--path-format=absolute", "--git-common-dir" });
     const repo = if (rt.eql(fs.basename(common), ".git")) fs.dirname(common) else common;
     const base = worktree.git(top, &.{ "rev-parse", "--verify", "--quiet", "HEAD^{commit}" }) catch
@@ -76,7 +76,7 @@ fn ensureTx(c: EnsureCtx, s: State) !*Obj {
     const repo = sw.str("repo").?;
     if (fs.exists(path)) {
         // Left behind by an earlier attempt: reuse it only when it is this run's checkout.
-        if (!rt.eqlOpt(currentBranch(path), branch)) return rt.fail("shared_worktree_conflict", "{s} already exists and is not on branch {s}; move it aside, then start the worker again", .{ path, branch });
+        if (!rt.eqlOpt(currentBranch(path), branch)) return rt.fail("shared_worktree_conflict", "{s} already exists and is not on branch {s}; move it aside, then start the crewmate again", .{ path, branch });
     } else if (worktree.git(repo, &.{ "show-ref", "--verify", "--quiet", rt.concat(&.{ "refs/heads/", branch }) })) |_| {
         _ = try gitRetry(repo, &.{ "worktree", "add", path, branch });
     } else |_| {
@@ -136,9 +136,9 @@ fn subject(summary: []const u8) []const u8 {
     return if (s.len > 72) rt.concat(&.{ s[0..69], "..." }) else s;
 }
 
-pub const CommitOpts = struct { cwd: []const u8, files: []const []const u8, worker: []const u8, run_id: []const u8, task_id: []const u8, summary: []const u8 };
+pub const CommitOpts = struct { cwd: []const u8, files: []const []const u8, crewmate: []const u8, run_id: []const u8, task_id: []const u8, summary: []const u8 };
 
-/// Commits exactly `files` (as the worker sees them from `cwd`) on the shared branch.
+/// Commits exactly `files` (as the crewmate sees them from `cwd`) on the shared branch.
 /// Returns { sha, branch, files } or null when those files have no changes.
 pub fn commitFiles(o: CommitOpts) !?*Obj {
     if (o.files.len == 0) return null;
@@ -150,13 +150,13 @@ pub fn commitFiles(o: CommitOpts) !?*Obj {
     try diff.appendSlice(rt.a, &.{ "diff", "--cached", "--quiet", "--" });
     try diff.appendSlice(rt.a, o.files);
     if (gitRaw(o.cwd, diff.items).ok()) return null;
-    const msg = rt.fmt("{s}\n\nLodestar-Run: {s}\nLodestar-Task: {s}\nLodestar-Worker: {s}", .{ subject(o.summary), o.run_id, o.task_id, o.worker });
+    const msg = rt.fmt("{s}\n\nLodestar-Run: {s}\nLodestar-Task: {s}\nLodestar-Crewmate: {s}", .{ subject(o.summary), o.run_id, o.task_id, o.crewmate });
     var commit: std.ArrayListUnmanaged([]const u8) = .empty;
     try commit.appendSlice(rt.a, &.{ "commit", "-q", "-m", msg, "--" });
     try commit.appendSlice(rt.a, o.files);
     _ = try gitRetry(o.cwd, commit.items);
-    // HEAD may already be another worker's commit; find ours by its trailer.
-    const sha = worktree.git(o.cwd, &.{ "log", "-1", "--format=%H", rt.concat(&.{ "--grep=^Lodestar-Task: ", o.task_id, "$" }), "--grep", rt.concat(&.{ "^Lodestar-Worker: ", o.worker, "$" }), "--all-match", "HEAD" }) catch "";
+    // HEAD may already be another crewmate's commit; find ours by its trailer.
+    const sha = worktree.git(o.cwd, &.{ "log", "-1", "--format=%H", rt.concat(&.{ "--grep=^Lodestar-Task: ", o.task_id, "$" }), "--grep", rt.concat(&.{ "^Lodestar-Crewmate: ", o.crewmate, "$" }), "--all-match", "HEAD" }) catch "";
     var shown: std.ArrayListUnmanaged([]const u8) = .empty;
     const root = worktree.git(o.cwd, &.{ "rev-parse", "--show-toplevel" }) catch o.cwd;
     for (o.files) |f| shown.append(rt.a, if (rt.startsWith(f, root) and f.len > root.len and f[root.len] == '/') f[root.len + 1 ..] else f) catch {};
@@ -174,7 +174,7 @@ pub fn dirtyFiles(path: []const u8) []const []const u8 {
 /// Merges the shared branch into the orchestrator's checkout, retrying while git is locked.
 /// Returns { merged, ... }; a conflict is aborted and reported, never left half-merged.
 pub fn merge(run: *const Obj) !*Obj {
-    const sw = of(run) orelse return rt.fail("no_shared_worktree", "run {s} has no shared worktree: it is made when a worker starts with worktrees set to shared", .{run.str("id") orelse ""});
+    const sw = of(run) orelse return rt.fail("no_shared_worktree", "run {s} has no shared worktree: it is made when a crewmate starts with worktrees set to shared", .{run.str("id") orelse ""});
     const branch = sw.str("branch").?;
     const path = sw.str("path").?;
     const target = worktree.repoRoot(orchCwd(run)) catch return rt.fail(null, "the run's directory {s} is not inside a git repository", .{orchCwd(run)});
@@ -210,7 +210,7 @@ pub fn merge(run: *const Obj) !*Obj {
             out.putBool("merged", false);
             out.putBool("conflict", true);
             out.put("conflicts", json.strArr(conflicted));
-            out.putStr("next", rt.fmt("Nothing was merged (the merge was aborted). Have one worker run `git merge {s}` in {s}, resolve the conflicts and commit, then run `lodestar run merge` again.", .{ into, path }));
+            out.putStr("next", rt.fmt("Nothing was merged (the merge was aborted). Have one crewmate run `git merge {s}` in {s}, resolve the conflicts and commit, then run `lodestar run merge` again.", .{ into, path }));
             return out;
         }
         if (attempt + 1 < RETRIES and transient(text)) {
@@ -232,7 +232,7 @@ pub fn cleanup(run: *const Obj, panes_left_open: bool) ?*Obj {
             out.putBool("removed", true);
             return out;
         }
-        if (panes_left_open) break :blk "workers' panes are still open in it";
+        if (panes_left_open) break :blk "crewmates' panes are still open in it";
         if (dirtyFiles(path).len > 0) break :blk "it has uncommitted changes";
         const target = worktree.repoRoot(orchCwd(run)) catch break :blk "the run's directory is not in a git repository";
         if (!gitRaw(target, &.{ "merge-base", "--is-ancestor", sw.str("branch") orelse "", "HEAD" }).ok()) break :blk "its branch is not merged yet: run `lodestar run merge --run <id>` first";

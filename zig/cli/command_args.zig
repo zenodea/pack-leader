@@ -7,8 +7,8 @@ const Args = args_mod.Args;
 
 pub const RETRYABLE = [_][]const u8{
     "run create",    "run use",       "run close",     "task create",    "task update",    "gate create",    "gate resolve",
-    "worker start",  "worker adopt",  "worker prompt", "worker resend",  "worker stop",    "worker retain",  "worker release",
-    "worker abandon", "reply",        "send",          "say",            "done",           "note",           "escalate",
+    "crewmate start",  "crewmate adopt",  "crewmate prompt", "crewmate resend",  "crewmate stop",    "crewmate retain",  "crewmate release",
+    "crewmate abandon", "reply",        "send",          "say",            "done",           "note",           "escalate",
     "spawn",
 };
 
@@ -44,8 +44,8 @@ fn withRun(comptime s: Schema) Schema {
     return &r;
 }
 
-fn withWorkerContext(comptime s: Schema) Schema {
-    const r = s[0..s.len].* ++ [_]Entry{ .{ .name = "worker", .kind = .value }, .{ .name = "task", .kind = .value }, .{ .name = "dispatch", .kind = .value }, .{ .name = "run", .kind = .value } };
+fn withCrewmateContext(comptime s: Schema) Schema {
+    const r = s[0..s.len].* ++ [_]Entry{ .{ .name = "crewmate", .kind = .value }, .{ .name = "task", .kind = .value }, .{ .name = "dispatch", .kind = .value }, .{ .name = "run", .kind = .value } };
     return &r;
 }
 
@@ -56,7 +56,7 @@ const empty: Schema = &.{};
 
 const groups = [_]Group{
     .{ .name = "run", .default = "show", .subs = &.{
-        .{ .name = "create", .flags = withRun(schema(&.{ "no-sidebar", "no-observer", "no-review", "left", "another" }, &.{ "objective", "cwd" }, &.{})) },
+        .{ .name = "create", .flags = withRun(schema(&.{ "no-sidebar", "no-navigator", "no-review", "left", "another" }, &.{ "objective", "cwd" }, &.{})) },
         .{ .name = "show", .flags = withRun(empty) },
         .{ .name = "list", .flags = withRun(empty) },
         .{ .name = "use", .flags = withRun(schema(&.{ "takeover", "another" }, &.{}, &.{})) },
@@ -71,7 +71,7 @@ const groups = [_]Group{
         .{ .name = "tree", .flags = withRun(empty) },
         .{ .name = "update", .flags = withRun(schema(&.{"force"}, &.{ "status", "summary", "parent" }, &.{})) },
     } },
-    .{ .name = "worker", .default = "list", .subs = &.{
+    .{ .name = "crew", .default = "list", .subs = &.{
         .{ .name = "start", .flags = withRun(schema(&.{ "retry", "no-default-args", "dry-run" }, &.{ "spec", "task", "kind", "router", "model", "thinking", "cwd", "host", "placement", "direction", "worktree", "base", "branch", "title", "target-pane", "ratio", "timeout", "setup-command", "setup-timeout" }, &.{})) },
         .{ .name = "adopt", .flags = withRun(schema(&.{}, &.{ "spec", "task", "title", "target-pane" }, &.{})) },
         .{ .name = "prompt", .flags = withRun(schema(&.{"dry-run"}, &.{ "spec", "task", "title" }, &.{})) },
@@ -86,7 +86,7 @@ const groups = [_]Group{
         .{ .name = "release", .flags = withRun(schema(&.{ "force", "keep-pane", "keep-worktree", "remove-worktree" }, &.{}, &.{})) },
     } },
     .{ .name = "dispatch", .default = "list", .subs = &.{
-        .{ .name = "list", .flags = withRun(schema(&.{}, &.{ "task", "worker" }, &.{})) },
+        .{ .name = "list", .flags = withRun(schema(&.{}, &.{ "task", "crewmate" }, &.{})) },
         .{ .name = "show", .flags = withRun(schema(&.{"preamble"}, &.{}, &.{})) },
     } },
     .{ .name = "gate", .default = "list", .subs = &.{
@@ -114,14 +114,14 @@ const commands = [_]Cmd{
     .{ .name = "-h", .flags = empty },
     .{ .name = "check", .flags = withRun(schema(&.{ "wait", "all" }, &.{ "timeout", "ack", "types", "limit" }, &.{})) },
     .{ .name = "reply", .flags = withRun(schema(&.{}, &.{"body"}, &.{"free"})) },
-    .{ .name = "send", .flags = withWorkerContext(schema(&.{"now"}, &.{"body"}, &.{})) },
+    .{ .name = "send", .flags = withCrewmateContext(schema(&.{"now"}, &.{"body"}, &.{})) },
     .{ .name = "status", .flags = withRun(schema(&.{ "json", "all" }, &.{}, &.{})) },
-    .{ .name = "done", .flags = withWorkerContext(schema(&.{}, &.{ "outcome", "summary", "files-modified", "report-path" }, &.{})) },
-    .{ .name = "ask", .flags = withWorkerContext(schema(&.{}, &.{ "options", "timeout", "id", "body" }, &.{})) },
-    .{ .name = "heartbeat", .flags = withWorkerContext(schema(&.{}, &.{ "body", "phase" }, &.{})) },
-    .{ .name = "escalate", .flags = withWorkerContext(schema(&.{}, &.{"body"}, &.{})) },
-    .{ .name = "note", .flags = withWorkerContext(schema(&.{}, &.{"body"}, &.{})) },
-    .{ .name = "inbox", .flags = withWorkerContext(empty) },
+    .{ .name = "done", .flags = withCrewmateContext(schema(&.{}, &.{ "outcome", "summary", "files-modified", "report-path" }, &.{})) },
+    .{ .name = "ask", .flags = withCrewmateContext(schema(&.{}, &.{ "options", "timeout", "id", "body" }, &.{})) },
+    .{ .name = "heartbeat", .flags = withCrewmateContext(schema(&.{}, &.{ "body", "phase" }, &.{})) },
+    .{ .name = "escalate", .flags = withCrewmateContext(schema(&.{}, &.{"body"}, &.{})) },
+    .{ .name = "note", .flags = withCrewmateContext(schema(&.{}, &.{"body"}, &.{})) },
+    .{ .name = "inbox", .flags = withCrewmateContext(empty) },
     .{ .name = "config", .flags = empty },
     .{ .name = "settings", .flags = empty },
     .{ .name = "handoff", .flags = withRun(schema(&.{}, &.{"body"}, &.{})) },
@@ -130,14 +130,14 @@ const commands = [_]Cmd{
     .{ .name = "leader", .flags = withRun(empty) },
     .{ .name = "say", .flags = withRun(schema(&.{}, &.{"body"}, &.{})) },
     .{ .name = "spawn", .flags = schema(&.{"no-default-args"}, &.{ "prompt", "kind", "model", "thinking", "cwd", "worktree", "base", "branch", "timeout" }, &.{}) },
-    .{ .name = "observe", .flags = withRun(schema(&.{}, &.{"turns"}, &.{})) },
-    .{ .name = "observer", .flags = withRun(schema(&.{"close"}, &.{}, &.{})) },
+    .{ .name = "survey", .flags = withRun(schema(&.{}, &.{"turns"}, &.{})) },
+    .{ .name = "navigator", .flags = withRun(schema(&.{"close"}, &.{}, &.{})) },
     .{ .name = "sidebar-open", .flags = schema(&.{ "left", "no-focus" }, &.{}, &.{}) },
     .{ .name = "event", .flags = empty },
     .{ .name = "usage", .flags = schema(&.{"quiet"}, &.{}, &.{}) },
 };
 
-const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "observer", "review", "stall-minutes", "handoff", "handoff-at" }, &.{});
+const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "navigator", "review", "stall-minutes", "handoff", "handoff-at" }, &.{});
 
 fn findGroup(name: []const u8) ?*const Group {
     for (&groups) |*g| if (rt.eql(g.name, name)) return g;
@@ -222,7 +222,7 @@ pub fn validateCommandArgs(command: []const u8, a: *const Args) !void {
         }
         if (rt.eql(name, "older-than") and !isDuration(rt.trim(v))) return rt.fail(null, "bad duration \"{s}\": use a number and a unit, like 30m, 12h, 2d, 1w", .{v});
     }
-    if (rt.eql(command, "worker") and rt.eql(a.pos(0) orelse "list", "start")) {
+    if (rt.eql(command, "crew") and rt.eql(a.pos(0) orelse "list", "start")) {
         if (args_mod.str(a, "setup-command")) |sc| {
             if (rt.trim(sc).len == 0) return rt.fail(null, "--setup-command requires a non-empty command", .{});
         }
@@ -239,8 +239,8 @@ fn missingValueMessage(name: []const u8) []const u8 {
 }
 
 pub fn commandName(command: []const u8, a: *const Args) []const u8 {
-    if (rt.oneOf(command, &.{ "run", "task", "worker", "dispatch", "gate", "host", "config", "request" })) {
-        const def = if (rt.oneOf(command, &.{ "task", "worker", "dispatch", "gate", "host" })) "list" else "show";
+    if (rt.oneOf(command, &.{ "run", "task", "crew", "dispatch", "gate", "host", "config", "request" })) {
+        const def = if (rt.oneOf(command, &.{ "task", "crew", "dispatch", "gate", "host" })) "list" else "show";
         return rt.concat(&.{ command, " ", a.pos(0) orelse def });
     }
     return command;

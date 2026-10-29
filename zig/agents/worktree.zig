@@ -8,7 +8,7 @@ const Obj = json.Obj;
 
 /// { path, branch: string|null, base, created_by_pack, repo, workspace_id? }
 pub const WorktreeInfo = *Obj;
-/// WorktreeInfo & { worker, run_id, dispatch_id?, created_at, released_at?, removed?, kept?, cleanup_protection? }
+/// WorktreeInfo & { crewmate, run_id, dispatch_id?, created_at, released_at?, removed?, kept?, cleanup_protection? }
 pub const WorktreeRecord = *Obj;
 
 fn joinArgs(args: []const []const u8) []const u8 {
@@ -77,8 +77,8 @@ pub fn worktreeParent(repo: []const u8) []const u8 {
     return fs.join(&.{ fs.dirname(repo), rt.concat(&.{ fs.basename(repo), "-wt" }) });
 }
 
-pub fn defaultBranch(run_id: []const u8, worker: []const u8) []const u8 {
-    return rt.concat(&.{ "lodestar/", run_id, "/", worker });
+pub fn defaultBranch(run_id: []const u8, crewmate: []const u8) []const u8 {
+    return rt.concat(&.{ "lodestar/", run_id, "/", crewmate });
 }
 
 fn info(path: []const u8, branch: ?[]const u8, base: []const u8, created_by_pack: bool, repo: []const u8) WorktreeInfo {
@@ -95,7 +95,7 @@ pub const PlanWorktreeOpts = struct {
     spec: []const u8,
     cwd: []const u8,
     runId: []const u8,
-    worker: []const u8,
+    crewmate: []const u8,
     base: ?[]const u8 = null,
     branch: ?[]const u8 = null,
 };
@@ -109,10 +109,10 @@ pub fn planWorktree(o: PlanWorktreeOpts) !WorktreeInfo {
             if (o.base) |b| return rt.fail(null, "--base {s} is not a commit in {s}", .{ b, top });
             return rt.fail(null, "{s} has no commit at HEAD; pass --base <ref>", .{top});
         };
-        const branch = o.branch orelse defaultBranch(o.runId, o.worker);
+        const branch = o.branch orelse defaultBranch(o.runId, o.crewmate);
         if (!gitOk(repo, &.{ "check-ref-format", "--branch", branch })) return rt.fail(null, "--branch {s} is not a valid branch name", .{branch});
         if (gitOk(repo, &.{ "show-ref", "--verify", "--quiet", rt.concat(&.{ "refs/heads/", branch }) })) return rt.fail(null, "branch {s} already exists in {s}; pass --branch <new name>, or --worktree <path> to reuse its checkout", .{ branch, repo });
-        const path = fs.join(&.{ worktreeParent(repo), o.worker });
+        const path = fs.join(&.{ worktreeParent(repo), o.crewmate });
         if (fs.exists(path)) return rt.fail(null, "{s} already exists; pass --worktree {s} to reuse it, or remove it first", .{ path, path });
         return info(path, branch, base, true, repo);
     }
@@ -143,9 +143,9 @@ pub const WorktreeChoice = struct { worktree: ?[]const u8 = null, note: ?[]const
 
 /// `mode` is "on" | "off" | "ask" (WorktreeMode).
 pub fn worktreeForMode(mode: []const u8, flag: ?[]const u8, cwd: []const u8, remote: bool) !WorktreeChoice {
-    if (rt.eql(mode, "off") and flag != null and flag.?.len > 0) return rt.fail(null, "worktrees are off in Lodestar settings (`lodestar settings`); start the worker without --worktree", .{});
+    if (rt.eql(mode, "off") and flag != null and flag.?.len > 0) return rt.fail(null, "worktrees are off in Lodestar settings (`lodestar settings`); start the crewmate without --worktree", .{});
     if (!rt.eql(mode, "on") or (flag != null and flag.?.len > 0) or remote) return .{ .worktree = flag };
-    _ = repoRoot(cwd) catch return .{ .note = rt.fmt("worktrees are on, but {s} is not in a git repository, so this worker shares it", .{cwd}) };
+    _ = repoRoot(cwd) catch return .{ .note = rt.fmt("worktrees are on, but {s} is not in a git repository, so this crewmate shares it", .{cwd}) };
     return .{ .worktree = "new" };
 }
 
@@ -170,14 +170,14 @@ test "worktree planning in a fresh repository" {
     _ = try git(repo, &.{"init"});
     _ = try git(repo, &.{ "-c", "user.email=a@b", "-c", "user.name=t", "commit", "--allow-empty", "-m", "x" });
     rt.setenv("LODESTAR_WORKTREE_DIR", "");
-    const wt = try planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .worker = "w" });
+    const wt = try planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .crewmate = "w" });
     try std.testing.expectEqualStrings("lodestar/r1/w", wt.str("branch").?);
     try std.testing.expect(wt.boolean("created_by_pack").?);
     try std.testing.expect(rt.endsWith(wt.str("path").?, "repo-wt/w"));
-    try std.testing.expectError(error.Fail, planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .worker = "w", .branch = "bad..name" }));
+    try std.testing.expectError(error.Fail, planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .crewmate = "w", .branch = "bad..name" }));
     try std.testing.expectEqualStrings("--branch bad..name is not a valid branch name", rt.last.message);
-    try std.testing.expectError(error.Fail, planWorktree(.{ .spec = "nope", .cwd = repo, .runId = "r1", .worker = "w" }));
-    const reuse = try planWorktree(.{ .spec = ".", .cwd = repo, .runId = "r1", .worker = "w" });
+    try std.testing.expectError(error.Fail, planWorktree(.{ .spec = "nope", .cwd = repo, .runId = "r1", .crewmate = "w" }));
+    const reuse = try planWorktree(.{ .spec = ".", .cwd = repo, .runId = "r1", .crewmate = "w" });
     try std.testing.expect(!reuse.boolean("created_by_pack").?);
     const choice = try worktreeForMode("on", null, repo, false);
     try std.testing.expectEqualStrings("new", choice.worktree.?);

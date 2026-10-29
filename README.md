@@ -3,10 +3,10 @@
 # Lodestar
 
 Lodestar lets one coding agent run a team of others. You talk to a single agent, the
-leader. It splits your request into tasks, starts a worker agent for each one,
+leader. It splits your request into tasks, starts a crewmate agent for each one,
 answers their questions, reads their reports and merges the results.
 
-- **Agents:** Claude Code, Codex and pi, as the leader or as workers, in any mix.
+- **Agents:** Claude Code, Codex and pi, as the leader or as crewmates, in any mix.
 - **Terminals:** runs inside [herdr](https://herdr.dev) or tmux. Rex is next.
 - **Memory:** tasks, specs, every attempt and every report live in a state file
   outside the agents, so a cleared session or a closed tab loses nothing.
@@ -45,7 +45,7 @@ link `lodestar` into `~/.local/bin`. Keep that on your `PATH`.
 
 Ask your agent for the work and say you want it split up:
 
-> Implement CSV import. Give parsing and validation to separate workers in isolated
+> Implement CSV import. Give parsing and validation to separate crewmates in isolated
 > worktrees. Have them write tests, review their reports, then integrate.
 
 The skill takes it from there. Behind the scenes the leader runs commands like these,
@@ -53,24 +53,24 @@ and you can run them yourself too:
 
 ```sh
 lodestar run create --objective "Implement CSV import"
-lodestar worker start parser --worktree new --spec "Parse CSV input. Add tests. Report back."
-lodestar worker start validator --worktree new --spec "Validate rows. Add tests. Report back."
+lodestar crew start parser --worktree new --spec "Parse CSV input. Add tests. Report back."
+lodestar crew start validator --worktree new --spec "Validate rows. Add tests. Report back."
 lodestar check --wait --timeout 540000
 ```
 
-Workers ask when they're stuck (`ask`), leave notes (`note`), raise problems
+Crewmates ask when they're stuck (`ask`), leave notes (`note`), raise problems
 (`escalate`) and finish with `done`. The leader answers with `reply`, follows up
 with `send`, and when the reports are in it checks the work, merges the branches
 and closes the run.
 
 While it runs:
 
-- `lodestar status` shows the run, its tasks and workers.
-- `lodestar worker read parser` prints a worker's screen, live or saved.
+- `lodestar status` shows the run, its tasks and crewmates.
+- `lodestar crew read parser` prints a crewmate's screen, live or saved.
 - `lodestar say "Leave the docs for last."` passes a message to the leader without
   interrupting it.
-- On herdr, a **Workers** sidebar shows one box per worker, and a second agent,
-  the **Advisor**, answers your questions about the run.
+- On herdr, a **Crewmates** sidebar shows one box per crewmate, and a second agent,
+  the **Navigator**, answers your questions about the run.
 
 [Your first run](https://zenodea.github.io/lodestar/docs/?p=quickstart) walks through
 a whole one.
@@ -79,8 +79,8 @@ a whole one.
 
 | It does | It doesn't |
 | --- | --- |
-| Give each worker one task with a written spec | Take a worker's "done" as proof; the leader checks |
-| Put workers in their own Git worktrees and branches | Sandbox anything; worktrees separate Git changes, not permissions |
+| Give each crewmate one task with a written spec | Take a crewmate's "done" as proof; the leader checks |
+| Put crewmates in their own Git worktrees and branches | Sandbox anything; worktrees separate Git changes, not permissions |
 | Hold tasks until an approval gate says yes | Merge on its own; the leader merges, or leaves it to you if you ask |
 | Hand the leader to a fresh session when its context fills up | Forget a run when a session or tab goes away |
 
@@ -88,7 +88,7 @@ More in the docs: [tasks and gates](https://zenodea.github.io/lodestar/docs/?p=t
 [worktrees](https://zenodea.github.io/lodestar/docs/?p=worktrees),
 [handoffs and sub-runs](https://zenodea.github.io/lodestar/docs/?p=long-runs),
 [tmux](https://zenodea.github.io/lodestar/docs/?p=tmux),
-[remote workers](https://zenodea.github.io/lodestar/docs/?p=remote),
+[remote crewmates](https://zenodea.github.io/lodestar/docs/?p=remote),
 [model routing](https://zenodea.github.io/lodestar/docs/?p=model-routing).
 
 ## Coming from Pack Leader
@@ -101,7 +101,7 @@ Lodestar used to be called Pack Leader.
   the old `pack-leader` skill and command link.
 - **On herdr:** install the `lodestar` plugin and remove the old `pack-leader` one.
 - **Renamed:** environment variables now start with `LODESTAR_` instead of `PACK_`.
-- **New branches:** they're named `lodestar/<run>/<worker>`; old `pack/...` branches
+- **New branches:** they're named `lodestar/<run>/<crewmate>`; old `pack/...` branches
   stay as they are.
 
 ## Develop

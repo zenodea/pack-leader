@@ -13,7 +13,7 @@ const inbox = @import("../messaging/inbox.zig");
 const gates = @import("../core/gates.zig");
 const dispatch = @import("../core/dispatch.zig");
 const routing = @import("../core/routing.zig");
-const pack_layout = @import("pack_layout.zig");
+const crew_layout = @import("crew_layout.zig");
 const worktree = @import("worktree.zig");
 const shared_worktree = @import("shared_worktree.zig");
 const config = @import("../core/config.zig");
@@ -24,7 +24,7 @@ const Value = json.Value;
 const State = state.State;
 const Run = state.Run;
 const Task = state.Task;
-const Worker = state.Worker;
+const Crewmate = state.Crewmate;
 const WorktreeInfo = worktree.WorktreeInfo;
 const HostProfile = hosts.HostProfile;
 
@@ -60,8 +60,8 @@ fn isTruthyStr(x: ?[]const u8) bool {
     return x != null and x.?.len > 0;
 }
 
-fn workerNameError() error{Fail} {
-    return rt.fail(null, "worker name must match {s}", .{state.WORKER_NAME_PATTERN});
+fn crewmateNameError() error{Fail} {
+    return rt.fail(null, "crewmate name must match {s}", .{state.CREWMATE_NAME_PATTERN});
 }
 
 fn logEvent(pairs: anytype) void {
@@ -235,16 +235,16 @@ fn shellQuote(v: []const u8) []const u8 {
     return rt.concat(&.{ "'", inner, "'" });
 }
 
-pub const ExplicitWorkerContextOpts = struct { worker: []const u8, run: Run, task: Task, dispatchId: []const u8 };
+pub const ExplicitCrewmateContextOpts = struct { crewmate: []const u8, run: Run, task: Task, dispatchId: []const u8 };
 
-pub fn explicitWorkerContext(p: ExplicitWorkerContextOpts) []const u8 {
-    return rt.fmt("env LODESTAR_ROLE=worker HERDR_PLUGIN_STATE_DIR={s} LODESTAR_RUN_ID={s} LODESTAR_WORKER={s} LODESTAR_TASK_ID={s} LODESTAR_DISPATCH_ID={s} lodestar", .{
-        shellQuote(paths.state_dir), shellQuote(runId(p.run)), shellQuote(p.worker), shellQuote(p.task.str("id") orelse ""), shellQuote(p.dispatchId),
+pub fn explicitCrewmateContext(p: ExplicitCrewmateContextOpts) []const u8 {
+    return rt.fmt("env LODESTAR_ROLE=crewmate HERDR_PLUGIN_STATE_DIR={s} LODESTAR_RUN_ID={s} LODESTAR_CREWMATE={s} LODESTAR_TASK_ID={s} LODESTAR_DISPATCH_ID={s} lodestar", .{
+        shellQuote(paths.state_dir), shellQuote(runId(p.run)), shellQuote(p.crewmate), shellQuote(p.task.str("id") orelse ""), shellQuote(p.dispatchId),
     });
 }
 
 pub const PreambleOpts = struct {
-    worker: []const u8,
+    crewmate: []const u8,
     run: Run,
     task: Task,
     dispatchId: []const u8,
@@ -256,7 +256,7 @@ pub const PreambleOpts = struct {
 };
 
 pub fn preamble(p: PreambleOpts) []const u8 {
-    const channel = "An orchestrator agent coordinates several workers in parallel. It cannot see your screen; the only channel is the `lodestar` CLI";
+    const channel = "An orchestrator agent coordinates several crewmates in parallel. It cannot see your screen; the only channel is the `lodestar` CLI";
     const task_id = p.task.str("id") orelse "";
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
     const add = struct {
@@ -264,12 +264,12 @@ pub fn preamble(p: PreambleOpts) []const u8 {
             l.append(rt.a, s) catch @panic("out of memory");
         }
     }.f;
-    add(&lines, rt.fmt("[lodestar dispatch] You are worker \"{s}\" in run {s}, on task {s} (\"{s}\"), dispatch {s}.", .{ p.worker, runId(p.run), task_id, p.task.str("title") orelse "", p.dispatchId }));
+    add(&lines, rt.fmt("[lodestar dispatch] You are crewmate \"{s}\" in run {s}, on task {s} (\"{s}\"), dispatch {s}.", .{ p.crewmate, runId(p.run), task_id, p.task.str("title") orelse "", p.dispatchId }));
     if (p.explicitContext) {
         add(&lines, if (p.redispatch)
             rt.concat(&.{ channel, ". This is a new dispatch in your existing adopted session; use the fresh explicit context prefix below, not any earlier IDs." })
         else
-            rt.concat(&.{ channel, ". This existing session was adopted and does not inherit Lodestar's worker environment." }));
+            rt.concat(&.{ channel, ". This existing session was adopted and does not inherit Lodestar's crewmate environment." }));
     } else {
         add(&lines, if (p.redispatch)
             rt.fmt("{s}. This is a new dispatch in your existing session and your pane's environment still names the previous one: pass --task {s} --dispatch {s} to every lodestar command for it.", .{ channel, task_id, p.dispatchId })
@@ -278,10 +278,10 @@ pub fn preamble(p: PreambleOpts) []const u8 {
     }
     add(&lines, "");
     add(&lines, "Rules:");
-    add(&lines, rt.fmt("- Do only this task, in {s}. Do not start or steer other agents, unless the task spec asks you to coordinate workers of your own: then `lodestar run create` from this pane makes a sub-run you lead (see `lodestar skill`, \"Sub-runs\").", .{p.cwd}));
+    add(&lines, rt.fmt("- Do only this task, in {s}. Do not start or steer other agents, unless the task spec asks you to coordinate crewmates of your own: then `lodestar run create` from this pane makes a sub-run you lead (see `lodestar skill`, \"Sub-runs\").", .{p.cwd}));
     if (p.explicitContext) {
-        const ctx = explicitWorkerContext(.{ .worker = p.worker, .run = p.run, .task = p.task, .dispatchId = p.dispatchId });
-        add(&lines, rt.fmt("- Prefix every Lodestar worker command with `{s}` (append the command and its arguments).", .{ctx}));
+        const ctx = explicitCrewmateContext(.{ .crewmate = p.crewmate, .run = p.run, .task = p.task, .dispatchId = p.dispatchId });
+        add(&lines, rt.fmt("- Prefix every Lodestar crewmate command with `{s}` (append the command and its arguments).", .{ctx}));
     }
     if (p.worktree) |wt| add(&lines, worktreeRule(wt));
     const in_shared = p.worktree == null and p.remoteHost == null and shared_worktree.contains(p.run, p.cwd);
@@ -293,8 +293,8 @@ pub fn preamble(p: PreambleOpts) []const u8 {
     }
     add(&lines, "- Blocking question for the orchestrator: `lodestar ask \"<question>\"` (with fixed choices, add `--options \"a,b,c\"` and the answer is one of them). It waits for the answer (up to 10 minutes); on timeout, run `lodestar ask --id <id>` to keep waiting. Never stop on a question the orchestrator cannot see.");
     add(&lines, "- Non-blocking blocker, finding, or \"taking longer because ...\": `lodestar note \"<text>\"`; keep working.");
-    add(&lines, "- Something the orchestrator must act on while you keep working (the spec is wrong, you conflict with another worker, a risk it must decide on): `lodestar escalate \"<text>\"`.");
-    add(&lines, "- Something another worker of this run needs to know: `lodestar send <worker> \"<text>\"` (one worker by name; it arrives as a follow-up).");
+    add(&lines, "- Something the orchestrator must act on while you keep working (the spec is wrong, you conflict with another crewmate, a risk it must decide on): `lodestar escalate \"<text>\"`.");
+    add(&lines, "- Something another crewmate of this run needs to know: `lodestar send <crewmate> \"<text>\"` (one crewmate by name; it arrives as a follow-up).");
     add(&lines, "- Read follow-ups at natural checkpoints (before starting a new file, after a test run) and once more right before reporting: `lodestar inbox`.");
     add(&lines, "- During long work, about every 10 minutes: `lodestar heartbeat \"<one line on progress>\" --phase investigating|implementing|reviewing|waiting`.");
     add(&lines, "- When finished, exactly once: `lodestar done --outcome succeeded|failed --summary \"<three sentences: what changed, how it was verified, what is left>\" [--files-modified a,b] [--report-path <file>]`. Say failed explicitly when the acceptance check did not pass.");
@@ -306,7 +306,7 @@ pub fn preamble(p: PreambleOpts) []const u8 {
 }
 
 fn sharedWorktreeRule(sw: *Obj) []const u8 {
-    return rt.fmt("- You share the git worktree {s} (branch {s}) with the other workers of this run, and their uncommitted edits are in it too. Edit only the files your task owns. Do not commit, stash, reset, checkout, rebase or switch branches, and never `git add -A`, `git add .` or `git commit -a`. On success, `lodestar done --files-modified a,b` commits exactly those files on {s} for you: list every file you created, changed or deleted.", .{ sw.str("path") orelse "", sw.str("branch") orelse "", sw.str("branch") orelse "" });
+    return rt.fmt("- You share the git worktree {s} (branch {s}) with the other crewmates of this run, and their uncommitted edits are in it too. Edit only the files your task owns. Do not commit, stash, reset, checkout, rebase or switch branches, and never `git add -A`, `git add .` or `git commit -a`. On success, `lodestar done --files-modified a,b` commits exactly those files on {s} for you: list every file you created, changed or deleted.", .{ sw.str("path") orelse "", sw.str("branch") orelse "", sw.str("branch") orelse "" });
 }
 
 fn worktreeRule(wt: WorktreeInfo) []const u8 {
@@ -358,7 +358,7 @@ pub const StartOptions = struct {
 fn openLeaderBar(run: Run, name: []const u8, pane_id: []const u8, where: []const u8, where_label: []const u8, task_title: []const u8) ?[]const u8 {
     const env = json.object(.{
         .{ "LODESTAR_RUN_ID", runId(run) },
-        .{ "LODESTAR_WORKER", name },
+        .{ "LODESTAR_CREWMATE", name },
         .{ "LODESTAR_OBJECTIVE", oneLine(run.str("objective") orelse "") },
         .{ "LODESTAR_WHERE", where },
         .{ "LODESTAR_WHERE_LABEL", where_label },
@@ -370,21 +370,21 @@ fn openLeaderBar(run: Run, name: []const u8, pane_id: []const u8, where: []const
     });
     if (theme.loadTheme().accent) |accent| env.putStr("LODESTAR_ACCENT", accent);
     const bar = mux.openToolPane(json.object(.{ .{ "entrypoint", "bar" }, .{ "target_pane_id", pane_id }, .{ "direction", "down" }, .{ "env", env } })) catch |err| {
-        mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "worker", name }, .{ "pane", pane_id } }));
+        mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", pane_id } }));
         return null;
     };
     const bar_id = bar.str("pane_id") orelse "";
     if (mux.caps().arrange) {
         _ = mux.paneSwap(bar_id, pane_id) catch |err| {
-            mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "worker", name }, .{ "pane", pane_id } }));
+            mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", pane_id } }));
             return null;
         };
         _ = mux.setSplitRatio(bar_id, 0.05) catch |err| {
-            mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "worker", name }, .{ "pane", pane_id } }));
+            mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", pane_id } }));
             return null;
         };
     }
-    logEvent(.{ .{ "event", "bar.opened" }, .{ "run", runId(run) }, .{ "worker", name }, .{ "pane", bar_id } });
+    logEvent(.{ .{ "event", "bar.opened" }, .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", bar_id } });
     return bar_id;
 }
 
@@ -467,7 +467,7 @@ fn admitTask(s: State, o: AdmitOpts, preview: bool) !Task {
     if (t == null or !rt.eqlOpt(t.?.str("run_id"), runId(o.run))) return rt.fail(null, "no task {s} in run {s}", .{ task_id, runId(o.run) });
     const tk = t.?;
     const status = tk.str("status") orelse "";
-    if (rt.eql(status, "dispatched")) return rt.fail(null, "task {s} is already dispatched to {s}", .{ task_id, tk.str("worker") orelse "null" });
+    if (rt.eql(status, "dispatched")) return rt.fail(null, "task {s} is already dispatched to {s}", .{ task_id, tk.str("crewmate") orelse "null" });
     if (rt.eql(status, "succeeded")) return rt.fail(null, "task {s} already succeeded", .{task_id});
     if (rt.eql(status, "failed") and !o.retry) return rt.fail(null, "task {s} failed; pass --retry to try again", .{task_id});
     try gates.assertTaskGatesApproved(s, task_id);
@@ -479,7 +479,7 @@ const Admitted = struct { task: Task, dispatch_id: []const u8, text: []const u8 
 
 const AdmitCtx = struct { o: *const StartOptions, wt: ?WorktreeInfo, cwd: []const u8 };
 
-fn usesCheckout(w: Worker, path: []const u8) bool {
+fn usesCheckout(w: Crewmate, path: []const u8) bool {
     if (w.obj("worktree")) |wt| if (wt.strNonEmpty("path")) |p| if (rt.eql(worktree.worktreeIdentityPath(p), path)) return true;
     if (w.strNonEmpty("cwd")) |p| if (rt.eql(worktree.worktreeIdentityPath(p), path)) return true;
     return false;
@@ -489,23 +489,23 @@ fn admitTx(c: *const AdmitCtx, s: State) !Admitted {
     const o = c.o;
     const rid = runId(o.run);
     if (!runActive(s, rid)) return rt.fail(null, "run {s} is closed or no longer exists", .{rid});
-    if (state.getWorker(s, o.name)) |w| if (runActive(s, w.str("run_id"))) return rt.fail(null, "worker \"{s}\" exists; release it first", .{o.name});
+    if (state.getCrewmate(s, o.name)) |w| if (runActive(s, w.str("run_id"))) return rt.fail(null, "crewmate \"{s}\" exists; release it first", .{o.name});
     try refuseStartInFlight(s, o.name, o.taskId, if (c.wt) |wt| wt.str("path") else null, null);
     if (c.wt) |wt| {
         const path = wt.str("path").?;
-        for (state.workers(s).objValues()) |w| {
+        for (state.crewmates(s).objValues()) |w| {
             if (w.truthy("execution_host") or rt.eqlOpt(w.str("name"), o.name) or !runActive(s, w.str("run_id"))) continue;
-            if (usesCheckout(w, path)) return rt.fail(null, "worker \"{s}\" already works in {s}; two workers never share a working tree", .{ w.str("name") orelse "", path });
+            if (usesCheckout(w, path)) return rt.fail(null, "crewmate \"{s}\" already works in {s}; two crewmates never share a working tree", .{ w.str("name") orelse "", path });
         }
     }
     const task = try admitTask(s, .{ .run = o.run, .taskId = o.taskId, .spec = o.spec, .title = o.title, .retry = o.retry }, false);
     const dispatch_id = state.nextId(s, "d");
-    const text = preamble(.{ .worker = o.name, .run = o.run, .task = task, .dispatchId = dispatch_id, .cwd = c.cwd, .worktree = c.wt });
-    const d = try dispatch.createDispatch(s, .{ .id = dispatch_id, .task = task, .worker = o.name, .preamble = text, .cwd = c.cwd, .worktreePath = if (c.wt) |wt| wt.str("path") else null });
+    const text = preamble(.{ .crewmate = o.name, .run = o.run, .task = task, .dispatchId = dispatch_id, .cwd = c.cwd, .worktree = c.wt });
+    const d = try dispatch.createDispatch(s, .{ .id = dispatch_id, .task = task, .crewmate = o.name, .preamble = text, .cwd = c.cwd, .worktreePath = if (c.wt) |wt| wt.str("path") else null });
     if (o.setupCommand != null) d.putStr("claim_until", time.iso(rt.nowMs() + START_CLAIM_MS));
     if (c.wt) |wt| {
         const rec = wt.clone();
-        rec.putStr("worker", o.name);
+        rec.putStr("crewmate", o.name);
         rec.putStr("run_id", rid);
         rec.putStr("dispatch_id", dispatch_id);
         rec.putStr("created_at", state.now());
@@ -523,8 +523,8 @@ const ClaimCtx = struct { o: *const StartOptions, task_id: []const u8, dispatch_
 
 fn refreshClaimTx(c: *const ClaimCtx, s: State) !void {
     const d = state.getDispatch(s, c.dispatch_id) orelse return;
-    if (!rt.eqlOpt(d.str("run_id"), runId(c.o.run)) or !rt.eqlOpt(d.str("task_id"), c.task_id) or !rt.eqlOpt(d.str("worker"), c.o.name) or d.truthy("settled_at")) return;
-    if (state.getWorker(s, c.o.name)) |w| if (rt.eqlOpt(w.str("dispatch_id"), c.dispatch_id)) {
+    if (!rt.eqlOpt(d.str("run_id"), runId(c.o.run)) or !rt.eqlOpt(d.str("task_id"), c.task_id) or !rt.eqlOpt(d.str("crewmate"), c.o.name) or d.truthy("settled_at")) return;
+    if (state.getCrewmate(s, c.o.name)) |w| if (rt.eqlOpt(w.str("dispatch_id"), c.dispatch_id)) {
         d.del("claim_until");
         return;
     };
@@ -535,7 +535,7 @@ fn refreshClaimTx(c: *const ClaimCtx, s: State) !void {
 fn refreshClaimTick(ctx: *anyopaque) void {
     const c: *const ClaimCtx = @ptrCast(@alignCast(ctx));
     state.update(void, c, refreshClaimTx) catch |err| {
-        logEvent(.{ .{ "event", "worker.start_claim_refresh_failed" }, .{ "run", runId(c.o.run) }, .{ "worker", c.o.name }, .{ "dispatch", c.dispatch_id }, .{ "error", rt.errMessage(err) } });
+        logEvent(.{ .{ "event", "crewmate.start_claim_refresh_failed" }, .{ "run", runId(c.o.run) }, .{ "crewmate", c.o.name }, .{ "dispatch", c.dispatch_id }, .{ "error", rt.errMessage(err) } });
     };
 }
 
@@ -556,11 +556,11 @@ fn wtBindTx(c: *const WtBindCtx, s: State) !void {
     const path = c.wt.str("path").?;
     const rec = state.worktrees(s).obj(path);
     const d = state.getDispatch(s, c.dispatch_id);
-    const ok = rec != null and rt.eqlOpt(rec.?.str("worker"), c.o.name) and rt.eqlOpt(rec.?.str("run_id"), rid) and rt.eqlOpt(rec.?.str("dispatch_id"), c.dispatch_id) and
+    const ok = rec != null and rt.eqlOpt(rec.?.str("crewmate"), c.o.name) and rt.eqlOpt(rec.?.str("run_id"), rid) and rt.eqlOpt(rec.?.str("dispatch_id"), c.dispatch_id) and
         d != null and isTruthyStr(d.?.str("worktree_path")) and rt.eql(worktree.worktreeIdentityPath(d.?.str("worktree_path").?), path);
     if (!ok) return startRevoked(rid, c.dispatch_id);
     rec.?.assign(c.wt);
-    rec.?.putStr("worker", c.o.name);
+    rec.?.putStr("crewmate", c.o.name);
     rec.?.putStr("run_id", rid);
     rec.?.putStr("dispatch_id", c.dispatch_id);
 }
@@ -576,7 +576,7 @@ fn setupPendingTx(c: *const SetupPendingCtx, s: State) !void {
 
 fn setupResultTx(c: *const SetupPendingCtx, s: State) !void {
     const d = state.getDispatch(s, c.dispatch_id) orelse return;
-    if (rt.eqlOpt(d.str("run_id"), runId(c.o.run)) and rt.eqlOpt(d.str("task_id"), c.task_id) and rt.eqlOpt(d.str("worker"), c.o.name)) d.put("setup", c.setup.val());
+    if (rt.eqlOpt(d.str("run_id"), runId(c.o.run)) and rt.eqlOpt(d.str("task_id"), c.task_id) and rt.eqlOpt(d.str("crewmate"), c.o.name)) d.put("setup", c.setup.val());
 }
 
 const AuthCtx = struct { a: StartAuthority };
@@ -615,7 +615,7 @@ fn startStages(o: *const StartOptions, task: Task, dispatch_id: []const u8, wt: 
             }
             try state.update(void, &AuthCtx{ .a = .{ .runId = rid, .name = o.name, .taskId = task_id, .dispatchId = dispatch_id } }, authTx);
         }
-        logEvent(.{ .{ "event", "worktree.ready" }, .{ "run", rid }, .{ "worker", o.name }, .{ "path", path }, .{ "branch", val(w, "branch") }, .{ "created", w.truthy("created_by_pack") }, .{ "workspace", json.optStr(w.str("workspace_id")) } });
+        logEvent(.{ .{ "event", "worktree.ready" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "path", path }, .{ "branch", val(w, "branch") }, .{ "created", w.truthy("created_by_pack") }, .{ "workspace", json.optStr(w.str("workspace_id")) } });
     }
     if (rt.eql(o.placement, "tab")) {
         const or_ = orch(o.run);
@@ -638,34 +638,34 @@ fn startStages(o: *const StartOptions, task: Task, dispatch_id: []const u8, wt: 
         p.pane = root.?;
         p.pane_created = true;
         p.tab_id = if (t.tab) |tab| tab.str("tab_id") else null;
-        logEvent(.{ .{ "event", "tab.created" }, .{ "run", rid }, .{ "worker", o.name }, .{ "tab", json.optStr(p.tab_id) }, .{ "pane", root.?.str("pane_id").? } });
+        logEvent(.{ .{ "event", "tab.created" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "tab", json.optStr(p.tab_id) }, .{ "pane", root.?.str("pane_id").? } });
         if (p.shell_tab) |st| if (st.len > 0 and !rt.eqlOpt(st, p.tab_id)) {
-            _ = mux.tabClose(st) catch |err| mux.logMuxError("worktree.shell_tab.close", err, json.object(.{ .{ "worker", o.name }, .{ "tab", st } }));
-            logEvent(.{ .{ "event", "worktree.shell_tab_closed" }, .{ "run", rid }, .{ "worker", o.name }, .{ "tab", st } });
+            _ = mux.tabClose(st) catch |err| mux.logMuxError("worktree.shell_tab.close", err, json.object(.{ .{ "crewmate", o.name }, .{ "tab", st } }));
+            logEvent(.{ .{ "event", "worktree.shell_tab_closed" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "tab", st } });
         };
     } else {
         const target = o.targetPane orelse orch(o.run).str("pane_id");
         if (target == null or target.?.len == 0) return rt.fail(null, "the run has no orchestrator pane; pass --target-pane", .{});
         const pane = if (o.packLayout)
-            try pack_layout.placeInPack(o.run, .{ .cwd = cwd, .env = env })
+            try crew_layout.placeInPack(o.run, .{ .cwd = cwd, .env = env })
         else
             try mux.paneSplit(json.object(.{ .{ "target_pane_id", target.? }, .{ "direction", o.direction }, .{ "cwd", cwd }, .{ "env", env }, .{ "ratio", o.ratio } }));
         if (!isTruthyStr(pane.str("pane_id"))) return rt.fail("bad_result", "herdr did not return the new pane", .{});
         p.pane = pane;
         p.pane_created = true;
-        logEvent(.{ .{ "event", "pane.split" }, .{ "run", rid }, .{ "worker", o.name }, .{ "pane", pane.str("pane_id").? } });
+        logEvent(.{ .{ "event", "pane.split" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "pane", pane.str("pane_id").? } });
     }
 }
 
-const RegisterCtx = struct { o: *const StartOptions, task_id: []const u8, dispatch_id: []const u8, worker: Worker };
+const RegisterCtx = struct { o: *const StartOptions, task_id: []const u8, dispatch_id: []const u8, crewmate: Crewmate };
 
 fn registerTx(c: *const RegisterCtx, s: State) !void {
     try assertStartAuthority(s, .{ .runId = runId(c.o.run), .name = c.o.name, .taskId = c.task_id, .dispatchId = c.dispatch_id });
-    state.workers(s).put(c.o.name, c.worker.val());
+    state.crewmates(s).put(c.o.name, c.crewmate.val());
     if (state.getDispatch(s, c.dispatch_id)) |d| d.del("claim_until");
     const t = state.getTask(s, c.task_id).?;
     t.putStr("status", "dispatched");
-    t.putStr("worker", c.o.name);
+    t.putStr("crewmate", c.o.name);
     t.putStr("dispatch_id", c.dispatch_id);
     t.putInt("attempts", (t.int("attempts") orelse 0) + 1);
     t.putStr("updated_at", state.now());
@@ -684,7 +684,7 @@ fn startFailedTx(c: *const StartFailedCtx, s: State) !void {
     t.putStr("updated_at", state.now());
     t.put("outcome", failedOutcome(rt.concat(&.{ "start failed: ", c.message })));
     dispatch.settleDispatch(s, c.dispatch_id, "failed");
-    if (state.getWorker(s, c.name)) |w| w.putStr("last_status", "exited");
+    if (state.getCrewmate(s, c.name)) |w| w.putStr("last_status", "exited");
 }
 
 fn currentTask(task_id: []const u8, fallback: Task) Task {
@@ -692,9 +692,9 @@ fn currentTask(task_id: []const u8, fallback: Task) Task {
     return state.getTask(s, task_id) orelse fallback;
 }
 
-fn startResult(worker: Worker, sel: Selection, task: Task, pane_id: []const u8, warning: ?[]const u8) *Obj {
+fn startResult(crewmate: Crewmate, sel: Selection, task: Task, pane_id: []const u8, warning: ?[]const u8) *Obj {
     return json.object(.{
-        .{ "worker", worker },
+        .{ "crewmate", crewmate },
         .{ "runtime", sel.runtime },
         .{ "routing", sel.routing },
         .{ "task", currentTask(task.str("id").?, task) },
@@ -703,13 +703,13 @@ fn startResult(worker: Worker, sel: Selection, task: Task, pane_id: []const u8, 
     });
 }
 
-/// Starts a worker. Returns { worker, runtime, routing, task, pane_id, warning? }.
-pub fn startWorker(o_in: StartOptions) !*Obj {
+/// Starts a crewmate. Returns { crewmate, runtime, routing, task, pane_id, warning? }.
+pub fn startCrewmate(o_in: StartOptions) !*Obj {
     var o = o_in;
     if (o.routing) |r| o.routing = try routing.validateRouting(r.val());
     if (o.router) |r| _ = try routing.routerProvider(r);
-    if (!state.isWorkerName(o.name)) return workerNameError();
-    if (isTruthyStr(o.host)) return startRemoteWorker(&o);
+    if (!state.isCrewmateName(o.name)) return crewmateNameError();
+    if (isTruthyStr(o.host)) return startRemoteCrewmate(&o);
     if (o.setupCommand) |cmd| if (rt.trim(cmd).len == 0 or !isTruthyStr(o.worktree)) return rt.fail(null, "--setup-command requires a non-empty command and --worktree", .{});
     if (o.setupTimeoutMs != null and o.setupCommand == null) return rt.fail(null, "--setup-timeout requires --setup-command", .{});
     const setup_timeout_ms = o.setupTimeoutMs orelse setup.SETUP_DEFAULT_TIMEOUT_MS;
@@ -717,9 +717,9 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
     if (!isTruthyStr(o.worktree) and (isTruthyStr(o.base) or isTruthyStr(o.branch))) return rt.fail(null, "--base and --branch need --worktree new", .{});
     const rid = runId(o.run);
     const base_cwd = o.cwd orelse orch(o.run).str("cwd") orelse rt.cwd();
-    const wt: ?WorktreeInfo = if (isTruthyStr(o.worktree)) try worktree.planWorktree(.{ .spec = o.worktree.?, .cwd = base_cwd, .runId = rid, .worker = o.name, .base = o.base, .branch = o.branch }) else null;
+    const wt: ?WorktreeInfo = if (isTruthyStr(o.worktree)) try worktree.planWorktree(.{ .spec = o.worktree.?, .cwd = base_cwd, .runId = rid, .crewmate = o.name, .base = o.base, .branch = o.branch }) else null;
     const live = mux.listAgents() catch |err| blk: {
-        mux.logMuxError("agent.list", err, json.object(.{.{ "worker", o.name }}));
+        mux.logMuxError("agent.list", err, json.object(.{.{ "crewmate", o.name }}));
         break :blk &[_]*Obj{};
     };
     for (live) |a| if (rt.eqlOpt(a.str("name"), o.name)) return rt.fail(null, "a live herdr agent is already named \"{s}\"", .{o.name});
@@ -729,7 +729,7 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
     const admitted = if (wt) |w| blk: {
         const fence = try enterWorktreeFence(w.str("path").?);
         defer leaveWorktreeFence(fence);
-        const fresh = try worktree.planWorktree(.{ .spec = o.worktree.?, .cwd = base_cwd, .runId = rid, .worker = o.name, .base = o.base, .branch = o.branch });
+        const fresh = try worktree.planWorktree(.{ .spec = o.worktree.?, .cwd = base_cwd, .runId = rid, .crewmate = o.name, .base = o.base, .branch = o.branch });
         if (!sameWorktreePlan(fresh, w)) return rt.fail(null, "checkout {s} changed before admission; retry the start", .{w.str("path").?});
         break :blk try state.update(Admitted, &admit_ctx, admitTx);
     } else try state.update(Admitted, &admit_ctx, admitTx);
@@ -738,7 +738,7 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
     const dispatch_id = admitted.dispatch_id;
     const claim = ClaimCtx{ .o = &o, .task_id = task_id, .dispatch_id = dispatch_id };
 
-    const env = json.object(.{ .{ "LODESTAR_ROLE", "worker" }, .{ "LODESTAR_RUN_ID", rid }, .{ "LODESTAR_WORKER", o.name }, .{ "LODESTAR_TASK_ID", task_id }, .{ "LODESTAR_DISPATCH_ID", dispatch_id }, .{ "HERDR_PLUGIN_STATE_DIR", paths.state_dir } });
+    const env = json.object(.{ .{ "LODESTAR_ROLE", "crewmate" }, .{ "LODESTAR_RUN_ID", rid }, .{ "LODESTAR_CREWMATE", o.name }, .{ "LODESTAR_TASK_ID", task_id }, .{ "LODESTAR_DISPATCH_ID", dispatch_id }, .{ "HERDR_PLUGIN_STATE_DIR", paths.state_dir } });
     var p: Progress = .{};
     startStages(&o, task, dispatch_id, wt, cwd, env, setup_timeout_ms, &claim, &p) catch |err| {
         var c = Caught.of(err);
@@ -756,7 +756,7 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
         const br = if (wt) |w| w.strNonEmpty("branch") else null;
         break :blk openLeaderBar(o.run, o.name, pane_id, br orelse (if (wt) |w| w.str("branch") else null) orelse fs.basename(cwd), if (br != null) "Branch" else "Dir", task.str("title") orelse "");
     };
-    const worker = json.object(.{
+    const crewmate = json.object(.{
         .{ "name", o.name },
         .{ "run_id", rid },
         .{ "kind", o.kind },
@@ -776,11 +776,11 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
         .{ "retained", false },
         .{ "worktree", if (wt) |w| w.val() else json.nul },
     });
-    if (wt != null) worker.putStr("worktree_dispatch_id", dispatch_id);
-    worker.putBool("awaiting_prompt", true);
-    worker.putStr("bar_pane_id", bar_pane);
+    if (wt != null) crewmate.putStr("worktree_dispatch_id", dispatch_id);
+    crewmate.putBool("awaiting_prompt", true);
+    crewmate.putStr("bar_pane_id", bar_pane);
 
-    state.update(void, &RegisterCtx{ .o = &o, .task_id = task_id, .dispatch_id = dispatch_id, .worker = worker }, registerTx) catch |err| {
+    state.update(void, &RegisterCtx{ .o = &o, .task_id = task_id, .dispatch_id = dispatch_id, .crewmate = crewmate }, registerTx) catch |err| {
         const c = Caught.of(err);
         const rb = rollbackStartClaim(&o, task_id, dispatch_id) catch Rollback{ .dropped = false, .revoked = true };
         if (p.pane_created) closeStartPane(pane_id, p.tab_id, rid, o.name, bar_pane);
@@ -805,14 +805,14 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
             if (cc.revoked) cleanup.run();
             return cc.rethrow();
         };
-        logEvent(.{ .{ "event", "worker.start_failed" }, .{ "run", rid }, .{ "worker", o.name }, .{ "error", c.message() } });
-        return startResult(worker, sel, task, pane_id, warning);
+        logEvent(.{ .{ "event", "crewmate.start_failed" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "error", c.message() } });
+        return startResult(crewmate, sel, task, pane_id, warning);
     };
     mux.labelPane(pane_id, task.str("title"));
     if (try clearStartupDialog(pane_id)) {
         try assertCurrentStart(auth, cleanup);
-        logEvent(.{ .{ "event", "worker.blocked_at_start" }, .{ "run", rid }, .{ "worker", o.name }, .{ "pane", pane_id } });
-        return startResult(worker, sel, task, pane_id, rt.fmt("{s} is blocked on a dialog in pane {s} and has not received its task. Read it with `lodestar worker read {s}`, answer it with `herdr agent send-keys {s} <keys>` only if it is safe, then `lodestar worker resend {s}`.", .{ o.name, pane_id, o.name, o.name, o.name }));
+        logEvent(.{ .{ "event", "crewmate.blocked_at_start" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "pane", pane_id } });
+        return startResult(crewmate, sel, task, pane_id, rt.fmt("{s} is blocked on a dialog in pane {s} and has not received its task. Read it with `lodestar crew read {s}`, answer it with `herdr agent send-keys {s} <keys>` only if it is safe, then `lodestar crew resend {s}`.", .{ o.name, pane_id, o.name, o.name, o.name }));
     }
     const seq = try baseline(o.name, pane_id);
     var prompt_warning: ?[]const u8 = null;
@@ -831,13 +831,13 @@ pub fn startWorker(o_in: StartOptions) !*Obj {
             }
             const c = Caught.of(err);
             try assertCurrentStart(auth, cleanup);
-            logEvent(.{ .{ "event", "worker.prompt_failed" }, .{ "run", rid }, .{ "worker", o.name }, .{ "error", c.message() } });
-            prompt_warning = rt.fmt("{s} started but did not receive its task ({s}: {s}). Read it with `lodestar worker read {s}`, then `lodestar worker resend {s}`.", .{ o.name, c.code() orelse "error", c.message(), o.name, o.name });
+            logEvent(.{ .{ "event", "crewmate.prompt_failed" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "error", c.message() } });
+            prompt_warning = rt.fmt("{s} started but did not receive its task ({s}: {s}). Read it with `lodestar crew read {s}`, then `lodestar crew resend {s}`.", .{ o.name, c.code() orelse "error", c.message(), o.name, o.name });
         }
     }
-    if (prompt_warning) |w| return startResult(worker, sel, task, pane_id, w);
-    if (prompted) logEvent(.{ .{ "event", "worker.started" }, .{ "run", rid }, .{ "worker", o.name }, .{ "task", task_id }, .{ "dispatch", dispatch_id }, .{ "pane", pane_id } });
-    return startResult(worker, sel, task, pane_id, null);
+    if (prompt_warning) |w| return startResult(crewmate, sel, task, pane_id, w);
+    if (prompted) logEvent(.{ .{ "event", "crewmate.started" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "task", task_id }, .{ "dispatch", dispatch_id }, .{ "pane", pane_id } });
+    return startResult(crewmate, sel, task, pane_id, null);
 }
 
 const RevokedCleanup = struct {
@@ -884,12 +884,12 @@ fn remoteAdmitTx(c: *const RemoteAdmitCtx, s: State) !Admitted {
     const o = c.o;
     const rid = runId(o.run);
     if (!runActive(s, rid)) return rt.fail(null, "run {s} is closed or no longer exists", .{rid});
-    if (state.getWorker(s, o.name)) |w| if (runActive(s, w.str("run_id"))) return rt.fail(null, "worker \"{s}\" exists; release it first", .{o.name});
+    if (state.getCrewmate(s, o.name)) |w| if (runActive(s, w.str("run_id"))) return rt.fail(null, "crewmate \"{s}\" exists; release it first", .{o.name});
     try refuseStartInFlight(s, o.name, o.taskId, null, null);
     const task = try admitTask(s, .{ .run = o.run, .taskId = o.taskId, .spec = o.spec, .title = o.title, .retry = o.retry }, false);
     const dispatch_id = state.nextId(s, "d");
-    const text = preamble(.{ .worker = o.name, .run = o.run, .task = task, .dispatchId = dispatch_id, .cwd = c.cwd, .remoteHost = c.profile });
-    _ = try dispatch.createDispatch(s, .{ .id = dispatch_id, .task = task, .worker = o.name, .preamble = text, .cwd = c.cwd, .executionHost = c.profile });
+    const text = preamble(.{ .crewmate = o.name, .run = o.run, .task = task, .dispatchId = dispatch_id, .cwd = c.cwd, .remoteHost = c.profile });
+    _ = try dispatch.createDispatch(s, .{ .id = dispatch_id, .task = task, .crewmate = o.name, .preamble = text, .cwd = c.cwd, .executionHost = c.profile });
     return .{ .task = task, .dispatch_id = dispatch_id, .text = text };
 }
 
@@ -901,7 +901,7 @@ fn remoteTabLostTx(c: *const RemoteUnreachableCtx, s: State) !void {
     if (d == null or d.?.truthy("settled_at") or !runActive(s, runId(c.o.run)) or t == null) return;
     const tk = t.?;
     tk.putStr("status", "failed");
-    tk.putNull("worker");
+    tk.putNull("crewmate");
     tk.putStr("dispatch_id", c.dispatch_id);
     tk.putInt("attempts", (tk.int("attempts") orelse 0) + 1);
     tk.putStr("updated_at", state.now());
@@ -912,7 +912,7 @@ fn remoteTabLostTx(c: *const RemoteUnreachableCtx, s: State) !void {
 const MarkUnreachableCtx = struct { name: []const u8, dispatch_id: []const u8, reason: []const u8 };
 
 fn markUnreachableTx(c: *const MarkUnreachableCtx, s: State) !void {
-    const w = state.getWorker(s, c.name) orelse return;
+    const w = state.getCrewmate(s, c.name) orelse return;
     if (!rt.eqlOpt(w.str("dispatch_id"), c.dispatch_id)) return;
     w.putStr("liveness", "unreachable");
     w.putStr("liveness_reason", c.reason);
@@ -934,12 +934,12 @@ fn openRemoteTab(o: *const StartOptions, profile: HostProfile, cwd: []const u8, 
     return .{ .pane_id = tabs.root_pane.?.str("pane_id").?, .tab_id = if (tabs.tab) |t| t.str("tab_id") else null };
 }
 
-fn startRemoteWorker(o: *const StartOptions) !*Obj {
-    if (o.setupCommand != null or o.setupTimeoutMs != null) return rt.fail(null, "remote workers do not support --setup-command or --setup-timeout", .{});
-    if (isTruthyStr(o.worktree) or isTruthyStr(o.base) or isTruthyStr(o.branch)) return rt.fail(null, "remote workers do not support --worktree, --base or --branch; use an existing remote directory", .{});
-    if (!rt.eql(o.placement, "tab")) return rt.fail(null, "remote workers support existing-workspace tab placement only; --placement split is unsupported", .{});
-    if (isTruthyStr(o.targetPane) or o.ratio != null) return rt.fail(null, "remote workers do not support --target-pane or --ratio", .{});
-    if (o.cwd == null or !rt.startsWith(o.cwd.?, "/") or rt.hasControl(o.cwd.?)) return rt.fail(null, "remote worker start requires --cwd with an absolute remote POSIX path and no control characters", .{});
+fn startRemoteCrewmate(o: *const StartOptions) !*Obj {
+    if (o.setupCommand != null or o.setupTimeoutMs != null) return rt.fail(null, "remote crewmates do not support --setup-command or --setup-timeout", .{});
+    if (isTruthyStr(o.worktree) or isTruthyStr(o.base) or isTruthyStr(o.branch)) return rt.fail(null, "remote crewmates do not support --worktree, --base or --branch; use an existing remote directory", .{});
+    if (!rt.eql(o.placement, "tab")) return rt.fail(null, "remote crewmates support existing-workspace tab placement only; --placement split is unsupported", .{});
+    if (isTruthyStr(o.targetPane) or o.ratio != null) return rt.fail(null, "remote crewmates do not support --target-pane or --ratio", .{});
+    if (o.cwd == null or !rt.startsWith(o.cwd.?, "/") or rt.hasControl(o.cwd.?)) return rt.fail(null, "remote crewmate start requires --cwd with an absolute remote POSIX path and no control characters", .{});
     if (!rt.eql(o.direction, "right") and !rt.eql(o.direction, "down")) return rt.fail(null, "--direction must be right or down", .{});
     const profile = try hosts.getHost(o.host.?);
     const pname = profile.str("name") orelse "";
@@ -956,9 +956,9 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
     const task_id = task.str("id").?;
     const dispatch_id = admitted.dispatch_id;
     const callback_env = json.object(.{
-        .{ "LODESTAR_ROLE", "worker" },
+        .{ "LODESTAR_ROLE", "crewmate" },
         .{ "LODESTAR_RUN_ID", rid },
-        .{ "LODESTAR_WORKER", o.name },
+        .{ "LODESTAR_CREWMATE", o.name },
         .{ "LODESTAR_TASK_ID", task_id },
         .{ "LODESTAR_DISPATCH_ID", dispatch_id },
         .{ "LODESTAR_REMOTE_CALLBACK_TARGET", profile.str("leader_ssh_target") orelse "" },
@@ -983,7 +983,7 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
         return c.rethrow();
     };
 
-    const worker = json.object(.{
+    const crewmate = json.object(.{
         .{ "name", o.name },
         .{ "run_id", rid },
         .{ "kind", o.kind },
@@ -1006,7 +1006,7 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
         .{ "awaiting_prompt", true },
     });
     const cleanup = RevokedCleanup{ .pane_id = opened.pane_id, .tab_id = opened.tab_id, .run_id = rid, .name = o.name, .bar = null, .wt = null, .dispatch_id = dispatch_id, .host = profile };
-    state.update(void, &RegisterCtx{ .o = o, .task_id = task_id, .dispatch_id = dispatch_id, .worker = worker }, registerTx) catch |err| {
+    state.update(void, &RegisterCtx{ .o = o, .task_id = task_id, .dispatch_id = dispatch_id, .crewmate = crewmate }, registerTx) catch |err| {
         const c = Caught.of(err);
         _ = rollbackStartClaim(o, task_id, dispatch_id) catch {};
         cleanup.run();
@@ -1026,10 +1026,10 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
         const warning = rt.fmt("remote agent did not come up ({s}: {s}); pane {s} is left for inspection", .{ c.code() orelse "error", c.message(), opened.pane_id });
         if (isRemoteUnavailable(err)) {
             try state.update(void, &MarkUnreachableCtx{ .name = o.name, .dispatch_id = dispatch_id, .reason = rt.fmt("SSH/herdr host {s} became unreachable during start", .{pname}) }, markUnreachableTx);
-            return startResult(worker, sel, task, opened.pane_id, warning);
+            return startResult(crewmate, sel, task, opened.pane_id, warning);
         }
         try state.update(void, &StartFailedCtx{ .run_id = rid, .name = o.name, .task_id = task_id, .dispatch_id = dispatch_id, .message = c.message() }, startFailedTx);
-        return startResult(worker, sel, task, opened.pane_id, warning);
+        return startResult(crewmate, sel, task, opened.pane_id, warning);
     };
 
     const blocked = blk: {
@@ -1037,7 +1037,7 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
         defer scope.leave();
         break :blk try clearStartupDialog(opened.pane_id);
     };
-    if (blocked) return startResult(worker, sel, task, opened.pane_id, rt.fmt("{s} is blocked on a dialog in remote pane {s} and has not received its task; inspect it with `lodestar worker read {s}`, answer it safely, then run `lodestar worker resend {s}`.", .{ o.name, opened.pane_id, o.name, o.name }));
+    if (blocked) return startResult(crewmate, sel, task, opened.pane_id, rt.fmt("{s} is blocked on a dialog in remote pane {s} and has not received its task; inspect it with `lodestar crew read {s}`, answer it safely, then run `lodestar crew resend {s}`.", .{ o.name, opened.pane_id, o.name, o.name }));
     const seq = blk: {
         const scope = try HostScope.enterObj(profile);
         defer scope.leave();
@@ -1054,42 +1054,42 @@ fn startRemoteWorker(o: *const StartOptions) !*Obj {
         if (isRevoked(err)) return err;
         const c = Caught.of(err);
         const warning = if (rt.eqlOpt(c.code(), "remote_delivery_unknown"))
-            rt.fmt("{s} started remotely, but delivery of dispatch {s} is unknown. The dispatch remains authoritative. Do not resend yet: inspect with `lodestar worker read {s}` and verify the remote pane's state before choosing `lodestar worker prompt {s}`.", .{ o.name, dispatch_id, o.name, o.name })
+            rt.fmt("{s} started remotely, but delivery of dispatch {s} is unknown. The dispatch remains authoritative. Do not resend yet: inspect with `lodestar crew read {s}` and verify the remote pane's state before choosing `lodestar crew prompt {s}`.", .{ o.name, dispatch_id, o.name, o.name })
         else
-            rt.fmt("{s} started remotely but did not receive its task ({s}: {s}); run `lodestar worker read {s}`, then `lodestar worker resend {s}`.", .{ o.name, c.code() orelse "error", c.message(), o.name, o.name });
+            rt.fmt("{s} started remotely but did not receive its task ({s}: {s}); run `lodestar crew read {s}`, then `lodestar crew resend {s}`.", .{ o.name, c.code() orelse "error", c.message(), o.name, o.name });
         if (isRemoteUnavailable(err)) try state.update(void, &MarkUnreachableCtx{ .name = o.name, .dispatch_id = dispatch_id, .reason = rt.fmt("SSH/herdr host {s} became unreachable while prompting", .{pname}) }, markUnreachableTx);
-        logEvent(.{ .{ "event", "worker.prompt_failed" }, .{ "run", rid }, .{ "worker", o.name }, .{ "dispatch", dispatch_id }, .{ "error", c.message() } });
-        return startResult(worker, sel, task, opened.pane_id, warning);
+        logEvent(.{ .{ "event", "crewmate.prompt_failed" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "dispatch", dispatch_id }, .{ "error", c.message() } });
+        return startResult(crewmate, sel, task, opened.pane_id, warning);
     };
     if (try markPrompted(o.name, .{ .runId = rid, .taskId = task_id, .dispatchId = dispatch_id })) {
-        logEvent(.{ .{ "event", "worker.started_remote" }, .{ "run", rid }, .{ "worker", o.name }, .{ "host", pname }, .{ "task", task_id }, .{ "dispatch", dispatch_id }, .{ "pane", opened.pane_id } });
+        logEvent(.{ .{ "event", "crewmate.started_remote" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "host", pname }, .{ "task", task_id }, .{ "dispatch", dispatch_id }, .{ "pane", opened.pane_id } });
     }
-    return startResult(worker, sel, task, opened.pane_id, null);
+    return startResult(crewmate, sel, task, opened.pane_id, null);
 }
 
 // ---------------------------------------------------------------- redispatch
 
 pub const RedispatchOpts = struct { idleWaitMs: ?i64 = null };
 
-fn loadWorker(run: Run, name: []const u8) !Worker {
+fn loadCrewmate(run: Run, name: []const u8) !Crewmate {
     const s = try state.load();
-    const w = state.getWorker(s, name);
-    if (w == null or !rt.eqlOpt(w.?.str("run_id"), runId(run))) return rt.fail(null, "no worker \"{s}\" in run {s}", .{ name, runId(run) });
+    const w = state.getCrewmate(s, name);
+    if (w == null or !rt.eqlOpt(w.?.str("run_id"), runId(run))) return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ name, runId(run) });
     return w.?;
 }
 
-fn sameRemote(current: Worker, known: Worker) bool {
+fn sameRemote(current: Crewmate, known: Crewmate) bool {
     return current.truthy("execution_host") and rt.eqlOpt(current.str("dispatch_id"), known.str("dispatch_id")) and rt.eqlOpt(hostName(current), hostName(known));
 }
 
 /// Returns { task, dispatch_id }.
 pub fn redispatch(run: Run, name: []const u8, task_id: ?[]const u8, spec: ?[]const u8, title: ?[]const u8, o: RedispatchOpts) !*Obj {
-    const known = try loadWorker(run, name);
+    const known = try loadCrewmate(run, name);
     if (!known.truthy("execution_host")) return redispatchUnlocked(run, name, task_id, spec, title, o, false);
     const fence = try state.enterRunStartFence(runId(run));
     defer state.leaveRunStartFence(fence);
-    const current = try loadWorker(run, name);
-    if (!sameRemote(current, known)) return rt.fail(null, "remote worker {s} changed while redispatch was waiting; retry after inspecting it", .{name});
+    const current = try loadCrewmate(run, name);
+    if (!sameRemote(current, known)) return rt.fail(null, "remote crewmate {s} changed while redispatch was waiting; retry after inspecting it", .{name});
     return redispatchUnlocked(run, name, task_id, spec, title, o, true);
 }
 
@@ -1107,8 +1107,8 @@ const RedispatchPlan = struct {
 
 fn redispatchTx(c: *const RedispatchCtx, s: State) !RedispatchPlan {
     const rid = runId(c.run);
-    const w = state.getWorker(s, c.name);
-    if (w == null or !rt.eqlOpt(w.?.str("run_id"), rid)) return rt.fail(null, "no worker \"{s}\" in run {s}", .{ c.name, rid });
+    const w = state.getCrewmate(s, c.name);
+    if (w == null or !rt.eqlOpt(w.?.str("run_id"), rid)) return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ c.name, rid });
     const wk = w.?;
     if (wk.strNonEmpty("task_id")) |ct| if (state.getTask(s, ct)) |cur| if (rt.eqlOpt(cur.str("status"), "dispatched")) return rt.fail(null, "{s} is still on task {s}; wait for its report", .{ c.name, cur.str("id") orelse ct });
     var task: Task = undefined;
@@ -1126,7 +1126,7 @@ fn redispatchTx(c: *const RedispatchCtx, s: State) !RedispatchPlan {
     }
     const before: ?*Obj = if (isTruthyStr(c.task_id)) json.object(.{
         .{ "status", val(task, "status") },
-        .{ "worker", val(task, "worker") },
+        .{ "crewmate", val(task, "crewmate") },
         .{ "dispatch_id", val(task, "dispatch_id") },
         .{ "attempts", val(task, "attempts") },
         .{ "updated_at", val(task, "updated_at") },
@@ -1135,7 +1135,7 @@ fn redispatchTx(c: *const RedispatchCtx, s: State) !RedispatchPlan {
     const prev_dispatch_id = val(wk, "dispatch_id");
     const dispatch_id = state.nextId(s, "d");
     const text = preamble(.{
-        .worker = c.name,
+        .crewmate = c.name,
         .run = c.run,
         .task = task,
         .dispatchId = dispatch_id,
@@ -1148,14 +1148,14 @@ fn redispatchTx(c: *const RedispatchCtx, s: State) !RedispatchPlan {
     _ = try dispatch.createDispatch(s, .{
         .id = dispatch_id,
         .task = task,
-        .worker = c.name,
+        .crewmate = c.name,
         .preamble = text,
         .cwd = wk.str("cwd") orelse "",
         .executionHost = wk.obj("execution_host"),
         .paneId = if (wk.truthy("adopted")) wk.str("pane_id") else null,
     });
     task.putStr("status", "dispatched");
-    task.putStr("worker", c.name);
+    task.putStr("crewmate", c.name);
     task.putStr("dispatch_id", dispatch_id);
     task.putInt("attempts", (task.int("attempts") orelse 0) + 1);
     task.putStr("updated_at", state.now());
@@ -1191,7 +1191,7 @@ fn restoreTx(c: *const RestoreCtx, s: State) !Restored {
             if (all) state.tasks(s).del(tid);
         }
     };
-    if (state.getWorker(s, c.name)) |w| if (rt.eqlOpt(w.str("run_id"), rid) and rt.eqlOpt(w.str("dispatch_id"), r.dispatch_id)) {
+    if (state.getCrewmate(s, c.name)) |w| if (rt.eqlOpt(w.str("run_id"), rid) and rt.eqlOpt(w.str("dispatch_id"), r.dispatch_id)) {
         w.put("task_id", r.prev_task_id);
         w.put("dispatch_id", r.prev_dispatch_id);
         w.putBool("awaiting_prompt", false);
@@ -1214,19 +1214,19 @@ fn deliver(run: Run, name: []const u8, r: *const RedispatchPlan, tries: i64) !bo
     }) catch |err| {
         const c = Caught.of(err);
         if (rt.eqlOpt(c.code(), "remote_delivery_unknown")) {
-            logEvent(.{ .{ "event", "worker.prompt_delivery_unknown" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", r.dispatch_id }, .{ "error", c.message() } });
+            logEvent(.{ .{ "event", "crewmate.prompt_delivery_unknown" }, .{ "run", rid }, .{ "crewmate", name }, .{ "dispatch", r.dispatch_id }, .{ "error", c.message() } });
             return c.rethrow();
         }
         const restored = try state.update(Restored, &RestoreCtx{ .run = run, .name = name, .r = r }, restoreTx);
         if (!restored.received and restored.revoked) return startRevoked(rid, r.dispatch_id);
         if (!restored.received) {
-            logEvent(.{ .{ "event", "worker.prompt_failed" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", r.dispatch_id }, .{ "error", c.message() } });
-            logEvent(.{ .{ "event", "worker.redispatch_rolled_back" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", r.dispatch_id }, .{ "task", r.task.str("id").? } });
+            logEvent(.{ .{ "event", "crewmate.prompt_failed" }, .{ "run", rid }, .{ "crewmate", name }, .{ "dispatch", r.dispatch_id }, .{ "error", c.message() } });
+            logEvent(.{ .{ "event", "crewmate.redispatch_rolled_back" }, .{ "run", rid }, .{ "crewmate", name }, .{ "dispatch", r.dispatch_id }, .{ "task", r.task.str("id").? } });
             const what = if (r.before) |b|
                 rt.fmt("task {s} is {s} again", .{ r.task.str("id").?, restored.status orelse b.str("status") orelse "" })
             else
                 rt.fmt("task {s} was not kept", .{r.task.str("id").?});
-            return rt.fail(null, "{s} did not receive dispatch {s} ({s}: {s}); it was rolled back and {s}. Check it with `lodestar worker read {s}`, then run `lodestar worker prompt {s}` again", .{ name, r.dispatch_id, c.code() orelse "error", c.message(), what, name, name });
+            return rt.fail(null, "{s} did not receive dispatch {s} ({s}: {s}); it was rolled back and {s}. Check it with `lodestar crew read {s}`, then run `lodestar crew prompt {s}` again", .{ name, r.dispatch_id, c.code() orelse "error", c.message(), what, name, name });
         }
     };
     return markPrompted(name, .{ .runId = rid, .taskId = r.task.str("id").?, .dispatchId = r.dispatch_id });
@@ -1240,22 +1240,22 @@ fn adoptedCheckTx(c: *const AdoptedCheckCtx, s: State) !void {
     const did = c.r.dispatch_id;
     const d = state.getDispatch(s, did);
     const t = state.getTask(s, tid);
-    const w = state.getWorker(s, c.name);
+    const w = state.getCrewmate(s, c.name);
     const ok = runActive(s, rid) and
-        d != null and rt.eqlOpt(d.?.str("run_id"), rid) and rt.eqlOpt(d.?.str("worker"), c.name) and rt.eqlOpt(d.?.str("task_id"), tid) and !d.?.truthy("settled_at") and
-        t != null and rt.eqlOpt(t.?.str("status"), "dispatched") and rt.eqlOpt(t.?.str("worker"), c.name) and rt.eqlOpt(t.?.str("dispatch_id"), did) and
+        d != null and rt.eqlOpt(d.?.str("run_id"), rid) and rt.eqlOpt(d.?.str("crewmate"), c.name) and rt.eqlOpt(d.?.str("task_id"), tid) and !d.?.truthy("settled_at") and
+        t != null and rt.eqlOpt(t.?.str("status"), "dispatched") and rt.eqlOpt(t.?.str("crewmate"), c.name) and rt.eqlOpt(t.?.str("dispatch_id"), did) and
         w != null and rt.eqlOpt(w.?.str("run_id"), rid) and rt.eqlOpt(w.?.str("task_id"), tid) and rt.eqlOpt(w.?.str("dispatch_id"), did);
     if (!ok) return startRevoked(rid, did);
 }
 
 fn redispatchUnlocked(run: Run, name: []const u8, task_id: ?[]const u8, spec: ?[]const u8, title: ?[]const u8, o: RedispatchOpts, remote_fence_held: bool) !*Obj {
     const rid = runId(run);
-    const known = try loadWorker(run, name);
+    const known = try loadCrewmate(run, name);
     if (known.truthy("execution_host") and !remote_fence_held) {
         const fence = try state.enterRunStartFence(rid);
         defer state.leaveRunStartFence(fence);
-        const current = try loadWorker(run, name);
-        if (!sameRemote(current, known)) return rt.fail(null, "remote worker {s} changed while redispatch was waiting; retry after inspecting it", .{name});
+        const current = try loadCrewmate(run, name);
+        if (!sameRemote(current, known)) return rt.fail(null, "remote crewmate {s} changed while redispatch was waiting; retry after inspecting it", .{name});
         return redispatchUnlocked(run, name, task_id, spec, title, o, true);
     }
     const wait_ms = o.idleWaitMs orelse REDISPATCH_IDLE_WAIT_MS;
@@ -1264,7 +1264,7 @@ fn redispatchUnlocked(run: Run, name: []const u8, task_id: ?[]const u8, spec: ?[
         defer scope.leave();
         break :blk try mux.agentWait(known.str("pane_id") orelse "", &.{ "idle", "done" }, wait_ms);
     };
-    if (!mux.atRest(st)) return rt.fail(null, "{s} is {s} after waiting {d}s; nothing was dispatched. Check it with `lodestar worker read {s}` and try again when it is idle", .{ name, if (rt.eql(st, "timeout")) "still busy" else st, @as(i64, @intFromFloat(@round(@as(f64, @floatFromInt(wait_ms)) / 1000.0))), name });
+    if (!mux.atRest(st)) return rt.fail(null, "{s} is {s} after waiting {d}s; nothing was dispatched. Check it with `lodestar crew read {s}` and try again when it is idle", .{ name, if (rt.eql(st, "timeout")) "still busy" else st, @as(i64, @intFromFloat(@round(@as(f64, @floatFromInt(wait_ms)) / 1000.0))), name });
     const r = try state.update(RedispatchPlan, &RedispatchCtx{ .run = run, .name = name, .task_id = task_id, .spec = spec, .title = title }, redispatchTx);
     var prompted: bool = undefined;
     if (r.w.truthy("adopted")) {
@@ -1281,34 +1281,34 @@ fn redispatchUnlocked(run: Run, name: []const u8, task_id: ?[]const u8, spec: ?[
             defer scope.leave();
             mux.labelPane(r.w.str("pane_id").?, r.task.str("title"));
         }
-        logEvent(.{ .{ "event", "worker.redispatched" }, .{ "run", rid }, .{ "worker", name }, .{ "task", r.task.str("id").? }, .{ "dispatch", r.dispatch_id } });
+        logEvent(.{ .{ "event", "crewmate.redispatched" }, .{ "run", rid }, .{ "crewmate", name }, .{ "task", r.task.str("id").? }, .{ "dispatch", r.dispatch_id } });
     }
     return json.object(.{ .{ "task", currentTask(r.task.str("id").?, r.task) }, .{ "dispatch_id", r.dispatch_id } });
 }
 
 // ---------------------------------------------------------------- stop / release / abandon
 
-pub fn stopWorker(name: []const u8, target_: []const u8) !void {
+pub fn stopCrewmate(name: []const u8, target_: []const u8) !void {
     const s = try state.load();
-    const worker = state.getWorker(s, name) orelse return rt.fail(null, "no worker \"{s}\"", .{name});
+    const crewmate = state.getCrewmate(s, name) orelse return rt.fail(null, "no crewmate \"{s}\"", .{name});
     var target = target_;
-    if (worker.truthy("execution_host") or worker.truthy("adopted")) target = worker.str("pane_id") orelse target;
+    if (crewmate.truthy("execution_host") or crewmate.truthy("adopted")) target = crewmate.str("pane_id") orelse target;
     {
-        const scope = try HostScope.enter(worker.get("execution_host"));
+        const scope = try HostScope.enter(crewmate.get("execution_host"));
         defer scope.leave();
         _ = try mux.agentSendKeys(target, &.{ "esc", "esc" });
     }
-    logEvent(.{ .{ "event", "worker.stopped" }, .{ "worker", name } });
+    logEvent(.{ .{ "event", "crewmate.stopped" }, .{ "crewmate", name } });
 }
 
-pub const ReleaseWorkerOpts = struct { force: bool = false, keepPane: bool = false, removeWorktree: bool = false, keepWorktree: bool = false };
+pub const ReleaseCrewmateOpts = struct { force: bool = false, keepPane: bool = false, removeWorktree: bool = false, keepWorktree: bool = false };
 
-const ReleaseRemoteCtx = struct { run: Run, known: Worker, host_name: ?[]const u8, opts: ReleaseWorkerOpts };
+const ReleaseRemoteCtx = struct { run: Run, known: Crewmate, host_name: ?[]const u8, opts: ReleaseCrewmateOpts };
 
-fn releaseRemoteTx(c: *const ReleaseRemoteCtx, s: State) !Worker {
+fn releaseRemoteTx(c: *const ReleaseRemoteCtx, s: State) !Crewmate {
     const name = c.known.str("name").?;
-    const w = state.getWorker(s, name);
-    if (w == null or !rt.eqlOpt(w.?.str("run_id"), runId(c.run)) or !rt.eqlOpt(w.?.str("dispatch_id"), c.known.str("dispatch_id")) or !rt.eqlOpt(hostName(w.?), c.host_name)) return rt.fail(null, "remote worker {s} changed while release was in progress; retry after inspecting it", .{name});
+    const w = state.getCrewmate(s, name);
+    if (w == null or !rt.eqlOpt(w.?.str("run_id"), runId(c.run)) or !rt.eqlOpt(w.?.str("dispatch_id"), c.known.str("dispatch_id")) or !rt.eqlOpt(hostName(w.?), c.host_name)) return rt.fail(null, "remote crewmate {s} changed while release was in progress; retry after inspecting it", .{name});
     const wk = w.?;
     if (wk.strNonEmpty("task_id")) |tid| if (state.getTask(s, tid)) |task| if (rt.eqlOpt(task.str("status"), "dispatched")) {
         if (!c.opts.force) return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `lodestar done`, or pass --force", .{ name, tid });
@@ -1318,7 +1318,7 @@ fn releaseRemoteTx(c: *const ReleaseRemoteCtx, s: State) !Worker {
         dispatch.settleDispatch(s, wk.str("dispatch_id"), "failed");
     };
     _ = inbox.dropUndelivered(s, wk);
-    state.workers(s).del(name);
+    state.crewmates(s).del(name);
     return wk;
 }
 
@@ -1340,10 +1340,10 @@ fn archiveLocalTx(c: *const ArchiveCtx, s: State) !void {
     } else d.putStr("archive_error", c.err orelse "");
 }
 
-fn releaseRemoteWorker(run: Run, known: Worker, opts: ReleaseWorkerOpts) !*Obj {
+fn releaseRemoteCrewmate(run: Run, known: Crewmate, opts: ReleaseCrewmateOpts) !*Obj {
     const name = known.str("name").?;
-    if (opts.removeWorktree or opts.keepWorktree) return rt.fail(null, "remote worker release does not support --remove-worktree or --keep-worktree", .{});
-    if (known.truthy("worktree")) return rt.fail(null, "remote worker {s} has unexpected local worktree metadata; refusing local cleanup", .{name});
+    if (opts.removeWorktree or opts.keepWorktree) return rt.fail(null, "remote crewmate release does not support --remove-worktree or --keep-worktree", .{});
+    if (known.truthy("worktree")) return rt.fail(null, "remote crewmate {s} has unexpected local worktree metadata; refusing local cleanup", .{name});
     const current = try state.load();
     if (known.strNonEmpty("task_id")) |tid| if (state.getTask(current, tid)) |t| if (rt.eqlOpt(t.str("status"), "dispatched") and !opts.force)
         return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `lodestar done`, or pass --force", .{ name, tid });
@@ -1360,7 +1360,7 @@ fn releaseRemoteWorker(run: Run, known: Worker, opts: ReleaseWorkerOpts) !*Obj {
         if (rt.errIs(err, "pane_not_found")) pane_exists = false else return err;
     };
     if (pane_exists) {
-        if (dispatch.archiveScreen(.{ .run_id = runId(run), .worker = name, .dispatch_id = known.str("dispatch_id"), .target = pane_id })) |saved| {
+        if (dispatch.archiveScreen(.{ .run_id = runId(run), .crewmate = name, .dispatch_id = known.str("dispatch_id"), .target = pane_id })) |saved| {
             archive_path = saved.path;
         } else |err| {
             const c = Caught.of(err);
@@ -1387,9 +1387,9 @@ fn releaseRemoteWorker(run: Run, known: Worker, opts: ReleaseWorkerOpts) !*Obj {
     } else if (pane_exists) {
         mux.labelPane(pane_id, null);
     }
-    const released = try state.update(Worker, &ReleaseRemoteCtx{ .run = run, .known = known, .host_name = host.str("name"), .opts = opts }, releaseRemoteTx);
+    const released = try state.update(Crewmate, &ReleaseRemoteCtx{ .run = run, .known = known, .host_name = host.str("name"), .opts = opts }, releaseRemoteTx);
     if (released.strNonEmpty("dispatch_id")) |did| try state.update(void, &ArchiveCtx{ .dispatch_id = did, .path = archive_path, .err = archive_error }, archiveRemoteTx);
-    logEvent(.{ .{ "event", "worker.released" }, .{ "run", runId(run) }, .{ "worker", name }, .{ "host", host.str("name") orelse "" }, .{ "closed_pane", json.optStr(closed_pane) }, .{ "closed_tab", json.optStr(closed_tab) } });
+    logEvent(.{ .{ "event", "crewmate.released" }, .{ "run", runId(run) }, .{ "crewmate", name }, .{ "host", host.str("name") orelse "" }, .{ "closed_pane", json.optStr(closed_pane) }, .{ "closed_tab", json.optStr(closed_tab) } });
     return json.object(.{ .{ "closed_pane", json.optStr(closed_pane) }, .{ "closed_tab", json.optStr(closed_tab) }, .{ "archive_path", json.optStr(archive_path) }, .{ "archive_error", archive_error } });
 }
 
@@ -1408,21 +1408,21 @@ pub const PreviewDispatchOpts = struct {
 };
 
 pub fn previewDispatch(s: State, o: PreviewDispatchOpts) !*Obj {
-    if (!state.isWorkerName(o.name)) return workerNameError();
+    if (!state.isCrewmateName(o.name)) return crewmateNameError();
     const rid = runId(o.run);
-    const w = state.getWorker(s, o.name);
-    if (o.redispatch and (w == null or !rt.eqlOpt(w.?.str("run_id"), rid))) return rt.fail(null, "no worker \"{s}\" in run {s}", .{ o.name, rid });
-    if (!o.redispatch) if (w) |x| if (runActive(s, x.str("run_id"))) return rt.fail(null, "worker \"{s}\" exists; release it first", .{o.name});
+    const w = state.getCrewmate(s, o.name);
+    if (o.redispatch and (w == null or !rt.eqlOpt(w.?.str("run_id"), rid))) return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ o.name, rid });
+    if (!o.redispatch) if (w) |x| if (runActive(s, x.str("run_id"))) return rt.fail(null, "crewmate \"{s}\" exists; release it first", .{o.name});
     const task = try admitTask(s, .{ .run = o.run, .taskId = o.taskId, .spec = o.spec, .title = o.title, .retry = o.retry or o.redispatch }, true);
     if (isTruthyStr(o.taskId)) try dispatch.assertRetryBudget(s, task);
     if (o.redispatch) if (w.?.strNonEmpty("task_id")) |tid| if (state.getTask(s, tid)) |t| if (rt.eqlOpt(t.str("status"), "dispatched")) return rt.fail(null, "{s} is still on task {s}; wait for its report", .{ o.name, tid });
     const base_cwd = o.cwd orelse orch(o.run).str("cwd") orelse rt.cwd();
     const wt: ?WorktreeInfo = if (!o.redispatch and isTruthyStr(o.worktree))
-        try worktree.planWorktree(.{ .spec = o.worktree.?, .cwd = base_cwd, .runId = rid, .worker = o.name, .base = o.base, .branch = o.branch })
+        try worktree.planWorktree(.{ .spec = o.worktree.?, .cwd = base_cwd, .runId = rid, .crewmate = o.name, .base = o.base, .branch = o.branch })
     else if (o.redispatch) w.?.obj("worktree") else null;
     const cwd = if (o.redispatch) w.?.str("cwd") orelse "" else if (wt) |x| x.str("path").? else base_cwd;
     const text = preamble(.{
-        .worker = o.name,
+        .crewmate = o.name,
         .run = o.run,
         .task = task,
         .dispatchId = "d?",
@@ -1434,7 +1434,7 @@ pub fn previewDispatch(s: State, o: PreviewDispatchOpts) !*Obj {
     });
     return json.object(.{
         .{ "dry_run", true },
-        .{ "worker", o.name },
+        .{ "crewmate", o.name },
         .{ "task", json.object(.{ .{ "id", val(task, "id") }, .{ "title", val(task, "title") }, .{ "status", val(task, "status") }, .{ "new", !isTruthyStr(o.taskId) } }) },
         .{ "cwd", cwd },
         .{ "worktree", if (wt) |x| x.val() else json.nul },
@@ -1447,8 +1447,8 @@ const AbandonCtx = struct { run: Run, name: []const u8 };
 
 fn abandonTx(c: *const AbandonCtx, s: State) !*Obj {
     const rid = runId(c.run);
-    const w = state.getWorker(s, c.name);
-    if (w == null or !rt.eqlOpt(w.?.str("run_id"), rid)) return rt.fail(null, "no worker \"{s}\" in run {s}", .{ c.name, rid });
+    const w = state.getCrewmate(s, c.name);
+    if (w == null or !rt.eqlOpt(w.?.str("run_id"), rid)) return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ c.name, rid });
     const wk = w.?;
     const t: ?Task = if (wk.strNonEmpty("task_id")) |tid| state.getTask(s, tid) else null;
     if (t) |tk| if (rt.eqlOpt(tk.str("status"), "dispatched") and rt.eqlOpt(tk.str("dispatch_id"), wk.str("dispatch_id"))) {
@@ -1458,13 +1458,13 @@ fn abandonTx(c: *const AbandonCtx, s: State) !*Obj {
         dispatch.settleDispatch(s, wk.str("dispatch_id"), "failed");
     };
     if (wk.obj("worktree")) |wt| if (state.worktrees(s).obj(wt.str("path") orelse "")) |rec| {
-        if (rt.eqlOpt(rec.str("worker"), wk.str("name")) and rt.eqlOpt(rec.str("run_id"), wk.str("run_id")) and rt.eqlOpt(rec.str("dispatch_id"), wk.str("worktree_dispatch_id"))) {
+        if (rt.eqlOpt(rec.str("crewmate"), wk.str("name")) and rt.eqlOpt(rec.str("run_id"), wk.str("run_id")) and rt.eqlOpt(rec.str("dispatch_id"), wk.str("worktree_dispatch_id"))) {
             rec.del("released_at");
             rec.putStr("cleanup_protection", "abandoned");
         }
     };
     _ = inbox.dropUndelivered(s, wk);
-    state.workers(s).del(c.name);
+    state.crewmates(s).del(c.name);
     return json.object(.{
         .{ "abandoned", c.name },
         .{ "pane_id", val(wk, "pane_id") },
@@ -1477,28 +1477,28 @@ fn abandonTx(c: *const AbandonCtx, s: State) !*Obj {
 }
 
 /// Returns { abandoned, pane_id, tab_id, task_id, dispatch_id, worktree, execution_host }.
-pub fn abandonWorker(run: Run, name: []const u8) !*Obj {
+pub fn abandonCrewmate(run: Run, name: []const u8) !*Obj {
     const r = try state.update(*Obj, &AbandonCtx{ .run = run, .name = name }, abandonTx);
-    logEvent(.{ .{ "event", "worker.abandoned" }, .{ "run", runId(run) }, .{ "worker", name }, .{ "pane", val(r, "pane_id") }, .{ "task", val(r, "task_id") } });
+    logEvent(.{ .{ "event", "crewmate.abandoned" }, .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", val(r, "pane_id") }, .{ "task", val(r, "task_id") } });
     return r;
 }
 
-const ReleaseLocalCtx = struct { run: Run, name: []const u8, known: Worker, opts: ReleaseWorkerOpts };
+const ReleaseLocalCtx = struct { run: Run, name: []const u8, known: Crewmate, opts: ReleaseCrewmateOpts };
 
 fn wtPath(w: *const Obj) ?[]const u8 {
     const wt = w.obj("worktree") orelse return null;
     return wt.str("path");
 }
 
-fn releaseLocalTx(c: *const ReleaseLocalCtx, s: State) !Worker {
+fn releaseLocalTx(c: *const ReleaseLocalCtx, s: State) !Crewmate {
     const rid = runId(c.run);
-    const w = state.getWorker(s, c.name);
-    if (w == null or !rt.eqlOpt(w.?.str("run_id"), rid)) return rt.fail(null, "no worker \"{s}\" in run {s}", .{ c.name, rid });
+    const w = state.getCrewmate(s, c.name);
+    if (w == null or !rt.eqlOpt(w.?.str("run_id"), rid)) return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ c.name, rid });
     const wk = w.?;
     if (wk.truthy("execution_host") or !rt.eqlOpt(wk.str("dispatch_id"), c.known.str("dispatch_id")) or !rt.eqlOpt(wk.str("pane_id"), c.known.str("pane_id")) or
         !rt.eqlOpt(wtPath(wk), wtPath(c.known)) or !rt.eqlOpt(wk.str("worktree_dispatch_id"), c.known.str("worktree_dispatch_id")))
-        return rt.fail(null, "worker {s} changed while release was starting; retry after inspecting it", .{c.name});
-    if (c.opts.removeWorktree and wk.truthy("worktree") and (c.opts.keepPane or wk.truthy("retained"))) return rt.fail(null, "{s}'s pane stays open in {s}; --remove-worktree cannot go with --keep-pane or a retained worker", .{ c.name, wtPath(wk) orelse "" });
+        return rt.fail(null, "crewmate {s} changed while release was starting; retry after inspecting it", .{c.name});
+    if (c.opts.removeWorktree and wk.truthy("worktree") and (c.opts.keepPane or wk.truthy("retained"))) return rt.fail(null, "{s}'s pane stays open in {s}; --remove-worktree cannot go with --keep-pane or a retained crewmate", .{ c.name, wtPath(wk) orelse "" });
     if (wk.strNonEmpty("task_id")) |tid| if (state.getTask(s, tid)) |t| if (rt.eqlOpt(t.str("status"), "dispatched")) {
         if (!c.opts.force) return rt.fail(null, "{s} still owns task {s} (dispatched); wait for `lodestar done`, or pass --force", .{ c.name, tid });
         t.putStr("status", "failed");
@@ -1507,22 +1507,22 @@ fn releaseLocalTx(c: *const ReleaseLocalCtx, s: State) !Worker {
         dispatch.settleDispatch(s, wk.str("dispatch_id"), "failed");
     };
     if (wtPath(wk)) |p| if (state.worktrees(s).obj(p)) |rec| {
-        if (rt.eqlOpt(rec.str("worker"), wk.str("name")) and rt.eqlOpt(rec.str("run_id"), wk.str("run_id")) and rt.eqlOpt(rec.str("dispatch_id"), wk.str("worktree_dispatch_id"))) {
+        if (rt.eqlOpt(rec.str("crewmate"), wk.str("name")) and rt.eqlOpt(rec.str("run_id"), wk.str("run_id")) and rt.eqlOpt(rec.str("dispatch_id"), wk.str("worktree_dispatch_id"))) {
             rec.del("released_at");
             rec.putStr("cleanup_protection", "release_in_progress");
             if (c.opts.keepWorktree) rec.putBool("kept", true);
         }
     };
     _ = inbox.dropUndelivered(s, wk);
-    state.workers(s).del(c.name);
+    state.crewmates(s).del(c.name);
     return wk;
 }
 
-const WtReleasedCtx = struct { w: Worker, opts: ReleaseWorkerOpts, should_close: bool, close_error: ?[]const u8 };
+const WtReleasedCtx = struct { w: Crewmate, opts: ReleaseCrewmateOpts, should_close: bool, close_error: ?[]const u8 };
 
 fn wtReleasedTx(c: *const WtReleasedCtx, s: State) !void {
     const rec = state.worktrees(s).obj(wtPath(c.w) orelse return) orelse return;
-    if (!rt.eqlOpt(rec.str("worker"), c.w.str("name")) or !rt.eqlOpt(rec.str("run_id"), c.w.str("run_id")) or !rt.eqlOpt(rec.str("dispatch_id"), c.w.str("worktree_dispatch_id"))) return;
+    if (!rt.eqlOpt(rec.str("crewmate"), c.w.str("name")) or !rt.eqlOpt(rec.str("run_id"), c.w.str("run_id")) or !rt.eqlOpt(rec.str("dispatch_id"), c.w.str("worktree_dispatch_id"))) return;
     if (c.opts.keepWorktree or rec.truthy("kept")) rec.putBool("kept", true);
     if (!c.should_close) {
         rec.putStr("cleanup_protection", "pane_kept");
@@ -1534,11 +1534,11 @@ fn wtReleasedTx(c: *const WtReleasedCtx, s: State) !void {
     }
 }
 
-const LocalReleased = struct { worker: Worker, result: *Obj };
+const LocalReleased = struct { crewmate: Crewmate, result: *Obj };
 
-fn releaseLocal(run: Run, name: []const u8, known: Worker, opts: ReleaseWorkerOpts) !LocalReleased {
+fn releaseLocal(run: Run, name: []const u8, known: Crewmate, opts: ReleaseCrewmateOpts) !LocalReleased {
     const rid = runId(run);
-    const w = try state.update(Worker, &ReleaseLocalCtx{ .run = run, .name = name, .known = known, .opts = opts }, releaseLocalTx);
+    const w = try state.update(Crewmate, &ReleaseLocalCtx{ .run = run, .name = name, .known = known, .opts = opts }, releaseLocalTx);
     const host = w.get("execution_host");
     const pane_id = w.str("pane_id") orelse "";
     var archive_path: ?[]const u8 = null;
@@ -1546,14 +1546,14 @@ fn releaseLocal(run: Run, name: []const u8, known: Worker, opts: ReleaseWorkerOp
     const archived = blk: {
         const scope = HostScope.enter(host) catch |e| break :blk e;
         defer scope.leave();
-        break :blk dispatch.archiveScreen(.{ .run_id = rid, .worker = name, .dispatch_id = w.str("dispatch_id"), .target = pane_id });
+        break :blk dispatch.archiveScreen(.{ .run_id = rid, .crewmate = name, .dispatch_id = w.str("dispatch_id"), .target = pane_id });
     };
     if (archived) |a| {
         archive_path = a.path;
-        logEvent(.{ .{ "event", "worker.archived" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", val(w, "dispatch_id") }, .{ "path", a.path }, .{ "source", a.source } });
+        logEvent(.{ .{ "event", "crewmate.archived" }, .{ "run", rid }, .{ "crewmate", name }, .{ "dispatch", val(w, "dispatch_id") }, .{ "path", a.path }, .{ "source", a.source } });
     } else |err| {
         archive_error = rt.errMessage(err);
-        logEvent(.{ .{ "event", "worker.archive_failed" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", val(w, "dispatch_id") }, .{ "error", archive_error.? } });
+        logEvent(.{ .{ "event", "crewmate.archive_failed" }, .{ "run", rid }, .{ "crewmate", name }, .{ "dispatch", val(w, "dispatch_id") }, .{ "error", archive_error.? } });
     }
     if (w.strNonEmpty("dispatch_id")) |did| state.update(void, &ArchiveCtx{ .dispatch_id = did, .path = archive_path, .err = archive_error }, archiveLocalTx) catch {};
     var closed_pane: ?[]const u8 = null;
@@ -1564,7 +1564,7 @@ fn releaseLocal(run: Run, name: []const u8, known: Worker, opts: ReleaseWorkerOp
         const scope = try HostScope.enter(host);
         defer scope.leave();
         if (w.strNonEmpty("bar_pane_id")) |bar| {
-            _ = mux.paneClose(bar) catch |err| mux.logMuxError("bar.close", err, json.object(.{ .{ "worker", name }, .{ "pane", bar } }));
+            _ = mux.paneClose(bar) catch |err| mux.logMuxError("bar.close", err, json.object(.{ .{ "crewmate", name }, .{ "pane", bar } }));
         }
         const closed = blk: {
             _ = mux.getPane(pane_id) catch |e| break :blk e;
@@ -1579,7 +1579,7 @@ fn releaseLocal(run: Run, name: []const u8, known: Worker, opts: ReleaseWorkerOp
         };
         closed catch |err| {
             const c = Caught.of(err);
-            mux.logMuxError("release.close", err, json.object(.{ .{ "worker", name }, .{ "pane", pane_id }, .{ "tab", val(w, "tab_id") } }));
+            mux.logMuxError("release.close", err, json.object(.{ .{ "crewmate", name }, .{ "pane", pane_id }, .{ "tab", val(w, "tab_id") } }));
             const code = c.code();
             if (!rt.eqlOpt(code, "pane_not_found") and !rt.eqlOpt(code, "tab_not_found")) {
                 const what = if (w.truthy("owns_tab") and isTruthyStr(w.str("tab_id"))) rt.fmt("tab {s}", .{w.str("tab_id").?}) else rt.fmt("pane {s}", .{pane_id});
@@ -1592,31 +1592,31 @@ fn releaseLocal(run: Run, name: []const u8, known: Worker, opts: ReleaseWorkerOp
         mux.labelPane(pane_id, null);
     }
     if (w.truthy("worktree")) try state.update(void, &WtReleasedCtx{ .w = w, .opts = opts, .should_close = should_close, .close_error = close_error }, wtReleasedTx);
-    const ev = json.object(.{ .{ "event", "worker.released" }, .{ "run", rid }, .{ "worker", name }, .{ "closed_pane", json.optStr(closed_pane) }, .{ "closed_tab", json.optStr(closed_tab) } });
+    const ev = json.object(.{ .{ "event", "crewmate.released" }, .{ "run", rid }, .{ "crewmate", name }, .{ "closed_pane", json.optStr(closed_pane) }, .{ "closed_tab", json.optStr(closed_tab) } });
     if (hostName(w)) |hn| ev.putStr("host", hn);
     ev.putStrIf("close_error", close_error);
     state.log(ev);
     const result = json.object(.{ .{ "closed_pane", json.optStr(closed_pane) }, .{ "closed_tab", json.optStr(closed_tab) }, .{ "close_error", close_error }, .{ "archive_path", json.optStr(archive_path) }, .{ "archive_error", archive_error } });
-    return .{ .worker = w, .result = result };
+    return .{ .crewmate = w, .result = result };
 }
 
 /// Returns { closed_pane, closed_tab, close_error?, archive_path, archive_error?, worktree? }.
-pub fn releaseWorker(run: Run, name: []const u8, opts: ReleaseWorkerOpts) !*Obj {
+pub fn releaseCrewmate(run: Run, name: []const u8, opts: ReleaseCrewmateOpts) !*Obj {
     const rid = runId(run);
-    const known = try loadWorker(run, name);
+    const known = try loadCrewmate(run, name);
     if (known.truthy("execution_host")) {
         const fence = try state.enterRunStartFence(rid);
         defer state.leaveRunStartFence(fence);
-        const current = try loadWorker(run, name);
-        if (!sameRemote(current, known)) return rt.fail(null, "remote worker {s} changed while release was waiting; retry after inspecting it", .{name});
-        return releaseRemoteWorker(run, current, opts);
+        const current = try loadCrewmate(run, name);
+        if (!sameRemote(current, known)) return rt.fail(null, "remote crewmate {s} changed while release was waiting; retry after inspecting it", .{name});
+        return releaseRemoteCrewmate(run, current, opts);
     }
     const finished = if (wtPath(known)) |p| blk: {
         const fence = try enterWorktreeFence(p);
         defer leaveWorktreeFence(fence);
         break :blk try releaseLocal(run, name, known, opts);
     } else try releaseLocal(run, name, known, opts);
-    const w = finished.worker;
+    const w = finished.crewmate;
     const released = finished.result;
     const wt = w.obj("worktree") orelse return released;
     var removed = false;
@@ -1635,7 +1635,7 @@ pub fn releaseWorker(run: Run, name: []const u8, opts: ReleaseWorkerOpts) !*Obj 
         const cleanup = try cleanupOwnedWorktree(wt, rid, name, owner, false);
         removed = cleanup.removed;
         if (removed) {
-            logEvent(.{ .{ "event", "worktree.removed" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", json.optStr(owner) }, .{ "path", wt.str("path") orelse "" } });
+            logEvent(.{ .{ "event", "worktree.removed" }, .{ "run", rid }, .{ "crewmate", name }, .{ "dispatch", json.optStr(owner) }, .{ "path", wt.str("path") orelse "" } });
         } else if (cleanup.note != null and !rt.eql(cleanup.note.?, "not created by lodestar, so it was left in place")) {
             note = if (rt.contains(cleanup.note.?, "ownership changed"))
                 cleanup.note
@@ -1693,14 +1693,14 @@ pub const SweepWorktreesOpts = struct { dryRun: bool = false };
 
 fn protectionReason(p: []const u8) []const u8 {
     if (rt.eql(p, "release_in_progress")) return "release is in progress or was interrupted; inspect the pane before manual recovery";
-    if (rt.eql(p, "pane_kept")) return "worker pane was kept open; checkout cleanup remains protected";
+    if (rt.eql(p, "pane_kept")) return "crewmate pane was kept open; checkout cleanup remains protected";
     if (rt.eql(p, "pane_close_failed")) return "pane closure failed or is uncertain; inspect the pane before manual recovery";
-    if (rt.eql(p, "forgotten")) return "run close forgot this worker; its pane may still be open";
-    if (rt.eql(p, "abandoned")) return "the worker was abandoned; its agent may still be using the checkout";
+    if (rt.eql(p, "forgotten")) return "run close forgot this crewmate; its pane may still be open";
+    if (rt.eql(p, "abandoned")) return "the crewmate was abandoned; its agent may still be using the checkout";
     return "undefined";
 }
 
-/// Returns { removed: [{ path, worker, run_id }], kept: [{ path, worker, run_id, reason }] }.
+/// Returns { removed: [{ path, crewmate, run_id }], kept: [{ path, crewmate, run_id, reason }] }.
 pub fn sweepWorktrees(o: SweepWorktreesOpts) !*Obj {
     const s = try state.load();
     const removed = json.newArr();
@@ -1708,7 +1708,7 @@ pub fn sweepWorktrees(o: SweepWorktreesOpts) !*Obj {
     const recs = if (s.obj("worktrees")) |x| x.objValues() else &[_]*Obj{};
     for (recs) |rec| {
         if (!rec.truthy("created_by_pack") or rec.truthy("removed")) continue;
-        const id = json.object(.{ .{ "path", val(rec, "path") }, .{ "worker", val(rec, "worker") }, .{ "run_id", val(rec, "run_id") } });
+        const id = json.object(.{ .{ "path", val(rec, "path") }, .{ "crewmate", val(rec, "crewmate") }, .{ "run_id", val(rec, "run_id") } });
         const keep = struct {
             fn f(k: *json.Arr, base: *Obj, reason: []const u8) void {
                 const x = base.clone();
@@ -1717,7 +1717,7 @@ pub fn sweepWorktrees(o: SweepWorktreesOpts) !*Obj {
             }
         }.f;
         if (rec.truthy("kept")) {
-            keep(kept, id, "kept on request (worker release --keep-worktree)");
+            keep(kept, id, "kept on request (crewmate release --keep-worktree)");
             continue;
         }
         if (rec.strNonEmpty("cleanup_protection")) |p| {
@@ -1734,13 +1734,13 @@ pub fn sweepWorktrees(o: SweepWorktreesOpts) !*Obj {
             }
             continue;
         }
-        if (cleanupOwnedWorktree(rec, rec.str("run_id") orelse "", rec.str("worker") orelse "", rec.str("dispatch_id"), true)) |cleanup| {
+        if (cleanupOwnedWorktree(rec, rec.str("run_id") orelse "", rec.str("crewmate") orelse "", rec.str("dispatch_id"), true)) |cleanup| {
             if (!cleanup.removed) {
                 if (cleanup.note) |n| keep(kept, id, rt.concat(&.{ "not removed: ", n }));
                 continue;
             }
             if (!cleanup.already_missing) {
-                logEvent(.{ .{ "event", "worktree.removed" }, .{ "run", val(rec, "run_id") }, .{ "worker", val(rec, "worker") }, .{ "path", path }, .{ "by", "sweep" } });
+                logEvent(.{ .{ "event", "worktree.removed" }, .{ "run", val(rec, "run_id") }, .{ "crewmate", val(rec, "crewmate") }, .{ "path", path }, .{ "by", "sweep" } });
                 removed.push(id.val());
             }
         } else |err| {
@@ -1752,7 +1752,7 @@ pub fn sweepWorktrees(o: SweepWorktreesOpts) !*Obj {
 
 const CleanupResult = struct { removed: bool, note: ?[]const u8 = null, already_missing: bool = false };
 
-fn localWorkerUsesCheckout(w: Worker, path: []const u8) bool {
+fn localCrewmateUsesCheckout(w: Crewmate, path: []const u8) bool {
     return !w.truthy("execution_host") and usesCheckout(w, path);
 }
 
@@ -1762,25 +1762,25 @@ fn localDispatchClaimsCheckout(d: *const Obj, path: []const u8) bool {
     return rt.eql(worktree.worktreeIdentityPath(p), path);
 }
 
-/// `wt` carries { path, created_by_pack, worker, run_id }; `owner_dispatch_id` is the record's dispatch.
+/// `wt` carries { path, created_by_pack, crewmate, run_id }; `owner_dispatch_id` is the record's dispatch.
 fn sweepLeaseOwned(s: State, wt: *const Obj, owner_dispatch_id: ?[]const u8, require_released: bool) bool {
     const path = wt.str("path") orelse "";
     const rec = state.worktrees(s).obj(path);
     const d: ?*Obj = if (owner_dispatch_id) |id| state.getDispatch(s, id) else null;
-    const record_matches = rec != null and rt.eqlOpt(rec.?.str("worker"), wt.str("worker")) and rt.eqlOpt(rec.?.str("run_id"), wt.str("run_id")) and
+    const record_matches = rec != null and rt.eqlOpt(rec.?.str("crewmate"), wt.str("crewmate")) and rt.eqlOpt(rec.?.str("run_id"), wt.str("run_id")) and
         rt.eqlOpt(rec.?.str("dispatch_id"), owner_dispatch_id) and rec.?.truthy("created_by_pack") == wt.truthy("created_by_pack") and
         (!require_released or (rec.?.truthy("released_at") and rec.?.truthy("created_by_pack") and !rec.?.truthy("kept") and !rec.?.truthy("removed") and !rec.?.truthy("cleanup_protection")));
-    const dispatch_matches = d != null and !d.?.truthy("execution_host") and rt.eqlOpt(d.?.str("run_id"), wt.str("run_id")) and rt.eqlOpt(d.?.str("worker"), wt.str("worker")) and
+    const dispatch_matches = d != null and !d.?.truthy("execution_host") and rt.eqlOpt(d.?.str("run_id"), wt.str("run_id")) and rt.eqlOpt(d.?.str("crewmate"), wt.str("crewmate")) and
         isTruthyStr(d.?.str("worktree_path")) and rt.eql(worktree.worktreeIdentityPath(d.?.str("worktree_path").?), path);
-    var other_worker = false;
-    for (state.workers(s).objValues()) |w| {
-        if (localWorkerUsesCheckout(w, path) and (require_released or !rt.eqlOpt(w.str("name"), wt.str("worker")) or !rt.eqlOpt(w.str("run_id"), wt.str("run_id")) or !rt.eqlOpt(w.str("dispatch_id"), owner_dispatch_id))) other_worker = true;
+    var other_crewmate = false;
+    for (state.crewmates(s).objValues()) |w| {
+        if (localCrewmateUsesCheckout(w, path) and (require_released or !rt.eqlOpt(w.str("name"), wt.str("crewmate")) or !rt.eqlOpt(w.str("run_id"), wt.str("run_id")) or !rt.eqlOpt(w.str("dispatch_id"), owner_dispatch_id))) other_crewmate = true;
     }
     var unsettled = false;
     if (s.obj("dispatches")) |ds| for (ds.objValues()) |cand| {
         if (!cand.truthy("settled_at") and localDispatchClaimsCheckout(cand, path) and (require_released or !rt.eqlOpt(cand.str("id"), owner_dispatch_id))) unsettled = true;
     };
-    return record_matches and dispatch_matches and !other_worker and !unsettled;
+    return record_matches and dispatch_matches and !other_crewmate and !unsettled;
 }
 
 fn worktreeCleanWithoutWrites(path: []const u8) bool {
@@ -1795,21 +1795,21 @@ fn leaseTx(c: *const LeaseCtx, s: State) !bool {
     return sweepLeaseOwned(s, c.wt, c.owner, c.sweep);
 }
 
-const MarkRemovedCtx = struct { path: []const u8, worker: []const u8, run_id: []const u8, owner: ?[]const u8, removed: bool };
+const MarkRemovedCtx = struct { path: []const u8, crewmate: []const u8, run_id: []const u8, owner: ?[]const u8, removed: bool };
 
 fn markRemovedTx(c: *const MarkRemovedCtx, s: State) !void {
     const rec = state.worktrees(s).obj(c.path) orelse return;
-    if (!rt.eqlOpt(rec.str("worker"), c.worker) or !rt.eqlOpt(rec.str("run_id"), c.run_id) or !rt.eqlOpt(rec.str("dispatch_id"), c.owner)) return;
+    if (!rt.eqlOpt(rec.str("crewmate"), c.crewmate) or !rt.eqlOpt(rec.str("run_id"), c.run_id) or !rt.eqlOpt(rec.str("dispatch_id"), c.owner)) return;
     if (val(rec, "released_at") == .null) rec.putStr("released_at", state.now());
     if (c.removed) rec.putBool("removed", true);
 }
 
-fn cleanupOwnedWorktree(wt: WorktreeInfo, run_id: []const u8, worker: []const u8, owner: ?[]const u8, sweep: bool) !CleanupResult {
+fn cleanupOwnedWorktree(wt: WorktreeInfo, run_id: []const u8, crewmate: []const u8, owner: ?[]const u8, sweep: bool) !CleanupResult {
     const path = wt.str("path") orelse "";
     const fence = try enterWorktreeFence(path);
     defer leaveWorktreeFence(fence);
     const probe = wt.clone();
-    probe.putStr("worker", worker);
+    probe.putStr("crewmate", crewmate);
     probe.putStr("run_id", run_id);
     const owns = try state.update(bool, &LeaseCtx{ .wt = probe, .owner = owner, .sweep = sweep }, leaseTx);
     if (!owns) return .{ .removed = false, .note = "checkout ownership changed; left in place" };
@@ -1826,14 +1826,14 @@ fn cleanupOwnedWorktree(wt: WorktreeInfo, run_id: []const u8, worker: []const u8
             removed = true;
         } else |err| note = rt.errMessage(err);
     }
-    state.update(void, &MarkRemovedCtx{ .path = path, .worker = worker, .run_id = run_id, .owner = owner, .removed = removed }, markRemovedTx) catch {};
+    state.update(void, &MarkRemovedCtx{ .path = path, .crewmate = crewmate, .run_id = run_id, .owner = owner, .removed = removed }, markRemovedTx) catch {};
     return .{ .removed = removed, .note = note, .already_missing = already_missing };
 }
 
-fn undoWorktree(wt: WorktreeInfo, run_id: []const u8, worker: []const u8, dispatch_id: []const u8) []const u8 {
+fn undoWorktree(wt: WorktreeInfo, run_id: []const u8, crewmate: []const u8, dispatch_id: []const u8) []const u8 {
     const path = wt.str("path") orelse "";
-    const result = cleanupOwnedWorktree(wt, run_id, worker, dispatch_id, false) catch |err| CleanupResult{ .removed = false, .note = rt.errMessage(err) };
-    logEvent(.{ .{ "event", "worktree.start_failed" }, .{ "run", run_id }, .{ "worker", worker }, .{ "dispatch", dispatch_id }, .{ "path", path }, .{ "removed", result.removed }, .{ "note", result.note } });
+    const result = cleanupOwnedWorktree(wt, run_id, crewmate, dispatch_id, false) catch |err| CleanupResult{ .removed = false, .note = rt.errMessage(err) };
+    logEvent(.{ .{ "event", "worktree.start_failed" }, .{ "run", run_id }, .{ "crewmate", crewmate }, .{ "dispatch", dispatch_id }, .{ "path", path }, .{ "removed", result.removed }, .{ "note", result.note } });
     if (result.removed) return rt.fmt("the worktree {s} made for it was removed (branch {s} kept)", .{ path, wt.str("branch") orelse "null" });
     if (result.note) |n| if (rt.contains(n, "ownership changed")) return rt.fmt("the worktree {s} is left in place ({s})", .{ path, n });
     if (wt.truthy("created_by_pack")) return rt.fmt("the worktree {s} made for it is left in place ({s})", .{ path, result.note orelse "not removed" });
@@ -1866,8 +1866,8 @@ pub const StartAuthority = struct { runId: []const u8, name: []const u8, taskId:
 fn assertStartAuthority(s: State, a: StartAuthority) !void {
     const d = state.getDispatch(s, a.dispatchId);
     const t = state.getTask(s, a.taskId);
-    const w = state.getWorker(s, a.name);
-    var bad = !runActive(s, a.runId) or d == null or !rt.eqlOpt(d.?.str("run_id"), a.runId) or !rt.eqlOpt(d.?.str("task_id"), a.taskId) or !rt.eqlOpt(d.?.str("worker"), a.name) or d.?.truthy("settled_at") or
+    const w = state.getCrewmate(s, a.name);
+    var bad = !runActive(s, a.runId) or d == null or !rt.eqlOpt(d.?.str("run_id"), a.runId) or !rt.eqlOpt(d.?.str("task_id"), a.taskId) or !rt.eqlOpt(d.?.str("crewmate"), a.name) or d.?.truthy("settled_at") or
         t == null or !rt.eqlOpt(t.?.str("run_id"), a.runId);
     if (!bad) {
         if (a.registered) {
@@ -1896,14 +1896,14 @@ const RollbackCtx = struct { o: *const StartOptions, task_id: []const u8, dispat
 fn rollbackTx(c: *const RollbackCtx, s: State) !Rollback {
     const rid = runId(c.o.run);
     const d = state.getDispatch(s, c.dispatch_id);
-    const revoked = !runActive(s, rid) or d == null or !rt.eqlOpt(d.?.str("run_id"), rid) or !rt.eqlOpt(d.?.str("task_id"), c.task_id) or !rt.eqlOpt(d.?.str("worker"), c.o.name) or d.?.truthy("settled_at");
+    const revoked = !runActive(s, rid) or d == null or !rt.eqlOpt(d.?.str("run_id"), rid) or !rt.eqlOpt(d.?.str("task_id"), c.task_id) or !rt.eqlOpt(d.?.str("crewmate"), c.o.name) or d.?.truthy("settled_at");
     if (!revoked) dispatch.settleDispatch(s, c.dispatch_id, "failed");
     const t = state.getTask(s, c.task_id);
     var only_this = true;
     for (dispatch.taskDispatchIds(s, c.task_id)) |id| if (!rt.eql(id, c.dispatch_id)) {
         only_this = false;
     };
-    if (revoked or isTruthyStr(c.o.taskId) or t == null or !rt.eqlOpt(t.?.str("run_id"), rid) or !rt.eqlOpt(t.?.str("status"), "pending") or t.?.truthy("worker") or t.?.truthy("dispatch_id") or !only_this)
+    if (revoked or isTruthyStr(c.o.taskId) or t == null or !rt.eqlOpt(t.?.str("run_id"), rid) or !rt.eqlOpt(t.?.str("status"), "pending") or t.?.truthy("crewmate") or t.?.truthy("dispatch_id") or !only_this)
         return .{ .dropped = false, .revoked = revoked };
     state.tasks(s).del(c.task_id);
     return .{ .dropped = true, .revoked = false };
@@ -1913,17 +1913,17 @@ fn rollbackStartClaim(o: *const StartOptions, task_id: []const u8, dispatch_id: 
     return state.update(Rollback, &RollbackCtx{ .o = o, .task_id = task_id, .dispatch_id = dispatch_id }, rollbackTx);
 }
 
-fn closeStartPane(pane_id: []const u8, tab_id: ?[]const u8, run_id: []const u8, worker: []const u8, bar_pane_id: ?[]const u8) void {
+fn closeStartPane(pane_id: []const u8, tab_id: ?[]const u8, run_id: []const u8, crewmate: []const u8, bar_pane_id: ?[]const u8) void {
     if (!isTruthyStr(tab_id)) if (bar_pane_id) |bar| if (bar.len > 0) {
-        _ = mux.paneClose(bar) catch |err| mux.logMuxError("start.revoke.bar.close", err, json.object(.{ .{ "run", run_id }, .{ "worker", worker }, .{ "pane", bar } }));
+        _ = mux.paneClose(bar) catch |err| mux.logMuxError("start.revoke.bar.close", err, json.object(.{ .{ "run", run_id }, .{ "crewmate", crewmate }, .{ "pane", bar } }));
     };
     const r = if (isTruthyStr(tab_id)) mux.tabClose(tab_id.?) else mux.paneClose(pane_id);
-    _ = r catch |err| mux.logMuxError("start.revoke.close", err, json.object(.{ .{ "run", run_id }, .{ "worker", worker }, .{ "pane", pane_id }, .{ "tab", json.optStr(tab_id) } }));
+    _ = r catch |err| mux.logMuxError("start.revoke.close", err, json.object(.{ .{ "run", run_id }, .{ "crewmate", crewmate }, .{ "pane", pane_id }, .{ "tab", json.optStr(tab_id) } }));
 }
 
 pub fn refuseStartInFlight(s: State, name: []const u8, task_id: ?[]const u8, worktree_path: ?[]const u8, pane_id: ?[]const u8) !void {
     var recorded: std.ArrayListUnmanaged(?[]const u8) = .empty;
-    for (state.workers(s).objValues()) |w| recorded.append(rt.a, w.str("dispatch_id")) catch {};
+    for (state.crewmates(s).objValues()) |w| recorded.append(rt.a, w.str("dispatch_id")) catch {};
     const ds = s.obj("dispatches") orelse return;
     for (ds.objValues()) |d| {
         if (d.truthy("settled_at") or !runActive(s, d.str("run_id"))) continue;
@@ -1937,13 +1937,13 @@ pub fn refuseStartInFlight(s: State, name: []const u8, task_id: ?[]const u8, wor
             continue;
         }
         const did = d.str("id") orelse "";
-        const dw = d.str("worker") orelse "";
-        if (rt.eql(dw, name)) return rt.fail(null, "worker \"{s}\" is being started (dispatch {s}); wait for that start to finish", .{ name, did });
-        if (isTruthyStr(task_id) and rt.eqlOpt(d.str("task_id"), task_id)) return rt.fail(null, "task {s} is being started by worker \"{s}\" (dispatch {s}); wait for that start to finish", .{ task_id.?, dw, did });
+        const dw = d.str("crewmate") orelse "";
+        if (rt.eql(dw, name)) return rt.fail(null, "crewmate \"{s}\" is being started (dispatch {s}); wait for that start to finish", .{ name, did });
+        if (isTruthyStr(task_id) and rt.eqlOpt(d.str("task_id"), task_id)) return rt.fail(null, "task {s} is being started by crewmate \"{s}\" (dispatch {s}); wait for that start to finish", .{ task_id.?, dw, did });
         if (d.truthy("execution_host")) continue;
         if (isTruthyStr(worktree_path)) if (d.strNonEmpty("worktree_path")) |p| if (rt.eql(worktree.worktreeIdentityPath(p), worktree_path.?))
-            return rt.fail(null, "checkout {s} is being started by worker \"{s}\" (dispatch {s}); two workers never share a working tree", .{ worktree_path.?, dw, did });
-        if (isTruthyStr(pane_id) and rt.eqlOpt(d.str("pane_id"), pane_id)) return rt.fail(null, "pane {s} is being adopted by worker \"{s}\" (dispatch {s})", .{ pane_id.?, dw, did });
+            return rt.fail(null, "checkout {s} is being started by crewmate \"{s}\" (dispatch {s}); two crewmates never share a working tree", .{ worktree_path.?, dw, did });
+        if (isTruthyStr(pane_id) and rt.eqlOpt(d.str("pane_id"), pane_id)) return rt.fail(null, "pane {s} is being adopted by crewmate \"{s}\" (dispatch {s})", .{ pane_id.?, dw, did });
     }
 }
 
@@ -1973,26 +1973,26 @@ pub fn clearStartupDialog(pane_id: []const u8) !bool {
 
 /// Returns { task, dispatch_id }.
 pub fn resendPreamble(run: Run, name: []const u8) !*Obj {
-    const known = try loadWorker(run, name);
+    const known = try loadCrewmate(run, name);
     if (!known.truthy("execution_host")) return resendPreambleUnlocked(run, name, false);
     const fence = try state.enterRunStartFence(runId(run));
     defer state.leaveRunStartFence(fence);
-    const current = try loadWorker(run, name);
-    if (!sameRemote(current, known)) return rt.fail(null, "remote worker {s} changed while resend was waiting; retry after inspecting it", .{name});
+    const current = try loadCrewmate(run, name);
+    if (!sameRemote(current, known)) return rt.fail(null, "remote crewmate {s} changed while resend was waiting; retry after inspecting it", .{name});
     return resendPreambleUnlocked(run, name, true);
 }
 
 fn resendPreambleUnlocked(run: Run, name: []const u8, remote_fence_held: bool) !*Obj {
     const rid = runId(run);
     const s = try state.load();
-    const w = state.getWorker(s, name);
-    if (w == null or !rt.eqlOpt(w.?.str("run_id"), rid)) return rt.fail(null, "no worker \"{s}\" in run {s}", .{ name, rid });
+    const w = state.getCrewmate(s, name);
+    if (w == null or !rt.eqlOpt(w.?.str("run_id"), rid)) return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ name, rid });
     const wk = w.?;
     if (wk.truthy("execution_host") and !remote_fence_held) {
         const fence = try state.enterRunStartFence(rid);
         defer state.leaveRunStartFence(fence);
-        const current = try loadWorker(run, name);
-        if (!sameRemote(current, wk)) return rt.fail(null, "remote worker {s} changed while resend was waiting; retry after inspecting it", .{name});
+        const current = try loadCrewmate(run, name);
+        if (!sameRemote(current, wk)) return rt.fail(null, "remote crewmate {s} changed while resend was waiting; retry after inspecting it", .{name});
         return resendPreambleUnlocked(run, name, true);
     }
     const task: ?Task = if (wk.strNonEmpty("task_id")) |tid| state.getTask(s, tid) else null;
@@ -2012,7 +2012,7 @@ fn resendPreambleUnlocked(run: Run, name: []const u8, remote_fence_held: bool) !
     }
     const text = blk: {
         if (state.getDispatch(s, did.?)) |d| if (d.str("preamble")) |p| break :blk p;
-        break :blk preamble(.{ .worker = name, .run = run, .task = tk, .dispatchId = did.?, .cwd = wk.str("cwd") orelse "", .worktree = wk.obj("worktree"), .remoteHost = wk.obj("execution_host"), .explicitContext = rt.eqlOpt(wk.str("context_mode"), "explicit") });
+        break :blk preamble(.{ .crewmate = name, .run = run, .task = tk, .dispatchId = did.?, .cwd = wk.str("cwd") orelse "", .worktree = wk.obj("worktree"), .remoteHost = wk.obj("execution_host"), .explicitContext = rt.eqlOpt(wk.str("context_mode"), "explicit") });
     };
     const seq = blk: {
         const scope = try HostScope.enter(host);
@@ -2025,7 +2025,7 @@ fn resendPreambleUnlocked(run: Run, name: []const u8, remote_fence_held: bool) !
         try promptWithRetry(pane_id, text, seq, 5, !wk.truthy("adopted"), null);
     }
     if (try markPrompted(name, .{ .runId = rid, .taskId = task_id, .dispatchId = did.? })) {
-        const ev = json.object(.{ .{ "event", "worker.resent" }, .{ "run", rid }, .{ "worker", name }, .{ "task", task_id } });
+        const ev = json.object(.{ .{ "event", "crewmate.resent" }, .{ "run", rid }, .{ "crewmate", name }, .{ "task", task_id } });
         if (hostName(wk)) |hn| ev.putStr("host", hn);
         state.log(ev);
     }
@@ -2035,7 +2035,7 @@ fn resendPreambleUnlocked(run: Run, name: []const u8, remote_fence_held: bool) !
 const BaselineCtx = struct { name: []const u8, seq: ?i64 };
 
 fn baselineTx(c: *const BaselineCtx, s: State) !void {
-    const w = state.getWorker(s, c.name) orelse return;
+    const w = state.getCrewmate(s, c.name) orelse return;
     w.putBool("worked", false);
     if (c.seq) |q| {
         w.putInt("seq_at_dispatch", q);
@@ -2060,12 +2060,12 @@ const MarkCtx = struct { name: []const u8, a: MarkPromptedAuthority };
 
 fn markTx(c: *const MarkCtx, s: State) !bool {
     const a = c.a;
-    const w = state.getWorker(s, c.name);
+    const w = state.getCrewmate(s, c.name);
     const t = state.getTask(s, a.taskId);
     const d = state.getDispatch(s, a.dispatchId);
     if (w == null or !rt.eqlOpt(w.?.str("run_id"), a.runId) or !rt.eqlOpt(w.?.str("task_id"), a.taskId) or !rt.eqlOpt(w.?.str("dispatch_id"), a.dispatchId) or
         t == null or !rt.eqlOpt(t.?.str("run_id"), a.runId) or !rt.eqlOpt(t.?.str("dispatch_id"), a.dispatchId) or
-        d == null or !rt.eqlOpt(d.?.str("run_id"), a.runId) or !rt.eqlOpt(d.?.str("task_id"), a.taskId) or !rt.eqlOpt(d.?.str("worker"), c.name)) return false;
+        d == null or !rt.eqlOpt(d.?.str("run_id"), a.runId) or !rt.eqlOpt(d.?.str("task_id"), a.taskId) or !rt.eqlOpt(d.?.str("crewmate"), c.name)) return false;
     inbox.touch(w.?);
     w.?.putBool("awaiting_prompt", false);
     return true;
@@ -2136,7 +2136,7 @@ pub fn taskSummary(t: Task, s: ?State) *Obj {
         .{ "title", val(t, "title") },
         .{ "status", val(t, "status") },
         .{ "parent_id", val(t, "parent_id") },
-        .{ "worker", val(t, "worker") },
+        .{ "crewmate", val(t, "crewmate") },
         .{ "dispatch_id", val(t, "dispatch_id") },
         .{ "depends_on", t.get("depends_on") },
         .{ "attempts", t.get("attempts") },
@@ -2146,7 +2146,7 @@ pub fn taskSummary(t: Task, s: ?State) *Obj {
     return o;
 }
 
-pub fn workerSummary(w: Worker, s: State) *Obj {
+pub fn crewmateSummary(w: Crewmate, s: State) *Obj {
     const tid = w.strNonEmpty("task_id");
     const task: ?Task = if (tid) |x| state.getTask(s, x) else null;
     const o = json.object(.{
@@ -2173,7 +2173,7 @@ pub fn workerSummary(w: Worker, s: State) *Obj {
     });
     if (w.truthy("missing_since")) o.put("missing_since", val(w, "missing_since"));
     if (w.truthy("stalled_since")) o.put("stalled_since", val(w, "stalled_since"));
-    o.put("attention", workerAttention(s, w).val());
+    o.put("attention", crewmateAttention(s, w).val());
     o.put("next_action", if (nextAction(s, w)) |na| json.strArr(na) else json.nul);
     o.put("worktree", val(w, "worktree"));
     if (w.truthy("adopted")) o.putBool("adopted", true);
@@ -2182,7 +2182,7 @@ pub fn workerSummary(w: Worker, s: State) *Obj {
     return o;
 }
 
-fn openFor(s: State, w: Worker) []*Obj {
+fn openFor(s: State, w: Crewmate) []*Obj {
     var out: std.ArrayListUnmanaged(*Obj) = .empty;
     for (state.messages(s).objs()) |m| {
         if (!rt.eqlOpt(m.str("run_id"), w.str("run_id")) or !rt.eqlOpt(m.str("from"), w.str("name")) or !rt.eqlOpt(m.str("to"), "orchestrator")) continue;
@@ -2194,7 +2194,7 @@ fn openFor(s: State, w: Worker) []*Obj {
 }
 
 /// Returns { categories: string[], requires_action: boolean }.
-pub fn workerAttention(s: State, w: Worker) *Obj {
+pub fn crewmateAttention(s: State, w: Crewmate) *Obj {
     const open = openFor(s, w);
     const categories = json.newArr();
     for (open) |m| {
@@ -2215,7 +2215,7 @@ pub fn workerAttention(s: State, w: Worker) *Obj {
     return json.object(.{ .{ "categories", categories }, .{ "requires_action", open.len > 0 } });
 }
 
-pub fn nextAction(s: State, w: Worker) ?[]const []const u8 {
+pub fn nextAction(s: State, w: Crewmate) ?[]const []const u8 {
     const open = openFor(s, w);
     const name = w.str("name") orelse "";
     for (open) |m| if (rt.eqlOpt(m.str("type"), "ask")) {
@@ -2226,8 +2226,8 @@ pub fn nextAction(s: State, w: Worker) ?[]const []const u8 {
     for (open) |m| if (rt.eqlOpt(m.str("type"), "escalation")) return rt.a.dupe([]const u8, &.{ "lodestar", "send", name, "<what to do about it>" }) catch null;
     const t: ?Task = if (w.strNonEmpty("task_id")) |tid| state.getTask(s, tid) else null;
     const owing = if (t) |tk| rt.eqlOpt(tk.str("status"), "dispatched") or (rt.eqlOpt(tk.str("status"), "failed") and (if (tk.obj("outcome")) |oc| rt.eqlOpt(oc.str("summary"), inbox.EXITED_SUMMARY) else false)) else false;
-    if (rt.eqlOpt(w.str("liveness"), "exited") and owing) return rt.a.dupe([]const u8, &.{ "lodestar", "worker", "release", name, "--force" }) catch null;
-    if (open.len > 0) return rt.a.dupe([]const u8, &.{ "lodestar", "worker", "read", name }) catch null;
+    if (rt.eqlOpt(w.str("liveness"), "exited") and owing) return rt.a.dupe([]const u8, &.{ "lodestar", "crewmate", "release", name, "--force" }) catch null;
+    if (open.len > 0) return rt.a.dupe([]const u8, &.{ "lodestar", "crewmate", "read", name }) catch null;
     return null;
 }
 
@@ -2271,7 +2271,7 @@ test "model arguments round trip per harness" {
     try std.testing.expectEqualStrings("a b c", oneLine("  a\n\tb   c "));
 }
 
-test "sweepWorktrees removes a released, clean pack checkout and keeps protected ones" {
+test "sweepWorktrees removes a released, clean crew checkout and keeps protected ones" {
     var e: TestEnv = undefined;
     try testInit(&e);
     defer e.arena.deinit();
@@ -2287,24 +2287,24 @@ test "sweepWorktrees removes a released, clean pack checkout and keeps protected
     _ = try worktree.git(repo, &.{"init"});
     _ = try worktree.git(repo, &.{ "-c", "user.email=a@b", "-c", "user.name=t", "commit", "--allow-empty", "-m", "x" });
     rt.setenv("LODESTAR_WORKTREE_DIR", fs.join(&.{ tmp, "wts" }));
-    const wt = try worktree.planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .worker = "a" });
+    const wt = try worktree.planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .crewmate = "a" });
     try worktree.gitWorktreeAdd(wt);
     const path = wt.str("path").?;
     const s = state.emptyState();
     const rec = wt.clone();
-    rec.putStr("worker", "a");
+    rec.putStr("crewmate", "a");
     rec.putStr("run_id", "r1");
     rec.putStr("dispatch_id", "d1");
     rec.putStr("created_at", state.now());
     rec.putStr("released_at", state.now());
     state.worktrees(s).put(path, rec.val());
-    state.dispatches(s).put("d1", json.object(.{ .{ "id", "d1" }, .{ "run_id", "r1" }, .{ "task_id", "t1" }, .{ "worker", "a" }, .{ "worktree_path", path }, .{ "settled_at", state.now() } }).val());
-    const kept = json.object(.{ .{ "path", "/elsewhere" }, .{ "created_by_pack", true }, .{ "worker", "b" }, .{ "run_id", "r1" }, .{ "cleanup_protection", "pane_kept" } });
+    state.dispatches(s).put("d1", json.object(.{ .{ "id", "d1" }, .{ "run_id", "r1" }, .{ "task_id", "t1" }, .{ "crewmate", "a" }, .{ "worktree_path", path }, .{ "settled_at", state.now() } }).val());
+    const kept = json.object(.{ .{ "path", "/elsewhere" }, .{ "created_by_pack", true }, .{ "crewmate", "b" }, .{ "run_id", "r1" }, .{ "cleanup_protection", "pane_kept" } });
     state.worktrees(s).put("/elsewhere", kept.val());
     try state.save(s);
     const dry = try sweepWorktrees(.{ .dryRun = true });
     try std.testing.expectEqual(@as(usize, 1), dry.arr("removed").?.len());
-    try std.testing.expectEqualStrings("worker pane was kept open; checkout cleanup remains protected", dry.arr("kept").?.objs()[0].str("reason").?);
+    try std.testing.expectEqualStrings("crewmate pane was kept open; checkout cleanup remains protected", dry.arr("kept").?.objs()[0].str("reason").?);
     try std.testing.expect(fs.exists(path));
     const real_run = try sweepWorktrees(.{});
     try std.testing.expectEqual(@as(usize, 1), real_run.arr("removed").?.len());
@@ -2323,18 +2323,18 @@ test "preamble, summaries and next action" {
     state.runs(s).put("r1", run.val());
     const task = state.addTask(s, "r1", "  Do the thing\nwith care  ", null);
     const wt = json.object(.{ .{ "path", "/wt/a" }, .{ "branch", json.nul }, .{ "base", "0123456789abcdef" }, .{ "created_by_pack", true }, .{ "repo", "/repo" } });
-    const text = preamble(.{ .worker = "a", .run = run, .task = task, .dispatchId = "d2", .cwd = "/wt/a", .worktree = wt, .explicitContext = true });
-    try std.testing.expect(rt.startsWith(text, "[lodestar dispatch] You are worker \"a\" in run r1, on task t1 (\"Do the thing\"), dispatch d2.\n"));
+    const text = preamble(.{ .crewmate = "a", .run = run, .task = task, .dispatchId = "d2", .cwd = "/wt/a", .worktree = wt, .explicitContext = true });
+    try std.testing.expect(rt.startsWith(text, "[lodestar dispatch] You are crewmate \"a\" in run r1, on task t1 (\"Do the thing\"), dispatch d2.\n"));
     try std.testing.expect(rt.contains(text, "on a detached HEAD (0123456789ab)"));
-    try std.testing.expect(rt.contains(text, "LODESTAR_RUN_ID='r1' LODESTAR_WORKER='a' LODESTAR_TASK_ID='t1' LODESTAR_DISPATCH_ID='d2' lodestar"));
+    try std.testing.expect(rt.contains(text, "LODESTAR_RUN_ID='r1' LODESTAR_CREWMATE='a' LODESTAR_TASK_ID='t1' LODESTAR_DISPATCH_ID='d2' lodestar"));
     try std.testing.expect(rt.endsWith(text, "Task spec:\nDo the thing\nwith care"));
-    const worker = json.object(.{ .{ "name", "a" }, .{ "run_id", "r1" }, .{ "kind", "claude" }, .{ "pane_id", "w:2" }, .{ "cwd", "/wt/a" }, .{ "task_id", "t1" }, .{ "dispatch_id", "d2" }, .{ "last_status", "idle" }, .{ "retained", false } });
-    state.workers(s).put("a", worker.val());
-    try std.testing.expect(nextAction(s, worker) == null);
+    const crewmate = json.object(.{ .{ "name", "a" }, .{ "run_id", "r1" }, .{ "kind", "claude" }, .{ "pane_id", "w:2" }, .{ "cwd", "/wt/a" }, .{ "task_id", "t1" }, .{ "dispatch_id", "d2" }, .{ "last_status", "idle" }, .{ "retained", false } });
+    state.crewmates(s).put("a", crewmate.val());
+    try std.testing.expect(nextAction(s, crewmate) == null);
     state.messages(s).push(json.object(.{ .{ "id", "m1" }, .{ "run_id", "r1" }, .{ "type", "ask" }, .{ "from", "a" }, .{ "to", "orchestrator" }, .{ "task_id", "t1" }, .{ "dispatch_id", "d2" }, .{ "body", "?" }, .{ "options", json.strArr(&.{ "yes", "no" }) }, .{ "acked", false } }).val());
-    const na = nextAction(s, worker).?;
+    const na = nextAction(s, crewmate).?;
     try std.testing.expectEqualStrings("<one of: yes | no>", na[4]);
-    const summary = workerSummary(worker, s);
+    const summary = crewmateSummary(crewmate, s);
     try std.testing.expectEqualStrings("ask", summary.obj("attention").?.arr("categories").?.strs()[0]);
     try std.testing.expect(summary.obj("attention").?.boolean("requires_action").?);
     try std.testing.expectEqual(@as(usize, 0), taskSummary(task, s).arr("gate_blockers").?.len());

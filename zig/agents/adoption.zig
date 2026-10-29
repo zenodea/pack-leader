@@ -6,13 +6,13 @@ const mux = @import("../mux/index.zig");
 const dispatch = @import("../core/dispatch.zig");
 const claims = @import("../core/claims.zig");
 const gates = @import("../core/gates.zig");
-const workers = @import("workers.zig");
+const crewmates = @import("crewmates.zig");
 
 const Obj = json.Obj;
 const Value = json.Value;
 const State = state.State;
 
-pub const AdoptWorkerOpts = struct {
+pub const AdoptCrewmateOpts = struct {
     run: *Obj,
     name: []const u8,
     taskId: ?[]const u8 = null,
@@ -21,7 +21,7 @@ pub const AdoptWorkerOpts = struct {
     targetPane: ?[]const u8 = null,
 };
 
-pub const AdoptOptions = AdoptWorkerOpts;
+pub const AdoptOptions = AdoptCrewmateOpts;
 
 /// `AdoptionError` is a coded error: every failure here carries an `adoption_*` code.
 fn fail(code: []const u8, comptime f: []const u8, args: anytype) error{Fail} {
@@ -95,12 +95,12 @@ fn protectPane(s: State, pane_id: []const u8, except_dispatch: ?[]const u8) !voi
         const run_id = run.str("id") orelse "";
         if (rt.eqlOpt(state.orchestratorPane(run), pane_id)) return fail("adoption_protected_pane", "pane {s} is the orchestrator pane for run {s}", .{ pane_id, run_id });
         if (rt.eqlOpt(run.str("sidebar_pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is a Lodestar sidebar pane for run {s}", .{ pane_id, run_id });
-        if (run.obj("observer")) |ob| if (rt.eqlOpt(ob.str("pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is the observer pane for run {s}", .{ pane_id, run_id });
+        if (run.obj("navigator")) |ob| if (rt.eqlOpt(ob.str("pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is the navigator pane for run {s}", .{ pane_id, run_id });
     }
-    for (state.workers(s).objValues()) |w| {
+    for (state.crewmates(s).objValues()) |w| {
         if (w.truthy("execution_host") or !rt.eqlOpt(w.str("pane_id"), pane_id)) continue;
         if (except_dispatch) |ex| if (rt.eqlOpt(w.str("dispatch_id"), ex)) continue;
-        return fail("adoption_managed_pane", "pane {s} is already supervised by worker \"{s}\" in run {s}", .{ pane_id, w.str("name") orelse "", w.str("run_id") orelse "" });
+        return fail("adoption_managed_pane", "pane {s} is already supervised by crewmate \"{s}\" in run {s}", .{ pane_id, w.str("name") orelse "", w.str("run_id") orelse "" });
     }
     const ds = s.obj("dispatches") orelse return;
     for (ds.objValues()) |d| {
@@ -111,7 +111,7 @@ fn protectPane(s: State, pane_id: []const u8, except_dispatch: ?[]const u8) !voi
             dispatch.settleDispatch(s, d.str("id"), "failed");
             continue;
         }
-        return fail("adoption_pane_claimed", "pane {s} is reserved by worker \"{s}\" (dispatch {s})", .{ pane_id, d.str("worker") orelse "", d.str("id") orelse "" });
+        return fail("adoption_pane_claimed", "pane {s} is reserved by crewmate \"{s}\" (dispatch {s})", .{ pane_id, d.str("crewmate") orelse "", d.str("id") orelse "" });
     }
 }
 
@@ -120,7 +120,7 @@ fn snapshot(task: *Obj) *Obj {
     const outcome: Value = if (task.obj("outcome")) |o| o.deepClone().val() else .null;
     return json.object(.{
         .{ "status", task.get("status") },
-        .{ "worker", task.get("worker") },
+        .{ "crewmate", task.get("crewmate") },
         .{ "dispatch_id", task.get("dispatch_id") },
         .{ "attempts", task.get("attempts") },
         .{ "updated_at", task.get("updated_at") },
@@ -135,16 +135,16 @@ fn revoked(dispatch_id: []const u8) error{Fail} {
 fn assertClaim(s: State, run_id: []const u8, name: []const u8, task_id: []const u8, dispatch_id: []const u8, pane_id: []const u8, registered: bool) !void {
     const d = state.getDispatch(s, dispatch_id);
     const task = state.getTask(s, task_id);
-    const worker = state.getWorker(s, name);
+    const crewmate = state.getCrewmate(s, name);
     const binding_ok = if (registered)
-        worker != null and rt.eqlOpt(worker.?.str("run_id"), run_id) and rt.eqlOpt(worker.?.str("pane_id"), pane_id) and rt.eqlOpt(worker.?.str("task_id"), task_id) and rt.eqlOpt(worker.?.str("dispatch_id"), dispatch_id) and task != null and rt.eqlOpt(task.?.str("status"), "dispatched") and rt.eqlOpt(task.?.str("dispatch_id"), dispatch_id)
+        crewmate != null and rt.eqlOpt(crewmate.?.str("run_id"), run_id) and rt.eqlOpt(crewmate.?.str("pane_id"), pane_id) and rt.eqlOpt(crewmate.?.str("task_id"), task_id) and rt.eqlOpt(crewmate.?.str("dispatch_id"), dispatch_id) and task != null and rt.eqlOpt(task.?.str("status"), "dispatched") and rt.eqlOpt(task.?.str("dispatch_id"), dispatch_id)
     else
-        worker == null or !rt.eqlOpt(worker.?.str("run_id"), run_id) or !rt.eqlOpt(worker.?.str("dispatch_id"), dispatch_id);
+        crewmate == null or !rt.eqlOpt(crewmate.?.str("run_id"), run_id) or !rt.eqlOpt(crewmate.?.str("dispatch_id"), dispatch_id);
     const run = state.getRun(s, run_id);
     if (run == null or !rt.eqlOpt(run.?.str("status"), "active")) return revoked(dispatch_id);
-    if (d == null or !rt.eqlOpt(d.?.str("run_id"), run_id) or !rt.eqlOpt(d.?.str("task_id"), task_id) or !rt.eqlOpt(d.?.str("worker"), name) or !rt.eqlOpt(d.?.str("pane_id"), pane_id) or d.?.truthy("settled_at")) return revoked(dispatch_id);
+    if (d == null or !rt.eqlOpt(d.?.str("run_id"), run_id) or !rt.eqlOpt(d.?.str("task_id"), task_id) or !rt.eqlOpt(d.?.str("crewmate"), name) or !rt.eqlOpt(d.?.str("pane_id"), pane_id) or d.?.truthy("settled_at")) return revoked(dispatch_id);
     if (task == null or !rt.eqlOpt(task.?.str("run_id"), run_id) or !binding_ok) return revoked(dispatch_id);
-    if (!registered and (!state.ready(s, task.?) or task.?.truthy("worker") or task.?.truthy("dispatch_id"))) return revoked(dispatch_id);
+    if (!registered and (!state.ready(s, task.?) or task.?.truthy("crewmate") or task.?.truthy("dispatch_id"))) return revoked(dispatch_id);
     try protectPane(s, pane_id, dispatch_id);
 }
 
@@ -157,12 +157,12 @@ const Admission = struct { run_id: []const u8, name: []const u8, task_id: []cons
 
 fn rollbackAdmissionTx(c: Admission, s: State) !void {
     const d = state.getDispatch(s, c.dispatch_id) orelse return;
-    if (!rt.eqlOpt(d.str("run_id"), c.run_id) or !rt.eqlOpt(d.str("worker"), c.name) or !rt.eqlOpt(d.str("task_id"), c.task_id) or d.truthy("settled_at")) return;
+    if (!rt.eqlOpt(d.str("run_id"), c.run_id) or !rt.eqlOpt(d.str("crewmate"), c.name) or !rt.eqlOpt(d.str("task_id"), c.task_id) or d.truthy("settled_at")) return;
     dispatch.settleDispatch(s, c.dispatch_id, "failed");
     const task = state.getTask(s, c.task_id) orelse return;
     const run = state.getRun(s, c.run_id);
     if (c.created and run != null and rt.eqlOpt(run.?.str("status"), "active") and rt.eqlOpt(task.str("run_id"), c.run_id) and rt.eqlOpt(task.str("status"), "pending") and
-        !task.truthy("worker") and !task.truthy("dispatch_id") and onlyDispatch(s, c.task_id, c.dispatch_id)) state.tasks(s).del(c.task_id);
+        !task.truthy("crewmate") and !task.truthy("dispatch_id") and onlyDispatch(s, c.task_id, c.dispatch_id)) state.tasks(s).del(c.task_id);
 }
 
 fn rollbackAdmission(c: Admission) !void {
@@ -183,14 +183,14 @@ fn matchingDoneReceipt(s: State, at: Attempt) ?*Obj {
 fn adoptionAttemptState(s: State, at: Attempt) AttemptState {
     const d = state.getDispatch(s, at.dispatch_id) orelse return .revoked;
     const task = state.getTask(s, at.task_id) orelse return .revoked;
-    if (!rt.eqlOpt(d.str("run_id"), at.run_id) or !rt.eqlOpt(d.str("worker"), at.name) or !rt.eqlOpt(d.str("task_id"), at.task_id) or !rt.eqlOpt(task.str("run_id"), at.run_id)) return .revoked;
+    if (!rt.eqlOpt(d.str("run_id"), at.run_id) or !rt.eqlOpt(d.str("crewmate"), at.name) or !rt.eqlOpt(d.str("task_id"), at.task_id) or !rt.eqlOpt(task.str("run_id"), at.run_id)) return .revoked;
     if (matchingDoneReceipt(s, at)) |receipt| {
         if (receipt.truthy("outcome") and d.truthy("settled_at") and rt.eqlOpt(d.str("outcome"), receipt.str("outcome"))) return .receipt;
     }
     const run = state.getRun(s, at.run_id);
-    const w = state.getWorker(s, at.name);
+    const w = state.getCrewmate(s, at.name);
     if (run != null and rt.eqlOpt(run.?.str("status"), "active") and !d.truthy("settled_at") and
-        rt.eqlOpt(task.str("status"), "dispatched") and rt.eqlOpt(task.str("worker"), at.name) and rt.eqlOpt(task.str("dispatch_id"), at.dispatch_id) and
+        rt.eqlOpt(task.str("status"), "dispatched") and rt.eqlOpt(task.str("crewmate"), at.name) and rt.eqlOpt(task.str("dispatch_id"), at.dispatch_id) and
         w != null and rt.eqlOpt(w.?.str("run_id"), at.run_id) and rt.eqlOpt(w.?.str("pane_id"), at.pane_id) and rt.eqlOpt(w.?.str("task_id"), at.task_id) and rt.eqlOpt(w.?.str("dispatch_id"), at.dispatch_id)) return .active;
     return .revoked;
 }
@@ -205,7 +205,7 @@ fn taskFromReceipt(s: State, claim: Claim, at: Attempt, receipt: *Obj) !*Obj {
     if (rt.eqlOpt(task.?.str("dispatch_id"), at.dispatch_id) and rt.eqlOpt(task.?.str("status"), receipt.str("outcome"))) return task.?;
     const t = claim.task.clone();
     t.put("status", receipt.get("outcome").?);
-    t.putStr("worker", at.name);
+    t.putStr("crewmate", at.name);
     t.putStr("dispatch_id", at.dispatch_id);
     t.putInt("attempts", (claim.task.int("attempts") orelse 0) + 1);
     t.put("updated_at", receipt.get("ts") orelse .null);
@@ -228,24 +228,24 @@ fn rollbackPromptTx(c: RollbackPrompt, s: State) ![]const u8 {
     } else if (c.claim.before) |before| {
         task.assign(before);
     }
-    state.workers(s).del(c.at.name);
+    state.crewmates(s).del(c.at.name);
     dispatch.settleDispatch(s, c.at.dispatch_id, "failed");
     return "rolled_back";
 }
 
-const ClaimCtx = struct { o: AdoptWorkerOpts, pane_id: []const u8, cwd: []const u8 };
+const ClaimCtx = struct { o: AdoptCrewmateOpts, pane_id: []const u8, cwd: []const u8 };
 
 fn claimTx(c: ClaimCtx, s: State) !Claim {
     const run_id = c.o.run.str("id") orelse "";
     const run = state.getRun(s, run_id);
     if (run == null or !rt.eqlOpt(run.?.str("status"), "active")) return fail("adoption_run_closed", "run {s} is closed or no longer exists", .{run_id});
-    if (state.getWorker(s, c.o.name)) |registered| {
+    if (state.getCrewmate(s, c.o.name)) |registered| {
         const rrun = state.getRun(s, registered.str("run_id") orelse "");
         const status = if (rrun) |r| r.str("status") orelse "undefined" else "missing";
-        return fail("adoption_worker_exists", "worker \"{s}\" is still recorded in run {s} ({s}); release or finish that lifecycle first", .{ c.o.name, registered.str("run_id") orelse "", status });
+        return fail("adoption_crewmate_exists", "crewmate \"{s}\" is still recorded in run {s} ({s}); release or finish that lifecycle first", .{ c.o.name, registered.str("run_id") orelse "", status });
     }
     try protectPane(s, c.pane_id, null);
-    workers.refuseStartInFlight(s, c.o.name, c.o.taskId, null, c.pane_id) catch |err| return fail("adoption_claim_conflict", "{s}", .{rt.errMessage(err)});
+    crewmates.refuseStartInFlight(s, c.o.name, c.o.taskId, null, c.pane_id) catch |err| return fail("adoption_claim_conflict", "{s}", .{rt.errMessage(err)});
 
     var task: *Obj = undefined;
     var created = false;
@@ -257,7 +257,7 @@ fn claimTx(c: ClaimCtx, s: State) !Claim {
         const f = found.?;
         const fid = f.str("id") orelse tid;
         const status = f.str("status") orelse "";
-        if (rt.eql(status, "dispatched")) return fail("adoption_task_dispatched", "task {s} is already dispatched to {s}", .{ fid, f.str("worker") orelse "null" });
+        if (rt.eql(status, "dispatched")) return fail("adoption_task_dispatched", "task {s} is already dispatched to {s}", .{ fid, f.str("crewmate") orelse "null" });
         if (rt.eql(status, "succeeded")) return fail("adoption_task_succeeded", "task {s} already succeeded", .{fid});
         if (rt.eql(status, "failed")) return fail("adoption_task_failed", "task {s} failed; set it back to pending before adoption", .{fid});
         try gates.assertTaskGatesApproved(s, fid);
@@ -281,12 +281,12 @@ fn claimTx(c: ClaimCtx, s: State) !Claim {
         created = true;
     }
     const dispatch_id = state.nextId(s, "d");
-    const text = workers.preamble(.{ .worker = c.o.name, .run = state.getRun(s, run_id).?, .task = task, .dispatchId = dispatch_id, .cwd = c.cwd, .explicitContext = true });
-    _ = try dispatch.createDispatch(s, .{ .id = dispatch_id, .task = task, .worker = c.o.name, .preamble = text, .cwd = c.cwd, .paneId = c.pane_id });
+    const text = crewmates.preamble(.{ .crewmate = c.o.name, .run = state.getRun(s, run_id).?, .task = task, .dispatchId = dispatch_id, .cwd = c.cwd, .explicitContext = true });
+    _ = try dispatch.createDispatch(s, .{ .id = dispatch_id, .task = task, .crewmate = c.o.name, .preamble = text, .cwd = c.cwd, .paneId = c.pane_id });
     return .{ .task = task.clone(), .dispatch_id = dispatch_id, .text = text, .cwd = c.cwd, .created = created, .before = before };
 }
 
-const RegisterCtx = struct { o: AdoptWorkerOpts, claim: Claim, pane_id: []const u8, initial: Target, final: Target };
+const RegisterCtx = struct { o: AdoptCrewmateOpts, claim: Claim, pane_id: []const u8, initial: Target, final: Target };
 
 fn firstStr(vals: []const ?[]const u8) ?[]const u8 {
     for (vals) |v| if (v) |x| return x;
@@ -305,7 +305,7 @@ fn registerTx(c: RegisterCtx, s: State) !*Obj {
     const task = state.getTask(s, c.claim.task.str("id").?).?;
     const fa = c.final.agent;
     const seq = seqOf(c.final, c.initial);
-    const worker = json.object(.{
+    const crewmate = json.object(.{
         .{ "name", c.o.name },
         .{ "run_id", run_id },
         .{ "kind", firstStr(&.{ fa.str("agent"), c.initial.agent.str("agent") }) orelse "unknown" },
@@ -328,13 +328,13 @@ fn registerTx(c: RegisterCtx, s: State) !*Obj {
         .{ "worktree", json.nul },
         .{ "awaiting_prompt", true },
     });
-    state.workers(s).put(c.o.name, worker.val());
+    state.crewmates(s).put(c.o.name, crewmate.val());
     task.putStr("status", "dispatched");
-    task.putStr("worker", c.o.name);
+    task.putStr("crewmate", c.o.name);
     task.putStr("dispatch_id", c.claim.dispatch_id);
     task.putInt("attempts", (task.int("attempts") orelse 0) + 1);
     task.putStr("updated_at", state.now());
-    return worker.clone();
+    return crewmate.clone();
 }
 
 const RetryCtx = struct { at: Attempt, dispatch_id: []const u8 };
@@ -346,9 +346,9 @@ fn canRetry(ctx: *anyopaque) anyerror!bool {
     return st == .active;
 }
 
-/// Bring a live, idle herdr agent into the run as a worker and dispatch a task to it. Returns { worker, task, pane_id }.
-pub fn adoptWorker(o: AdoptWorkerOpts) !*Obj {
-    if (!state.isWorkerName(o.name)) return fail("adoption_invalid_name", "worker name must match {s}", .{state.WORKER_NAME_PATTERN});
+/// Bring a live, idle herdr agent into the run as a crewmate and dispatch a task to it. Returns { crewmate, task, pane_id }.
+pub fn adoptCrewmate(o: AdoptCrewmateOpts) !*Obj {
+    if (!state.isCrewmateName(o.name)) return fail("adoption_invalid_name", "crewmate name must match {s}", .{state.CREWMATE_NAME_PATTERN});
     const has_task = o.taskId != null and o.taskId.?.len > 0;
     const has_spec = o.spec != null and o.spec.?.len > 0;
     if (has_task == has_spec) return fail("adoption_invalid_request", "pass exactly one of --task ID or --spec TEXT", .{});
@@ -372,12 +372,12 @@ pub fn adoptWorker(o: AdoptWorkerOpts) !*Obj {
         }
         return err;
     };
-    return json.object(.{ .{ "worker", completed.worker }, .{ "task", completed.task }, .{ "pane_id", pane_id } });
+    return json.object(.{ .{ "crewmate", completed.crewmate }, .{ "task", completed.task }, .{ "pane_id", pane_id } });
 }
 
-const Completed = struct { worker: *Obj, task: *Obj };
+const Completed = struct { crewmate: *Obj, task: *Obj };
 
-fn adoptFenced(o: AdoptWorkerOpts, claim: Claim, pane_id: []const u8, initial: Target, registered: *bool) !Completed {
+fn adoptFenced(o: AdoptCrewmateOpts, claim: Claim, pane_id: []const u8, initial: Target, registered: *bool) !Completed {
     const run_id = o.run.str("id") orelse "";
     const fence = try state.enterRunStartFence(run_id);
     defer state.leaveRunStartFence(fence);
@@ -387,32 +387,32 @@ fn adoptFenced(o: AdoptWorkerOpts, claim: Claim, pane_id: []const u8, initial: T
     }
     const task_id = claim.task.str("id").?;
     const at: Attempt = .{ .run_id = run_id, .name = o.name, .pane_id = pane_id, .task_id = task_id, .dispatch_id = claim.dispatch_id };
-    const registered_worker = try state.update(*Obj, RegisterCtx{ .o = o, .claim = claim, .pane_id = pane_id, .initial = initial, .final = final }, registerTx);
+    const registered_crewmate = try state.update(*Obj, RegisterCtx{ .o = o, .claim = claim, .pane_id = pane_id, .initial = initial, .final = final }, registerTx);
     registered.* = true;
 
     const seq = seqOf(final, initial).asInt() orelse 0;
     var retry_ctx: RetryCtx = .{ .at = at, .dispatch_id = claim.dispatch_id };
-    workers.promptWithRetry(pane_id, claim.text, seq, 2, false, .{ .ctx = &retry_ctx, .func = canRetry }) catch |err| {
+    crewmates.promptWithRetry(pane_id, claim.text, seq, 2, false, .{ .ctx = &retry_ctx, .func = canRetry }) catch |err| {
         const reason = rt.errMessage(err);
         const code = rt.errCode(err);
         const rolled = try state.update([]const u8, RollbackPrompt{ .claim = claim, .at = at }, rollbackPromptTx);
         if (rt.eql(rolled, "rolled_back")) {
             const keep = code != null and rt.startsWith(code.?, "adoption_");
-            return fail(if (keep) code.? else "adoption_prompt_failed", "adopted worker \"{s}\" did not receive dispatch {s} ({s}); its task claim was rolled back", .{ o.name, claim.dispatch_id, reason });
+            return fail(if (keep) code.? else "adoption_prompt_failed", "adopted crewmate \"{s}\" did not receive dispatch {s} ({s}); its task claim was rolled back", .{ o.name, claim.dispatch_id, reason });
         }
         if (rt.eql(rolled, "revoked")) return fail("adoption_claim_revoked", "adoption dispatch {s} was revoked without a matching done receipt", .{claim.dispatch_id});
     };
-    _ = try workers.markPrompted(o.name, .{ .runId = run_id, .taskId = task_id, .dispatchId = claim.dispatch_id });
+    _ = try crewmates.markPrompted(o.name, .{ .runId = run_id, .taskId = task_id, .dispatchId = claim.dispatch_id });
     const s = try state.load();
     const outcome = adoptionAttemptState(s, at);
     if (outcome == .revoked) return fail("adoption_claim_revoked", "adoption dispatch {s} was revoked without a matching done receipt", .{claim.dispatch_id});
     const task: ?*Obj = if (outcome == .receipt) try taskFromReceipt(s, claim, at, matchingDoneReceipt(s, at).?) else state.getTask(s, task_id);
-    const current = state.getWorker(s, o.name);
-    const worker: ?*Obj = if (current != null and rt.eqlOpt(current.?.str("run_id"), run_id) and rt.eqlOpt(current.?.str("pane_id"), pane_id) and rt.eqlOpt(current.?.str("task_id"), task_id) and rt.eqlOpt(current.?.str("dispatch_id"), claim.dispatch_id))
+    const current = state.getCrewmate(s, o.name);
+    const crewmate: ?*Obj = if (current != null and rt.eqlOpt(current.?.str("run_id"), run_id) and rt.eqlOpt(current.?.str("pane_id"), pane_id) and rt.eqlOpt(current.?.str("task_id"), task_id) and rt.eqlOpt(current.?.str("dispatch_id"), claim.dispatch_id))
         current
-    else if (outcome == .receipt) registered_worker else null;
-    if (worker == null or task == null) return fail("adoption_claim_revoked", "adoption dispatch {s} has no persisted attempt result", .{claim.dispatch_id});
-    return .{ .worker = worker.?, .task = task.? };
+    else if (outcome == .receipt) registered_crewmate else null;
+    if (crewmate == null or task == null) return fail("adoption_claim_revoked", "adoption dispatch {s} has no persisted attempt result", .{claim.dispatch_id});
+    return .{ .crewmate = crewmate.?, .task = task.? };
 }
 
 fn testInit(arena: *std.heap.ArenaAllocator) void {
@@ -437,9 +437,9 @@ test "snapshot copies the outcome" {
     defer arena.deinit();
     testInit(&arena);
     const files = json.strArr(&.{"a.ts"});
-    const task = json.object(.{ .{ "status", "pending" }, .{ "worker", json.nul }, .{ "dispatch_id", json.nul }, .{ "attempts", 1 }, .{ "updated_at", "t" }, .{ "outcome", json.object(.{ .{ "summary", "s" }, .{ "files_modified", files }, .{ "report_path", json.nul } }) } });
+    const task = json.object(.{ .{ "status", "pending" }, .{ "crewmate", json.nul }, .{ "dispatch_id", json.nul }, .{ "attempts", 1 }, .{ "updated_at", "t" }, .{ "outcome", json.object(.{ .{ "summary", "s" }, .{ "files_modified", files }, .{ "report_path", json.nul } }) } });
     const snap = snapshot(task);
     files.asArr().?.pushStr("b.ts");
     try std.testing.expectEqual(@as(usize, 1), snap.obj("outcome").?.arr("files_modified").?.len());
-    try std.testing.expectEqualStrings("{\"status\":\"pending\",\"worker\":null,\"dispatch_id\":null,\"attempts\":1,\"updated_at\":\"t\",\"outcome\":{\"summary\":\"s\",\"files_modified\":[\"a.ts\"],\"report_path\":null}}", json.stringify(snap.val(), false));
+    try std.testing.expectEqualStrings("{\"status\":\"pending\",\"crewmate\":null,\"dispatch_id\":null,\"attempts\":1,\"updated_at\":\"t\",\"outcome\":{\"summary\":\"s\",\"files_modified\":[\"a.ts\"],\"report_path\":null}}", json.stringify(snap.val(), false));
 }

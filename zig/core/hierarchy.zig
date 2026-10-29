@@ -17,7 +17,7 @@ fn lessDispatch(_: void, x: *Obj, y: *Obj) bool {
 pub fn assertTaskParentMutable(s: State, task: *Obj) !void {
     const id = task.str("id") orelse "";
     if (rt.eqlOpt(task.str("status"), "dispatched")) {
-        return hErr("TASK_PARENT_DISPATCHED", "cannot change parent of task {s} while it is dispatched to {s}", .{ id, task.str("worker") orelse "a worker" });
+        return hErr("TASK_PARENT_DISPATCHED", "cannot change parent of task {s} while it is dispatched to {s}", .{ id, task.str("crewmate") orelse "a crewmate" });
     }
     var open: std.ArrayListUnmanaged(*Obj) = .empty;
     if (s.obj("dispatches")) |ds| for (ds.objValues()) |d| {
@@ -26,7 +26,7 @@ pub fn assertTaskParentMutable(s: State, task: *Obj) !void {
     if (open.items.len == 0) return;
     std.sort.insertion(*Obj, open.items, {}, lessDispatch);
     const claim = open.items[0];
-    return hErr("TASK_PARENT_ACTIVE_CLAIM", "cannot change parent of task {s} while dispatch {s} to {s} is unsettled", .{ id, claim.str("id") orelse "", claim.str("worker") orelse "undefined" });
+    return hErr("TASK_PARENT_ACTIVE_CLAIM", "cannot change parent of task {s} while dispatch {s} to {s} is unsettled", .{ id, claim.str("id") orelse "", claim.str("crewmate") orelse "undefined" });
 }
 
 pub fn validateTaskParent(s: State, run_id: []const u8, task_id: []const u8, parent_id: ?[]const u8) !void {

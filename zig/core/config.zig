@@ -1,6 +1,7 @@
 const std = @import("std");
 const rt = @import("../rt.zig");
 const json = @import("json.zig");
+const renames = @import("renames.zig");
 const fs = @import("fs.zig");
 const paths = @import("paths.zig");
 const routing = @import("routing.zig");
@@ -8,23 +9,23 @@ const routing = @import("routing.zig");
 const Obj = json.Obj;
 const Value = json.Value;
 
-/// The config file document: { kind, routing?, kinds, placement?, worktree?, observer?, stall_minutes?, handoff?, ... }.
+/// The config file document: { kind, routing?, kinds, placement?, worktree?, navigator?, stall_minutes?, handoff?, ... }.
 pub const Config = *Obj;
 
 pub const PLACEMENTS = [_][]const u8{ "tab", "split" };
 pub const WORKTREE_MODES = [_][]const u8{ "on", "off", "leader", "shared" };
 
 pub const HandoffSettings = struct { enabled: bool, at_tokens: i64 };
-pub const Settings = struct { placement: []const u8, worktree: []const u8, observer: bool, review: bool, stall_minutes: i64, handoff: HandoffSettings };
+pub const Settings = struct { placement: []const u8, worktree: []const u8, navigator: bool, review: bool, stall_minutes: i64, handoff: HandoffSettings };
 
-pub const DEFAULT_SETTINGS: Settings = .{ .placement = "tab", .worktree = "leader", .observer = true, .review = true, .stall_minutes = 20, .handoff = .{ .enabled = false, .at_tokens = 200_000 } };
+pub const DEFAULT_SETTINGS: Settings = .{ .placement = "tab", .worktree = "leader", .navigator = true, .review = true, .stall_minutes = 20, .handoff = .{ .enabled = false, .at_tokens = 200_000 } };
 
 pub fn settingsOf(config: Config) Settings {
     const handoff = config.obj("handoff");
     return .{
         .placement = nonNullStr(config.get("placement")) orelse DEFAULT_SETTINGS.placement,
         .worktree = nonNullStr(config.get("worktree")) orelse DEFAULT_SETTINGS.worktree,
-        .observer = config.boolean("observer") orelse DEFAULT_SETTINGS.observer,
+        .navigator = config.boolean("navigator") orelse DEFAULT_SETTINGS.navigator,
         .review = config.boolean("review") orelse DEFAULT_SETTINGS.review,
         .stall_minutes = config.int("stall_minutes") orelse DEFAULT_SETTINGS.stall_minutes,
         .handoff = .{
@@ -44,7 +45,7 @@ pub fn settingsObj(st: Settings) *Obj {
     return json.object(.{
         .{ "placement", st.placement },
         .{ "worktree", st.worktree },
-        .{ "observer", st.observer },
+        .{ "navigator", st.navigator },
         .{ "review", st.review },
         .{ "stall_minutes", st.stall_minutes },
         .{ "handoff", json.object(.{ .{ "enabled", st.handoff.enabled }, .{ "at_tokens", st.handoff.at_tokens } }) },
@@ -133,7 +134,7 @@ fn validateConfig(value: Value) !Config {
 fn validateSettings(v: *const Obj) !void {
     if (v.get("placement")) |p| if (!(p == .str and rt.oneOf(p.str, &PLACEMENTS))) return invalidConfig("\"placement\" must be one of {s}", .{joinList(&PLACEMENTS)});
     if (v.get("worktree")) |w| if (!(w == .str and rt.oneOf(w.str, &WORKTREE_MODES))) return invalidConfig("\"worktree\" must be one of {s}", .{joinList(&WORKTREE_MODES)});
-    if (v.get("observer")) |o| if (o != .bool) return invalidConfig("\"observer\" must be true or false", .{});
+    if (v.get("navigator")) |o| if (o != .bool) return invalidConfig("\"navigator\" must be true or false", .{});
     if (v.get("review")) |o| if (o != .bool) return invalidConfig("\"review\" must be true or false", .{});
     if (v.get("stall_minutes")) |s| if (!isWholeAtLeast(s, 0)) return invalidConfig("\"stall_minutes\" must be a whole number of minutes, 0 for off", .{});
     const handoff = v.get("handoff") orelse return;
@@ -155,6 +156,7 @@ pub fn loadConfig() !Config {
         else => return rt.fail(null, "Cannot read configuration at {s}: {s}. Check that the file is readable, or move it aside and retry.", .{ file, fs.errText(err) }),
     };
     const value = json.parse(text_) catch return invalidConfig("invalid JSON ({s})", .{json.parseErrorMessage(text_)});
+    if (value.asObj()) |o| renames.migrateConfig(o);
     return validateConfig(value);
 }
 
@@ -165,7 +167,7 @@ pub fn saveConfig(config: Config) !Config {
     return config;
 }
 
-/// Whether the orchestrator reviews workers' code: the run's own `review` (set by
+/// Whether the orchestrator reviews crewmates' code: the run's own `review` (set by
 /// `run create --no-review`) wins over the settings.
 pub fn reviewFor(run: ?*const Obj) bool {
     if (run) |r| if (r.boolean("review")) |b| return b;
@@ -199,6 +201,6 @@ test "tokens and settings" {
     try std.testing.expectEqualStrings("{\"placement\":\"split\",\"kinds\":{\"claude\":{\"model\":\"opus\"}},\"kind\":null}", json.stringify(cfg.val(), false));
     const st = settingsOf(cfg);
     try std.testing.expectEqualStrings("split", st.placement);
-    try std.testing.expect(st.observer);
+    try std.testing.expect(st.navigator);
     try std.testing.expectError(error.Fail, validateConfig(try json.parse("{\"stall_minutes\":1.5}")));
 }

@@ -21,7 +21,7 @@ fn hostErr(comptime f: []const u8, args: anytype) error{Fail} {
 }
 
 pub fn validateHostName(name: []const u8) ![]const u8 {
-    if (!state.isWorkerName(name)) return hostErr("host name must match {s}", .{HOST_NAME_PATTERN});
+    if (!state.isCrewmateName(name)) return hostErr("host name must match {s}", .{HOST_NAME_PATTERN});
     return name;
 }
 
@@ -129,7 +129,7 @@ pub fn removeHost(name: []const u8) !void {
 }
 
 pub fn validateHostSnapshot(value: ?json.Value) !HostProfile {
-    const o = (if (value) |v| v.asObj() else null) orelse return hostErr("worker has an invalid execution-host snapshot", .{});
+    const o = (if (value) |v| v.asObj() else null) orelse return hostErr("crewmate has an invalid execution-host snapshot", .{});
     const rest = o.clone();
     rest.del("name");
     return validateProfile(o.str("name") orelse "", rest.val());

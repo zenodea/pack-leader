@@ -4,7 +4,7 @@ Most of a run is the leader waiting for messages and dealing with them. This pag
 
 ## The loop
 
-The leader starts every worker it can start right away, then waits:
+The leader starts every crewmate it can start right away, then waits:
 
 ```sh
 lodestar check --wait --timeout 540000
@@ -25,14 +25,14 @@ Only `--ack` marks a message handled. A plain `check`, or looking at a message i
 
 | Type | What happened | What the leader does |
 | --- | --- | --- |
-| `done` | The worker finished its task, `succeeded` or `failed` | Check the work, then give it another task, keep it, or release it |
-| `ask` | The worker is blocked on a question | `reply` to it. If the question came with options, pick one |
-| `note` | A worker wants the leader to know something | Read it, act if needed, ack it |
-| `escalation` | The worker needs the leader to act and keeps working meanwhile | Act (a follow-up, a spec change, a gate, a stop), then ack it |
-| `attention` | Lodestar noticed something: the worker went idle without a report, is blocked on a prompt, went quiet, or its pane is gone | Read its screen, then nudge it or release it |
-| `user` | You said something with `lodestar say` (or through the Advisor) | Treat it as an instruction from you |
+| `done` | The crewmate finished its task, `succeeded` or `failed` | Check the work, then give it another task, keep it, or release it |
+| `ask` | The crewmate is blocked on a question | `reply` to it. If the question came with options, pick one |
+| `note` | A crewmate wants the leader to know something | Read it, act if needed, ack it |
+| `escalation` | The crewmate needs the leader to act and keeps working meanwhile | Act (a follow-up, a spec change, a gate, a stop), then ack it |
+| `attention` | Lodestar noticed something: the crewmate went idle without a report, is blocked on a prompt, went quiet, or its pane is gone | Read its screen, then nudge it or release it |
+| `user` | You said something with `lodestar say` (or through the Navigator) | Treat it as an instruction from you |
 
-A worker that owes a report and shows no sign of life for 20 minutes raises a `stalled` alert. Change that with the stall setting, or `0` to turn it off.
+A crewmate that owes a report and shows no sign of life for 20 minutes raises a `stalled` alert. Change that with the stall setting, or `0` to turn it off.
 
 ## Answering questions
 
@@ -46,7 +46,7 @@ When a question has options, the answer has to be one of them. `--free` answers 
 
 ## Following up
 
-`send` gives one or more workers a follow-up. It's typed into the worker's prompt when it's ready for input, or queued for its next `inbox` check:
+`send` gives one or more crewmates a follow-up. It's typed into the crewmate's prompt when it's ready for input, or queued for its next `inbox` check:
 
 ```sh
 lodestar send parser "Also handle a UTF-8 BOM at the start of the file."
@@ -55,70 +55,70 @@ lodestar send @all "Report your test command and its output."
 
 | Address | Who gets it |
 | --- | --- |
-| `parser` | That worker |
-| `@all` | Every worker that still owes a report |
-| `@idle` | Every worker that's idle or done right now |
-| `@claude`, `@codex`, `@pi` | Every worker of that kind |
+| `parser` | That crewmate |
+| `@all` | Every crewmate that still owes a report |
+| `@idle` | Every crewmate that's idle or done right now |
+| `@claude`, `@codex`, `@pi` | Every crewmate of that kind |
 
-`--now` delivers straight away instead of waiting for the worker to be ready.
+`--now` delivers straight away instead of waiting for the crewmate to be ready.
 
 ## Seeing what's going on
 
 ```sh
-lodestar status                 # the run, its tasks and workers
+lodestar status                 # the run, its tasks and crewmates
 lodestar status --all           # every run, including closed ones
-lodestar worker list            # liveness, attention and the next thing to do, per worker
-lodestar worker read parser     # its screen, live or archived
-lodestar worker read parser --source transcript --turns 10
-lodestar worker focus parser    # bring its tab up
+lodestar crew list            # liveness, attention and the next thing to do, per crewmate
+lodestar crew read parser     # its screen, live or archived
+lodestar crew read parser --source transcript --turns 10
+lodestar crew focus parser    # bring its tab up
 ```
 
-Each worker row has:
+Each crewmate row has:
 
 - **liveness**: `live` (agent seen in its pane), `unverifiable` (pane there, no agent for 30 seconds) or `exited` (pane gone).
 - **attention**: what its unhandled messages are about, and whether any need action.
 - **next_action**: the exact command to run next, or `null` if nothing is needed.
 
-Idle isn't done. A worker sitting quietly at its prompt hasn't finished until it reports `done`, or there's proof it stopped.
+Idle isn't done. A crewmate sitting quietly at its prompt hasn't finished until it reports `done`, or there's proof it stopped.
 
 ## The sidebar
 
-On herdr, the **Workers** pane shows the run's goal and one box per worker: agent, runtime, state, task, and the last thing it said. An open question shows its choices.
+On herdr, the **Crewmates** pane shows the run's goal and one box per crewmate: agent, runtime, state, task, and the last thing it said. An open question shows its choices.
 
 | Key | Does |
 | --- | --- |
-| Click | Select a worker |
+| Click | Select a crewmate |
 | Enter, or click again | Open its tab |
 | `o` | Back to the leader |
 | `u` | Unread: reports, questions, notes and alerts the leader hasn't handled |
 | `y` | From you: your messages the leader hasn't picked up |
 | `j` / `k`, arrows | Move through a list |
-| Esc | Back out, from a message to the list to the workers |
+| Esc | Back out, from a message to the list to the crewmates |
 
 These views are read-only. Opening a message doesn't acknowledge it.
 
-Each worker tab has a two-line **Back to leader** bar on top: click it, or press Enter, `o` or Space while it has focus.
+Each crewmate tab has a two-line **Back to leader** bar on top: click it, or press Enter, `o` or Space while it has focus.
 
-With placement set to "beside the leader" there's no sidebar. The leader keeps the top left, the Advisor the bottom left, and workers fill the right half.
+With placement set to "beside the leader" there's no sidebar. The leader keeps the top left, the Navigator the bottom left, and crewmates fill the right half.
 
-## The Advisor
+## The Navigator
 
-The Advisor is a second agent under the leader, there to answer your questions about the run. It reads `lodestar observe` (the run, its workers, unread messages and the leader's last few turns) and, when you ask about a specific worker, that worker's screen.
+The Navigator is a second agent under the leader, there to answer your questions about the run. It reads `lodestar survey` (the run, its crewmates, unread messages and the leader's last few turns) and, when you ask about a specific crewmate, that crewmate's screen.
 
-It can't steer workers, acknowledge messages or edit files. If you want the leader to know something, tell the Advisor to pass it on, or say it yourself:
+It can't steer crewmates, acknowledge messages or edit files. If you want the leader to know something, tell the Navigator to pass it on, or say it yourself:
 
 ```sh
 lodestar say "Leave the docs task for last."
 ```
 
-`lodestar observer` reopens it if you closed it; `lodestar observer --close` closes it.
+`lodestar navigator` reopens it if you closed it; `lodestar navigator --close` closes it.
 
-## When a worker finishes
+## When a crewmate finishes
 
-After a `done` report, the leader does one of three things with the worker:
+After a `done` report, the leader does one of three things with the crewmate:
 
-1. **Reuse it**: `lodestar worker prompt parser --spec "…"` gives it the next task in the same session.
-2. **Keep it**: `lodestar worker retain parser`, when you want its pane left open.
-3. **Release it**: `lodestar worker release parser` saves its screen and closes its tab. A worktree it made is removed if it's clean; its branch is always kept.
+1. **Reuse it**: `lodestar crew prompt parser --spec "…"` gives it the next task in the same session.
+2. **Keep it**: `lodestar crew retain parser`, when you want its pane left open.
+3. **Release it**: `lodestar crew release parser` saves its screen and closes its tab. A worktree it made is removed if it's clean; its branch is always kept.
 
-To interrupt a worker mid-turn, `lodestar worker stop parser`. That's an interruption, not a report: the task stays open.
+To interrupt a crewmate mid-turn, `lodestar crew stop parser`. That's an interruption, not a report: the task stays open.

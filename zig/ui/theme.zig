@@ -64,10 +64,10 @@ pub fn herdrConfigFile() []const u8 {
     return fs.join(&.{ paths.herdr_home, "config.toml" });
 }
 
-pub fn loadThemeFrom(file: []const u8, pack_accent: ?[]const u8) Theme {
+pub fn loadThemeFrom(file: []const u8, crew_accent: ?[]const u8) Theme {
     var t: Theme = noTheme;
     if (fs.readFileOpt(file)) |text| t = parseTheme(text);
-    return .{ .accent = hexColor(pack_accent) orelse t.accent };
+    return .{ .accent = hexColor(crew_accent) orelse t.accent };
 }
 
 pub fn loadTheme() Theme {

@@ -261,7 +261,7 @@ fn httpFetch(url: []const u8, key: []const u8, body: []const u8, timeout_ms: i64
         .auth = std.fmt.allocPrint(gpa, "Bearer {s}", .{key}) catch return .{ .failure = "unavailable" },
         .body = gpa.dupe(u8, body) catch return .{ .failure = "unavailable" },
     };
-    const thread = std.Thread.spawn(.{}, fetchWorker, .{job}) catch return .{ .failure = "unavailable" };
+    const thread = std.Thread.spawn(.{}, fetchCrewmate, .{job}) catch return .{ .failure = "unavailable" };
     const deadline = rt.monoMs() + timeout_ms;
     while (!job.done.load(.acquire)) {
         if (rt.monoMs() >= deadline) {
@@ -277,7 +277,7 @@ fn httpFetch(url: []const u8, key: []const u8, body: []const u8, timeout_ms: i64
     };
 }
 
-fn fetchWorker(job: *Job) void {
+fn fetchCrewmate(job: *Job) void {
     job.outcome = doFetch(job.url, job.auth, job.body);
     job.done.store(true, .release);
 }

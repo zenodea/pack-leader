@@ -8,7 +8,7 @@ const shared = @import("../shared.zig");
 const mux = @import("../../mux/index.zig");
 const config = @import("../../core/config.zig");
 const routing = @import("../../core/routing.zig");
-const workers = @import("../../agents/workers.zig");
+const crewmates = @import("../../agents/crewmates.zig");
 const settings_ui = @import("../../ui/settings.zig");
 
 const Args = args_mod.Args;
@@ -50,7 +50,7 @@ fn applySettingFlags(c: *Obj, a: *const Args) !void {
         if (!inList(w, &WORKTREE_MODES)) return rt.fail(null, "--worktree-mode takes on, off, leader, shared", .{});
         c.putStr("worktree", w);
     }
-    if (has(a, "observer")) c.putBool("observer", try onOff(a, "observer"));
+    if (has(a, "navigator")) c.putBool("navigator", try onOff(a, "navigator"));
     if (has(a, "review")) c.putBool("review", try onOff(a, "review"));
     if (has(a, "stall-minutes")) {
         const n = args_mod.jsNumber(str(a, "stall-minutes") orelse "x");
@@ -67,7 +67,7 @@ fn routingOf(c: *Obj) json.Value {
 }
 
 fn kindOf(c: *Obj) []const u8 {
-    return c.str("kind") orelse workers.DEFAULT_KIND;
+    return c.str("kind") orelse crewmates.DEFAULT_KIND;
 }
 
 fn showPayload(c: *Obj) *Obj {
@@ -87,7 +87,7 @@ fn openSettings(from_action: bool) !void {
 }
 
 const KIND_FLAGS = [_][]const u8{ "kind", "model", "thinking", "clear-model", "clear-thinking", "default" };
-const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "observer", "review", "stall-minutes", "handoff", "handoff-at" };
+const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "navigator", "review", "stall-minutes", "handoff", "handoff-at" };
 
 fn anyFlag(a: *const Args, names: []const []const u8) bool {
     for (names) |n| if (has(a, n)) return true;

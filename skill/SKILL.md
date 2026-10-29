@@ -1,13 +1,13 @@
 ---
 name: lodestar
 description: >-
-  Orchestrate a team of worker coding agents inside herdr with the `lodestar` CLI:
-  delegate self-contained tasks to parallel workers in their own herdr tabs, supervise
+  Orchestrate a team of crewmate coding agents inside herdr with the `lodestar` CLI:
+  delegate self-contained tasks to parallel crewmates in their own herdr tabs, supervise
   them, answer their questions, wait for their reports, and keep the run state
   outside your own context. Use when the user asks to delegate, fan out, split
-  work across agents, spawn or supervise workers, run tasks in parallel, or
-  mentions Lodestar, a pack or team of agents, or an orchestrator. Also use when your prompt starts
-  with "[lodestar dispatch]": you are then a worker and must report through Lodestar.
+  work across agents, spawn or supervise crewmates, run tasks in parallel, or
+  mentions Lodestar, a crew or team of agents, or an orchestrator. Also use when your prompt starts
+  with "[lodestar dispatch]": you are then a crewmate and must report through Lodestar.
   Requires herdr (HERDR_ENV=1, HERDR_SOCKET_PATH or HERDR_PLUGIN_ID set).
 ---
 
@@ -25,8 +25,8 @@ and that the CLI is on PATH:
 ```
 
 If either check fails, say that Lodestar is not available here and stop. Do not
-substitute another subagent tool when the user asked for Lodestar, a pack, or
-supervised workers.
+substitute another subagent tool when the user asked for Lodestar, a crew, or
+supervised crewmates.
 
 Then load the guide before running any other lodestar command:
 
@@ -34,6 +34,6 @@ Then load the guide before running any other lodestar command:
 lodestar skill
 ```
 
-Follow it. If your prompt begins with `[lodestar dispatch]`, you are a worker: the
-preamble in that prompt is authoritative, and the guide's "Worker obligations"
+Follow it. If your prompt begins with `[lodestar dispatch]`, you are a crewmate: the
+preamble in that prompt is authoritative, and the guide's "Crewmate obligations"
 section applies to you. Otherwise you are the orchestrator.

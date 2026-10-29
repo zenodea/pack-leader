@@ -4,6 +4,7 @@ const json = @import("json.zig");
 const fs = @import("fs.zig");
 const time = @import("time.zig");
 const paths = @import("paths.zig");
+const renames = @import("renames.zig");
 
 const Obj = json.Obj;
 const Arr = json.Arr;
@@ -13,7 +14,7 @@ const Value = json.Value;
 pub const State = *Obj;
 pub const Run = *Obj;
 pub const Task = *Obj;
-pub const Worker = *Obj;
+pub const Crewmate = *Obj;
 pub const Message = *Obj;
 pub const Dispatch = *Obj;
 pub const Gate = *Obj;
@@ -34,10 +35,10 @@ pub fn maxRunDepth() i64 {
 
 pub fn emptyState() State {
     return json.object(.{
-        .{ "version", 1 },
+        .{ "version", 2 },
         .{ "runs", json.newObj() },
         .{ "tasks", json.newObj() },
-        .{ "workers", json.newObj() },
+        .{ "crewmates", json.newObj() },
         .{ "messages", json.newArr() },
         .{ "dispatches", json.newObj() },
         .{ "worktrees", json.newObj() },
@@ -52,8 +53,8 @@ pub fn runs(s: State) *Obj {
 pub fn tasks(s: State) *Obj {
     return s.ensureObj("tasks");
 }
-pub fn workers(s: State) *Obj {
-    return s.ensureObj("workers");
+pub fn crewmates(s: State) *Obj {
+    return s.ensureObj("crewmates");
 }
 pub fn messages(s: State) *Arr {
     return s.ensureArr("messages");
@@ -74,8 +75,8 @@ pub fn getRun(s: State, id: []const u8) ?Run {
 pub fn getTask(s: State, id: []const u8) ?Task {
     return tasks(s).obj(id);
 }
-pub fn getWorker(s: State, name: []const u8) ?Worker {
-    return workers(s).obj(name);
+pub fn getCrewmate(s: State, name: []const u8) ?Crewmate {
+    return crewmates(s).obj(name);
 }
 pub fn getDispatch(s: State, id: []const u8) ?Dispatch {
     const d = s.obj("dispatches") orelse return null;
@@ -93,7 +94,8 @@ fn readState(file: []const u8) !StateRead {
         return .{ .state = emptyState(), .corruption = rt.fmt("parse error: {s}", .{json.parseErrorMessage(raw)}) };
     };
     if (v.asObj()) |o| {
-        if (o.int("version") == @as(?i64, 1)) {
+        if (o.int("version") == @as(?i64, 1)) renames.migrateState(o);
+        if (o.int("version") == @as(?i64, 2)) {
             const merged = emptyState();
             merged.assign(o);
             return .{ .state = merged };
@@ -329,8 +331,8 @@ pub fn runTasks(s: State, run_id: []const u8) []Task {
     return filterStatus(tasks(s), "run_id", run_id);
 }
 
-pub fn runWorkers(s: State, run_id: []const u8) []Worker {
-    return filterStatus(workers(s), "run_id", run_id);
+pub fn runCrewmates(s: State, run_id: []const u8) []Crewmate {
+    return filterStatus(crewmates(s), "run_id", run_id);
 }
 
 pub fn runMessages(s: State, run_id: []const u8) []Message {
@@ -350,11 +352,11 @@ pub fn runDispatches(s: State, run_id: []const u8) []Dispatch {
     return list;
 }
 
-pub fn childRuns(s: State, run_id: []const u8, worker: []const u8) []Run {
+pub fn childRuns(s: State, run_id: []const u8, crewmate: []const u8) []Run {
     var list: std.ArrayListUnmanaged(*Obj) = .empty;
     for (activeRuns(s)) |r| {
         const p = r.obj("parent") orelse continue;
-        if (rt.eqlOpt(p.str("run_id"), run_id) and rt.eqlOpt(p.str("worker"), worker)) list.append(rt.a, r) catch @panic("out of memory");
+        if (rt.eqlOpt(p.str("run_id"), run_id) and rt.eqlOpt(p.str("crewmate"), crewmate)) list.append(rt.a, r) catch @panic("out of memory");
     }
     return list.items;
 }
@@ -367,8 +369,8 @@ pub fn orchestratorPane(r: Run) ?[]const u8 {
 }
 
 pub fn resolveRun(s: State, opts: ResolveOpts) !Run {
-    const is_worker = rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "worker") or rt.getenvNonEmpty("LODESTAR_WORKER") != null;
-    if (opts.run_id == null and opts.pane_id != null and is_worker) {
+    const is_crewmate = rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "crewmate") or rt.getenvNonEmpty("LODESTAR_CREWMATE") != null;
+    if (opts.run_id == null and opts.pane_id != null and is_crewmate) {
         for (activeRuns(s)) |r| {
             if (r.truthy("parent") and rt.eqlOpt(orchestratorPane(r), opts.pane_id)) return r;
         }
@@ -382,14 +384,14 @@ pub fn resolveRun(s: State, opts: ResolveOpts) !Run {
     const active = activeRuns(s);
     if (opts.pane_id) |pane| {
         for (active) |r| if (rt.eqlOpt(orchestratorPane(r), pane)) return r;
-        for (workers(s).objValues()) |w| {
+        for (crewmates(s).objValues()) |w| {
             if (w.truthy("execution_host") or !rt.eqlOpt(w.str("pane_id"), pane)) continue;
             const r = getRun(s, w.str("run_id") orelse continue) orelse continue;
             if (rt.eqlOpt(r.str("status"), "active")) return r;
         }
         for (active) |r| {
             if (rt.eqlOpt(r.str("sidebar_pane_id"), pane)) return r;
-            if (r.obj("observer")) |ob| if (rt.eqlOpt(ob.str("pane_id"), pane)) return r;
+            if (r.obj("navigator")) |ob| if (rt.eqlOpt(ob.str("pane_id"), pane)) return r;
         }
     }
     if (opts.workspace_id) |ws| {
@@ -441,7 +443,7 @@ pub fn unacked(s: State, run_id: []const u8) []Message {
 }
 
 /// `/^[a-z][a-z0-9_-]{0,31}$/`.
-pub fn isWorkerName(name: []const u8) bool {
+pub fn isCrewmateName(name: []const u8) bool {
     if (name.len < 1 or name.len > 32) return false;
     if (name[0] < 'a' or name[0] > 'z') return false;
     for (name[1..]) |ch| {
@@ -451,7 +453,7 @@ pub fn isWorkerName(name: []const u8) bool {
     return true;
 }
 
-pub const WORKER_NAME_PATTERN = "/^[a-z][a-z0-9_-]{0,31}$/";
+pub const CREWMATE_NAME_PATTERN = "/^[a-z][a-z0-9_-]{0,31}$/";
 
 const RUN_START_FENCE_TIMEOUT_MS: i64 = 120_000;
 
@@ -520,7 +522,7 @@ pub fn newTask(id: []const u8, run_id: []const u8, spec: []const u8, title: ?[]c
         .{ "spec", spec },
         .{ "status", "pending" },
         .{ "depends_on", json.strArr(depends_on) },
-        .{ "worker", json.nul },
+        .{ "crewmate", json.nul },
         .{ "dispatch_id", json.nul },
         .{ "attempts", 0 },
         .{ "created_at", t },
@@ -543,10 +545,10 @@ test "ids and names" {
     try std.testing.expectEqualStrings("10", base36(36));
     try std.testing.expectEqual(@as(i64, 36), idSeq("t10"));
     try std.testing.expectEqual(@as(i64, 0), idSeq("t"));
-    try std.testing.expect(isWorkerName("parser-2"));
-    try std.testing.expect(!isWorkerName("Parser"));
+    try std.testing.expect(isCrewmateName("parser-2"));
+    try std.testing.expect(!isCrewmateName("Parser"));
     try std.testing.expectEqualStrings("abc", firstLine("  abc\ndef"));
     const s = emptyState();
     try std.testing.expectEqualStrings("t1", nextId(s, "t"));
-    try std.testing.expectEqualStrings("{\"version\":1,\"runs\":{},\"tasks\":{},\"workers\":{},\"messages\":[],\"dispatches\":{},\"worktrees\":{},\"gates\":{},\"seq\":1}", json.stringify(s.val(), false));
+    try std.testing.expectEqualStrings("{\"version\":2,\"runs\":{},\"tasks\":{},\"crewmates\":{},\"messages\":[],\"dispatches\":{},\"worktrees\":{},\"gates\":{},\"seq\":1}", json.stringify(s.val(), false));
 }

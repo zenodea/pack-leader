@@ -3,7 +3,7 @@ const rt = @import("../rt.zig");
 const json = @import("../core/json.zig");
 const proc = @import("../core/proc.zig");
 const config = @import("../core/config.zig");
-const workers = @import("../agents/workers.zig");
+const crewmates = @import("../agents/crewmates.zig");
 const ansi = @import("ansi.zig");
 const term = @import("term.zig");
 const picker = @import("picker.zig");
@@ -64,7 +64,7 @@ pub fn placementLabel(p: []const u8) []const u8 {
 
 fn placementPhrase(p: []const u8) []const u8 {
     if (rt.eql(p, "tab")) return "each in a hidden tab of its own";
-    if (rt.eql(p, "split")) return "in the right half of your tab, each new one splitting the biggest worker the other way";
+    if (rt.eql(p, "split")) return "in the right half of your tab, each new one splitting the biggest crewmate the other way";
     return "undefined";
 }
 
@@ -89,7 +89,7 @@ pub const SettingsRow = struct {
 const HARNESS_DEFAULT: PickItem = .{ .value = "", .label = "harness default", .description = "pass nothing; the harness picks" };
 
 fn kindOf(c: Config) []const u8 {
-    return c.str("kind") orelse workers.DEFAULT_KIND;
+    return c.str("kind") orelse crewmates.DEFAULT_KIND;
 }
 
 fn kindDefaults(c: Config) *Obj {
@@ -129,8 +129,8 @@ fn sPlacement(c: Config) []const u8 {
 fn sWorktree(c: Config) []const u8 {
     return settings(c).str("worktree") orelse "leader";
 }
-fn sObserver(c: Config) bool {
-    return settings(c).boolean("observer") orelse true;
+fn sNavigator(c: Config) bool {
+    return settings(c).boolean("navigator") orelse true;
 }
 fn sReview(c: Config) bool {
     return settings(c).boolean("review") orelse true;
@@ -153,7 +153,7 @@ fn vHarness(c: Config) []const u8 {
     return kindOf(c);
 }
 fn cHarness(c: Config, ask: Ask) anyerror!void {
-    const v = try ask(.{ .title = "Workers run in", .items = &KINDS, .current = kindOf(c) });
+    const v = try ask(.{ .title = "Crewmates run in", .items = &KINDS, .current = kindOf(c) });
     if (v) |x| if (x.len > 0) c.putStr("kind", x);
 }
 
@@ -178,7 +178,7 @@ fn vPlacement(c: Config) []const u8 {
 }
 fn cPlacement(c: Config, ask: Ask) anyerror!void {
     const items = [_]PickItem{ .{ .value = "tab", .label = "hidden tabs" }, .{ .value = "split", .label = "beside the leader" } };
-    const v = try ask(.{ .title = "New workers open in", .items = &items, .current = sPlacement(c) });
+    const v = try ask(.{ .title = "New crewmates open in", .items = &items, .current = sPlacement(c) });
     if (v) |x| if (x.len > 0) c.putStr("placement", x);
 }
 
@@ -187,16 +187,16 @@ fn vWorktree(c: Config) []const u8 {
 }
 fn cWorktree(c: Config, ask: Ask) anyerror!void {
     const items = [_]PickItem{ .{ .value = "on", .label = "on" }, .{ .value = "off", .label = "off" }, .{ .value = "leader", .label = "leader decides" }, .{ .value = "shared", .label = "one shared worktree" } };
-    const v = try ask(.{ .title = "Git worktrees for workers", .items = &items, .current = sWorktree(c) });
+    const v = try ask(.{ .title = "Git worktrees for crewmates", .items = &items, .current = sWorktree(c) });
     if (v) |x| if (x.len > 0) c.putStr("worktree", x);
 }
 
-fn vObserver(c: Config) []const u8 {
-    return onOff(sObserver(c));
+fn vNavigator(c: Config) []const u8 {
+    return onOff(sNavigator(c));
 }
-fn cObserver(c: Config, ask: Ask) anyerror!void {
+fn cNavigator(c: Config, ask: Ask) anyerror!void {
     _ = ask;
-    c.putBool("observer", !sObserver(c));
+    c.putBool("navigator", !sNavigator(c));
 }
 
 fn vReview(c: Config) []const u8 {
@@ -245,14 +245,14 @@ fn cHandoffAt(c: Config, ask: Ask) anyerror!void {
 }
 
 pub const SETTINGS_ROWS = [_]SettingsRow{
-    .{ .section = "Workers", .label = "Harness", .help = "The agent new workers run in. Model and effort below belong to this harness.", .value = vHarness, .change = cHarness },
-    .{ .section = "Workers", .label = "Model", .help = "The model new workers get. Type a name that is not listed and press enter to use it.", .value = modelOrDefault, .change = cModel },
-    .{ .section = "Workers", .label = "Effort", .help = "The thinking level new workers get.", .value = thinkingOrDefault, .change = cEffort },
-    .{ .section = "Workers", .label = "Placement", .help = "hidden tabs: each worker in its own tab, shown in the sidebar. beside the leader: leader top left, observer below it, workers fill the right half; each new one splits the biggest worker the other way. Remote workers always get a tab.", .value = vPlacement, .change = cPlacement },
-    .{ .section = "Workers", .label = "Worktrees", .help = "on: every worker in a git repo gets its own worktree. off: no worker gets one. leader decides: the orchestrator picks per worker. one shared worktree: all workers of a run edit one checkout on branch lodestar/<run>/shared; each `done` commits that worker's files (retrying while git is busy) and `lodestar run merge` merges the branch back.", .value = vWorktree, .change = cWorktree },
-    .{ .section = "Orchestrator", .label = "Observer", .help = "The second agent under the leader that you can ask about the run. It never acts on the run.", .value = vObserver, .change = cObserver },
-    .{ .section = "Orchestrator", .label = "Review", .help = "on: the leader checks each worker's work before accepting its report. off: the leader only assigns work, answers questions and unsticks workers; it accepts reports without reviewing the code, and workers are told to verify their own work.", .value = vReview, .change = cReview },
-    .{ .section = "Orchestrator", .label = "Stall alert", .help = "How long a worker that owes a report can stay silent before the leader is told. LODESTAR_STALL_MS still wins when set.", .value = vStall, .change = cStall },
+    .{ .section = "Crew", .label = "Harness", .help = "The agent new crewmates run in. Model and effort below belong to this harness.", .value = vHarness, .change = cHarness },
+    .{ .section = "Crew", .label = "Model", .help = "The model new crewmates get. Type a name that is not listed and press enter to use it.", .value = modelOrDefault, .change = cModel },
+    .{ .section = "Crew", .label = "Effort", .help = "The thinking level new crewmates get.", .value = thinkingOrDefault, .change = cEffort },
+    .{ .section = "Crew", .label = "Placement", .help = "hidden tabs: each crewmate in its own tab, shown in the sidebar. beside the leader: leader top left, navigator below it, crewmates fill the right half; each new one splits the biggest crewmate the other way. Remote crewmates always get a tab.", .value = vPlacement, .change = cPlacement },
+    .{ .section = "Crew", .label = "Worktrees", .help = "on: every crewmate in a git repo gets its own worktree. off: no crewmate gets one. leader decides: the orchestrator picks per crewmate. one shared worktree: all crewmates of a run edit one checkout on branch lodestar/<run>/shared; each `done` commits that crewmate's files (retrying while git is busy) and `lodestar run merge` merges the branch back.", .value = vWorktree, .change = cWorktree },
+    .{ .section = "Orchestrator", .label = "Navigator", .help = "The second agent under the leader that you can ask about the run. It never acts on the run.", .value = vNavigator, .change = cNavigator },
+    .{ .section = "Orchestrator", .label = "Review", .help = "on: the leader checks each crewmate's work before accepting its report. off: the leader only assigns work, answers questions and unsticks crewmates; it accepts reports without reviewing the code, and crewmates are told to verify their own work.", .value = vReview, .change = cReview },
+    .{ .section = "Orchestrator", .label = "Stall alert", .help = "How long a crewmate that owes a report can stay silent before the leader is told. LODESTAR_STALL_MS still wins when set.", .value = vStall, .change = cStall },
     .{ .section = "Orchestrator", .label = "Handoff", .help = "Past the limit below, the leader writes a note, its session is cleared, and it resumes the run from the note and `lodestar status`.", .value = vHandoff, .change = cHandoff },
     .{ .section = "Orchestrator", .label = "Handoff at", .help = "The leader's context size that triggers a handoff. Keep it below the harness's own auto-compact point.", .value = vHandoffAt, .change = cHandoffAt },
 };
@@ -275,15 +275,15 @@ pub fn describeSettings(c: Config) []const u8 {
     const handoff = sHandoff(c);
     const wk = joinNonEmpty(&.{ kindOf(c), d.str("model"), d.str("thinking"), placementLabel(sPlacement(c)), rt.concat(&.{ "worktrees ", worktreeLabel(sWorktree(c)) }) }, " · ");
     const handoff_text = if (handoff.boolean("enabled") orelse false) rt.concat(&.{ "handoff at ", config.formatTokens(atTokens(c)) }) else "handoff off";
-    const leader = joinNonEmpty(&.{ rt.concat(&.{ "observer ", onOff(sObserver(c)) }), rt.concat(&.{ "review ", onOff(sReview(c)) }), rt.concat(&.{ "stall ", minutes(sStall(c)) }), handoff_text }, " · ");
-    return rt.concat(&.{ "workers: ", wk, " | leader: ", leader });
+    const leader = joinNonEmpty(&.{ rt.concat(&.{ "navigator ", onOff(sNavigator(c)) }), rt.concat(&.{ "review ", onOff(sReview(c)) }), rt.concat(&.{ "stall ", minutes(sStall(c)) }), handoff_text }, " · ");
+    return rt.concat(&.{ "crewmates: ", wk, " | leader: ", leader });
 }
 
 fn worktreeRule(m: []const u8) []const u8 {
-    if (rt.eql(m, "on")) return "on: every worker started in a git repository gets its own worktree without `--worktree`; pass `--worktree PATH` only to reuse a checkout.";
-    if (rt.eql(m, "off")) return "off: `--worktree` is refused; keep workers on separate files instead.";
-    if (rt.eql(m, "leader")) return "leader decides: pass `--worktree new` when two workers' edits could collide.";
-    if (rt.eql(m, "shared")) return "shared: every worker of the run starts in one shared worktree (see \"Run modes\"); `--worktree` or `--cwd` opts a worker out.";
+    if (rt.eql(m, "on")) return "on: every crewmate started in a git repository gets its own worktree without `--worktree`; pass `--worktree PATH` only to reuse a checkout.";
+    if (rt.eql(m, "off")) return "off: `--worktree` is refused; keep crewmates on separate files instead.";
+    if (rt.eql(m, "leader")) return "leader decides: pass `--worktree new` when two crewmates' edits could collide.";
+    if (rt.eql(m, "shared")) return "shared: every crewmate of the run starts in one shared worktree (see \"Run modes\"); `--worktree` or `--cwd` opts a crewmate out.";
     return "undefined";
 }
 
@@ -297,10 +297,10 @@ pub fn settingsInForce(c: Config) []const u8 {
         "",
         "The user sets these on the Lodestar settings page (`lodestar settings`). Flags you pass still win, except that worktrees set to off refuse `--worktree`.",
         "",
-        rt.fmt("- New workers: {s}, model {s}, effort {s}, {s}.", .{ kindOf(c), d.str("model") orelse "harness default", d.str("thinking") orelse "harness default", placementPhrase(sPlacement(c)) }),
+        rt.fmt("- New crewmates: {s}, model {s}, effort {s}, {s}.", .{ kindOf(c), d.str("model") orelse "harness default", d.str("thinking") orelse "harness default", placementPhrase(sPlacement(c)) }),
         rt.concat(&.{ "- Worktrees ", worktreeRule(sWorktree(c)) }),
-        rt.concat(&.{ "- Observer: ", if (sObserver(c)) "`run create` opens one under you." else "off; `run create` opens none." }),
-        rt.concat(&.{ "- Review: ", if (sReview(c)) "on: verify a worker's work before you accept its report." else "off (see \"Run modes\"): accept reports without reviewing the code; `run create --no-review` sets this per run too." }),
+        rt.concat(&.{ "- Navigator: ", if (sNavigator(c)) "`run create` opens one under you." else "off; `run create` opens none." }),
+        rt.concat(&.{ "- Review: ", if (sReview(c)) "on: verify a crewmate's work before you accept its report." else "off (see \"Run modes\"): accept reports without reviewing the code; `run create --no-review` sets this per run too." }),
         rt.concat(&.{ "- Stall alert: ", if (stall != 0) rt.fmt("after {s} of silence.", .{minutes(stall)}) else "off." }),
         rt.concat(&.{ "- Handoff: ", if (handoff_on) rt.fmt("on, past {s} tokens of your context (see Handoff).", .{config.formatTokens(atTokens(c))}) else "off." }),
         "",

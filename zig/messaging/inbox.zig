@@ -14,18 +14,18 @@ const Arr = json.Arr;
 const Value = json.Value;
 const State = state.State;
 const Run = state.Run;
-const Worker = state.Worker;
+const Crewmate = state.Crewmate;
 const Message = state.Message;
 
-pub const WorkerContext = struct { run_id: []const u8, worker: []const u8, task_id: ?[]const u8, dispatch_id: ?[]const u8 };
+pub const CrewmateContext = struct { run_id: []const u8, crewmate: []const u8, task_id: ?[]const u8, dispatch_id: ?[]const u8 };
 
-pub const WorkerContextOpts = struct { task: ?[]const u8 = null, dispatch: ?[]const u8 = null, worker: ?[]const u8 = null, run: ?[]const u8 = null };
+pub const CrewmateContextOpts = struct { task: ?[]const u8 = null, dispatch: ?[]const u8 = null, crewmate: ?[]const u8 = null, run: ?[]const u8 = null };
 
-pub fn workerContext(flags: WorkerContextOpts) !WorkerContext {
-    const worker = flags.worker orelse rt.getenv("LODESTAR_WORKER");
+pub fn crewmateContext(flags: CrewmateContextOpts) !CrewmateContext {
+    const crewmate = flags.crewmate orelse rt.getenv("LODESTAR_CREWMATE");
     const run_id = flags.run orelse rt.getenv("LODESTAR_RUN_ID");
-    if (worker == null or worker.?.len == 0 or run_id == null or run_id.?.len == 0) return rt.fail(null, "not a lodestar worker pane (LODESTAR_WORKER/LODESTAR_RUN_ID unset); pass --worker and --run", .{});
-    return .{ .run_id = run_id.?, .worker = worker.?, .task_id = flags.task orelse rt.getenv("LODESTAR_TASK_ID"), .dispatch_id = flags.dispatch orelse rt.getenv("LODESTAR_DISPATCH_ID") };
+    if (crewmate == null or crewmate.?.len == 0 or run_id == null or run_id.?.len == 0) return rt.fail(null, "not a lodestar crew pane (LODESTAR_CREWMATE/LODESTAR_RUN_ID unset); pass --crewmate and --run", .{});
+    return .{ .run_id = run_id.?, .crewmate = crewmate.?, .task_id = flags.task orelse rt.getenv("LODESTAR_TASK_ID"), .dispatch_id = flags.dispatch orelse rt.getenv("LODESTAR_DISPATCH_ID") };
 }
 
 const MAX_MESSAGES: usize = 2000;
@@ -171,7 +171,7 @@ pub fn renudgeMs() i64 {
 
 const RENUDGE_TYPES = [_][]const u8{ "done", "ask", "note", "escalation" };
 
-fn withinWorkerLifetime(s: State, w: Worker, m: Message) bool {
+fn withinCrewmateLifetime(s: State, w: Crewmate, m: Message) bool {
     if (!rt.eqlOpt(m.str("run_id"), w.str("run_id"))) return false;
     const since = parseMs(w.str("started_at")) orelse return true;
     var sent = m.str("ts");
@@ -184,10 +184,10 @@ fn withinWorkerLifetime(s: State, w: Worker, m: Message) bool {
     return at >= since;
 }
 
-pub fn dropUndelivered(s: State, w: Worker) i64 {
+pub fn dropUndelivered(s: State, w: Crewmate) i64 {
     var n: i64 = 0;
     for (state.messages(s).objs()) |m| {
-        if (!rt.eqlOpt(m.str("to"), w.str("name")) or m.truthy("acked") or !(isType(m, "followup") or isType(m, "reply")) or !withinWorkerLifetime(s, w, m)) continue;
+        if (!rt.eqlOpt(m.str("to"), w.str("name")) or m.truthy("acked") or !(isType(m, "followup") or isType(m, "reply")) or !withinCrewmateLifetime(s, w, m)) continue;
         m.putBool("acked", true);
         m.del("delivery_claim");
         m.del("delivery_unknown");
@@ -238,40 +238,40 @@ const StateWatcher = struct {
     }
 };
 
-pub fn touch(w: Worker) void {
+pub fn touch(w: Crewmate) void {
     w.putStr("last_seen", state.now());
     w.putNull("stalled_since");
 }
 
-const Current = struct { run: Run, worker: Worker, task: ?state.Task };
+const Current = struct { run: Run, crewmate: Crewmate, task: ?state.Task };
 
-fn requireCurrentWorker(s: State, ctx: WorkerContext) !Current {
+fn requireCurrentCrewmate(s: State, ctx: CrewmateContext) !Current {
     const run = state.getRun(s, ctx.run_id) orelse return rt.fail(null, "no run {s}", .{ctx.run_id});
     const run_id = run.str("id") orelse ctx.run_id;
     if (!rt.eqlOpt(run.str("status"), "active")) return rt.fail(null, "run {s} is closed", .{run_id});
-    const worker = state.getWorker(s, ctx.worker) orelse return rt.fail(null, "worker \"{s}\" is not registered in run {s}", .{ ctx.worker, run_id });
-    if (!rt.eqlOpt(worker.str("run_id"), run_id)) return rt.fail(null, "worker \"{s}\" is not registered in run {s}", .{ ctx.worker, run_id });
-    const wt = worker.str("task_id");
-    const wd = worker.str("dispatch_id");
+    const crewmate = state.getCrewmate(s, ctx.crewmate) orelse return rt.fail(null, "crewmate \"{s}\" is not registered in run {s}", .{ ctx.crewmate, run_id });
+    if (!rt.eqlOpt(crewmate.str("run_id"), run_id)) return rt.fail(null, "crewmate \"{s}\" is not registered in run {s}", .{ ctx.crewmate, run_id });
+    const wt = crewmate.str("task_id");
+    const wd = crewmate.str("dispatch_id");
     if (!rt.eqlOpt(ctx.task_id, wt) or !rt.eqlOpt(ctx.dispatch_id, wd)) {
-        return rt.fail(null, "stale worker context for \"{s}\": supplied task {s}/dispatch {s}, current task {s}/dispatch {s}", .{ ctx.worker, ctx.task_id orelse "none", ctx.dispatch_id orelse "none", wt orelse "none", wd orelse "none" });
+        return rt.fail(null, "stale crewmate context for \"{s}\": supplied task {s}/dispatch {s}, current task {s}/dispatch {s}", .{ ctx.crewmate, ctx.task_id orelse "none", ctx.dispatch_id orelse "none", wt orelse "none", wd orelse "none" });
     }
-    if (wt == null and wd == null) return .{ .run = run, .worker = worker, .task = null };
-    if (wt == null or wt.?.len == 0 or wd == null or wd.?.len == 0) return rt.fail(null, "worker \"{s}\" has an incomplete current task/dispatch binding", .{ctx.worker});
+    if (wt == null and wd == null) return .{ .run = run, .crewmate = crewmate, .task = null };
+    if (wt == null or wt.?.len == 0 or wd == null or wd.?.len == 0) return rt.fail(null, "crewmate \"{s}\" has an incomplete current task/dispatch binding", .{ctx.crewmate});
     const task = state.getTask(s, wt.?);
-    if (task == null or !rt.eqlOpt(task.?.str("run_id"), run_id) or !rt.eqlOpt(task.?.str("worker"), worker.str("name")) or !rt.eqlOpt(task.?.str("dispatch_id"), wd)) {
-        return rt.fail(null, "worker \"{s}\" has no current task binding for {s}/{s}", .{ ctx.worker, wt.?, wd.? });
+    if (task == null or !rt.eqlOpt(task.?.str("run_id"), run_id) or !rt.eqlOpt(task.?.str("crewmate"), crewmate.str("name")) or !rt.eqlOpt(task.?.str("dispatch_id"), wd)) {
+        return rt.fail(null, "crewmate \"{s}\" has no current task binding for {s}/{s}", .{ ctx.crewmate, wt.?, wd.? });
     }
     if (state.getDispatch(s, wd.?)) |d| {
-        if (!rt.eqlOpt(d.str("run_id"), run_id) or !rt.eqlOpt(d.str("worker"), worker.str("name")) or !rt.eqlOpt(d.str("task_id"), task.?.str("id"))) {
-            return rt.fail(null, "dispatch {s} is not bound to worker \"{s}\" and task {s}", .{ wd.?, ctx.worker, task.?.str("id") orelse "undefined" });
+        if (!rt.eqlOpt(d.str("run_id"), run_id) or !rt.eqlOpt(d.str("crewmate"), crewmate.str("name")) or !rt.eqlOpt(d.str("task_id"), task.?.str("id"))) {
+            return rt.fail(null, "dispatch {s} is not bound to crewmate \"{s}\" and task {s}", .{ wd.?, ctx.crewmate, task.?.str("id") orelse "undefined" });
         }
     }
-    return .{ .run = run, .worker = worker, .task = task };
+    return .{ .run = run, .crewmate = crewmate, .task = task };
 }
 
-pub fn meantFor(s: State, w: Worker, m: Message) bool {
-    if (!withinWorkerLifetime(s, w, m)) return false;
+pub fn meantFor(s: State, w: Crewmate, m: Message) bool {
+    if (!withinCrewmateLifetime(s, w, m)) return false;
     const wt = w.str("task_id");
     const wd = w.str("dispatch_id");
     const mt = m.str("task_id");
@@ -345,50 +345,50 @@ pub fn replyHint(ask_msg: Message) []const u8 {
     return rt.fmt("lodestar reply {s} --body {s}", .{ ask_msg.str("id") orelse "undefined", hint });
 }
 
-// ---- worker reports ----
+// ---- crewmate reports ----
 
 pub const DoneOpts = struct { outcome: []const u8, summary: []const u8, files: []const []const u8, reportPath: ?[]const u8, commit: ?*Obj = null };
 
-const DoneCtx = struct { ctx: WorkerContext, o: DoneOpts };
+const DoneCtx = struct { ctx: CrewmateContext, o: DoneOpts };
 const MsgRun = struct { msg: Message, run: Run };
 
 const DoneTarget = struct { cur: Current, task: *Obj, dispatch_id: ?[]const u8 };
 
 /// Everything `done` refuses, checked without changing state.
-fn validateDone(ctx: WorkerContext, s: State) !DoneTarget {
+fn validateDone(ctx: CrewmateContext, s: State) !DoneTarget {
     const raw_run = state.getRun(s, ctx.run_id) orelse return rt.fail(null, "no run {s}", .{ctx.run_id});
     const run_id = raw_run.str("id") orelse ctx.run_id;
     if (!rt.eqlOpt(raw_run.str("status"), "active")) return rt.fail(null, "run {s} is closed", .{run_id});
-    const raw_worker = state.getWorker(s, ctx.worker) orelse return rt.fail(null, "worker \"{s}\" is not registered in run {s}", .{ ctx.worker, run_id });
-    if (!rt.eqlOpt(raw_worker.str("run_id"), run_id)) return rt.fail(null, "worker \"{s}\" is not registered in run {s}", .{ ctx.worker, run_id });
-    const task_id = ctx.task_id orelse raw_worker.str("task_id");
+    const raw_crewmate = state.getCrewmate(s, ctx.crewmate) orelse return rt.fail(null, "crewmate \"{s}\" is not registered in run {s}", .{ ctx.crewmate, run_id });
+    if (!rt.eqlOpt(raw_crewmate.str("run_id"), run_id)) return rt.fail(null, "crewmate \"{s}\" is not registered in run {s}", .{ ctx.crewmate, run_id });
+    const task_id = ctx.task_id orelse raw_crewmate.str("task_id");
     const raw_task = if (task_id) |t| (if (t.len > 0) state.getTask(s, t) else null) else null;
     if (raw_task == null) return rt.fail(null, "no task {s}", .{tpl(task_id)});
-    const disp = ctx.dispatch_id orelse raw_worker.str("dispatch_id");
+    const disp = ctx.dispatch_id orelse raw_crewmate.str("dispatch_id");
     if (!rt.eqlOpt(raw_task.?.str("dispatch_id"), disp)) return rt.fail(null, "stale dispatch {s}: task {s} is on {s}. Use the IDs from your latest preamble.", .{ tpl(disp), raw_task.?.str("id") orelse "undefined", tpl(raw_task.?.str("dispatch_id")) });
     var c2 = ctx;
     c2.task_id = task_id;
     c2.dispatch_id = disp;
-    const cur = try requireCurrentWorker(s, c2);
+    const cur = try requireCurrentCrewmate(s, c2);
     const t = cur.task orelse return rt.fail(null, "no task {s}", .{tpl(task_id)});
     const tid = t.str("id") orelse "";
     if (!rt.eqlOpt(t.str("status"), "dispatched")) {
         const summary = if (t.obj("outcome")) |oc| oc.str("summary") orelse "no summary" else "no summary";
         return rt.fail(null, "task {s} is already {s} ({s}); nothing more to report for this dispatch", .{ tid, t.str("status") orelse "undefined", summary });
     }
-    const wname = cur.worker.str("name") orelse ctx.worker;
+    const wname = cur.crewmate.str("name") orelse ctx.crewmate;
     const open = state.childRuns(s, cur.run.str("id").?, wname);
     if (open.len > 0) {
         var ids: std.ArrayListUnmanaged([]const u8) = .empty;
         for (open) |r| ids.append(rt.a, r.str("id") orelse "") catch {};
         const many = open.len > 1;
-        return rt.fail(null, "you still coordinate sub-run{s} {s}: settle {s} workers and close {s} with `lodestar run close --run <id>` (or --release) before you report", .{ if (many) "s" else "", joinStrs(ids.items, ", "), if (many) "their" else "its", if (many) "them" else "it" });
+        return rt.fail(null, "you still coordinate sub-run{s} {s}: settle {s} crewmates and close {s} with `lodestar run close --run <id>` (or --release) before you report", .{ if (many) "s" else "", joinStrs(ids.items, ", "), if (many) "their" else "its", if (many) "them" else "it" });
     }
     return .{ .cur = cur, .task = t, .dispatch_id = disp };
 }
 
 /// The task a `done` from this context would settle; fails exactly as `done` would.
-pub fn doneTaskId(ctx: WorkerContext) ![]const u8 {
+pub fn doneTaskId(ctx: CrewmateContext) ![]const u8 {
     const d = try validateDone(ctx, try state.load());
     return d.task.str("id") orelse "";
 }
@@ -404,11 +404,11 @@ fn doneTx(c: DoneCtx, s: State) !MsgRun {
     t.putStr("updated_at", state.now());
     t.put("outcome", json.object(.{ .{ "summary", c.o.summary }, .{ "files_modified", json.strArr(c.o.files) }, .{ "report_path", json.optStr(c.o.reportPath) } }).val());
     dispatch.settleDispatch(s, disp, c.o.outcome);
-    touch(cur.worker);
+    touch(cur.crewmate);
     const msg = message(s, json.object(.{
         .{ "run_id", cur.run.get("id") },
         .{ "type", "done" },
-        .{ "from", ctx.worker },
+        .{ "from", ctx.crewmate },
         .{ "to", "orchestrator" },
         .{ "task_id", tid },
         .{ "dispatch_id", json.optStr(disp) },
@@ -421,59 +421,59 @@ fn doneTx(c: DoneCtx, s: State) !MsgRun {
     return .{ .msg = msg, .run = cur.run };
 }
 
-pub fn done(ctx: WorkerContext, o: DoneOpts) !Message {
+pub fn done(ctx: CrewmateContext, o: DoneOpts) !Message {
     const r = try state.update(MsgRun, DoneCtx{ .ctx = ctx, .o = o }, doneTx);
-    state.log(json.object(.{ .{ "event", "worker.done" }, .{ "run", r.run.get("id") }, .{ "worker", ctx.worker }, .{ "task", r.msg.get("task_id") }, .{ "outcome", o.outcome } }));
-    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: worker {s} reported {s} on task {s}. Run `lodestar check --wait --timeout 540000` and continue the run.", .{ ctx.worker, o.outcome, tpl(r.msg.str("task_id")) }));
+    state.log(json.object(.{ .{ "event", "crewmate.done" }, .{ "run", r.run.get("id") }, .{ "crewmate", ctx.crewmate }, .{ "task", r.msg.get("task_id") }, .{ "outcome", o.outcome } }));
+    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: crewmate {s} reported {s} on task {s}. Run `lodestar check --wait --timeout 540000` and continue the run.", .{ ctx.crewmate, o.outcome, tpl(r.msg.str("task_id")) }));
     return r.msg;
 }
 
-const BodyCtx = struct { ctx: WorkerContext, body: []const u8, phase: ?[]const u8 = null, kind: []const u8 = "" };
+const BodyCtx = struct { ctx: CrewmateContext, body: []const u8, phase: ?[]const u8 = null, kind: []const u8 = "" };
 
-fn workerMessageTx(c: BodyCtx, s: State) !MsgRun {
-    const cur = try requireCurrentWorker(s, c.ctx);
-    touch(cur.worker);
+fn crewmateMessageTx(c: BodyCtx, s: State) !MsgRun {
+    const cur = try requireCurrentCrewmate(s, c.ctx);
+    touch(cur.crewmate);
     const fields = json.object(.{
         .{ "run_id", cur.run.get("id") },
         .{ "type", c.kind },
-        .{ "from", cur.worker.get("name") },
+        .{ "from", cur.crewmate.get("name") },
         .{ "to", "orchestrator" },
-        .{ "task_id", cur.worker.get("task_id") },
-        .{ "dispatch_id", cur.worker.get("dispatch_id") },
+        .{ "task_id", cur.crewmate.get("task_id") },
+        .{ "dispatch_id", cur.crewmate.get("dispatch_id") },
         .{ "body", c.body },
     });
     if (rt.eql(c.kind, "heartbeat")) {
-        if (c.phase) |p| cur.worker.putStr("phase", p);
+        if (c.phase) |p| cur.crewmate.putStr("phase", p);
         fields.putBool("acked", true);
         fields.putStrIf("phase", c.phase);
     }
     return .{ .msg = message(s, fields), .run = cur.run };
 }
 
-pub fn heartbeat(ctx: WorkerContext, body: []const u8, phase: ?[]const u8) !Message {
+pub fn heartbeat(ctx: CrewmateContext, body: []const u8, phase: ?[]const u8) !Message {
     var p: ?[]const u8 = null;
     if (phase) |ph| {
         const x = state.utf16Slice(jsTrim(collapseWs(ph)), 40);
         if (x.len > 0) p = x;
     }
-    const r = try state.update(MsgRun, BodyCtx{ .ctx = ctx, .body = body, .phase = p, .kind = "heartbeat" }, workerMessageTx);
+    const r = try state.update(MsgRun, BodyCtx{ .ctx = ctx, .body = body, .phase = p, .kind = "heartbeat" }, crewmateMessageTx);
     return r.msg;
 }
 
-pub fn note(ctx: WorkerContext, body: []const u8) !Message {
-    const r = try state.update(MsgRun, BodyCtx{ .ctx = ctx, .body = body, .kind = "note" }, workerMessageTx);
+pub fn note(ctx: CrewmateContext, body: []const u8) !Message {
+    const r = try state.update(MsgRun, BodyCtx{ .ctx = ctx, .body = body, .kind = "note" }, crewmateMessageTx);
     const id = r.msg.str("id") orelse "";
-    state.log(json.object(.{ .{ "event", "worker.note" }, .{ "run", r.run.get("id") }, .{ "worker", ctx.worker }, .{ "id", id } }));
-    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: worker {s} left a note ({s}); it is not waiting on you. Run `lodestar check --wait --timeout 540000` and ack it with `--ack {s}`.", .{ ctx.worker, id, id }));
+    state.log(json.object(.{ .{ "event", "crewmate.note" }, .{ "run", r.run.get("id") }, .{ "crewmate", ctx.crewmate }, .{ "id", id } }));
+    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: crewmate {s} left a note ({s}); it is not waiting on you. Run `lodestar check --wait --timeout 540000` and ack it with `--ack {s}`.", .{ ctx.crewmate, id, id }));
     return r.msg;
 }
 
-pub fn escalate(ctx: WorkerContext, body: []const u8) !Message {
-    const r = try state.update(MsgRun, BodyCtx{ .ctx = ctx, .body = body, .kind = "escalation" }, workerMessageTx);
+pub fn escalate(ctx: CrewmateContext, body: []const u8) !Message {
+    const r = try state.update(MsgRun, BodyCtx{ .ctx = ctx, .body = body, .kind = "escalation" }, crewmateMessageTx);
     const id = r.msg.str("id") orelse "";
-    state.log(json.object(.{ .{ "event", "worker.escalation" }, .{ "run", r.run.get("id") }, .{ "worker", ctx.worker }, .{ "id", id } }));
+    state.log(json.object(.{ .{ "event", "crewmate.escalation" }, .{ "run", r.run.get("id") }, .{ "crewmate", ctx.crewmate }, .{ "id", id } }));
     const gist = state.utf16Slice(jsTrim(collapseWs(body)), 200);
-    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: worker {s} escalates ({s}) and needs you to act: {s}. Run `lodestar check --wait --timeout 540000`, act on it, and ack it with `--ack {s}`.", .{ ctx.worker, id, gist, id }));
+    _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: crewmate {s} escalates ({s}) and needs you to act: {s}. Run `lodestar check --wait --timeout 540000`, act on it, and ack it with `--ack {s}`.", .{ ctx.crewmate, id, gist, id }));
     return r.msg;
 }
 
@@ -506,31 +506,31 @@ pub const AskResult = struct {
     reply: ?Message = null,
 };
 
-const AskCtx = struct { ctx: WorkerContext, body: []const u8, options: []const []const u8 };
+const AskCtx = struct { ctx: CrewmateContext, body: []const u8, options: []const []const u8 };
 
 fn askTx(c: AskCtx, s: State) !MsgRun {
-    const cur = try requireCurrentWorker(s, c.ctx);
-    touch(cur.worker);
+    const cur = try requireCurrentCrewmate(s, c.ctx);
+    touch(cur.crewmate);
     const fields = json.object(.{
         .{ "run_id", cur.run.get("id") },
         .{ "type", "ask" },
-        .{ "from", cur.worker.get("name") },
+        .{ "from", cur.crewmate.get("name") },
         .{ "to", "orchestrator" },
-        .{ "task_id", cur.worker.get("task_id") },
-        .{ "dispatch_id", cur.worker.get("dispatch_id") },
+        .{ "task_id", cur.crewmate.get("task_id") },
+        .{ "dispatch_id", cur.crewmate.get("dispatch_id") },
         .{ "body", c.body },
     });
     if (c.options.len > 0) fields.put("options", json.strArr(c.options));
     return .{ .msg = message(s, fields), .run = cur.run };
 }
 
-const ResumeCtx = struct { ctx: WorkerContext, ask_id: []const u8 };
+const ResumeCtx = struct { ctx: CrewmateContext, ask_id: []const u8 };
 
 fn resumeTx(c: ResumeCtx, s: State) !Message {
     const ctx = c.ctx;
     const a = findMessage(s, c.ask_id);
-    if (a == null or !isType(a.?, "ask") or !rt.eqlOpt(a.?.str("run_id"), ctx.run_id) or !rt.eqlOpt(a.?.str("from"), ctx.worker)) {
-        return rt.fail(null, "no ask {s} from worker \"{s}\" in run {s}; pass the id your `lodestar ask` printed", .{ c.ask_id, ctx.worker, ctx.run_id });
+    if (a == null or !isType(a.?, "ask") or !rt.eqlOpt(a.?.str("run_id"), ctx.run_id) or !rt.eqlOpt(a.?.str("from"), ctx.crewmate)) {
+        return rt.fail(null, "no ask {s} from crewmate \"{s}\" in run {s}; pass the id your `lodestar ask` printed", .{ c.ask_id, ctx.crewmate, ctx.run_id });
     }
     var answered: ?Message = null;
     for (state.messages(s).objs()) |m| if (isType(m, "reply") and rt.eqlOpt(m.str("reply_to"), c.ask_id)) {
@@ -539,13 +539,13 @@ fn resumeTx(c: ResumeCtx, s: State) !Message {
     };
     if (answered) |ans| if (ans.truthy("acked")) return rt.fail(null, "ask {s} was already answered (reply {s}): {s}", .{ c.ask_id, ans.str("id") orelse "undefined", ans.str("body") orelse "undefined" });
     var current = false;
-    if (requireCurrentWorker(s, ctx)) |cur| {
+    if (requireCurrentCrewmate(s, ctx)) |cur| {
         current = rt.eqlOpt(a.?.str("task_id"), ctx.task_id) and rt.eqlOpt(a.?.str("dispatch_id"), ctx.dispatch_id);
-        if (current and answered == null) touch(cur.worker);
+        if (current and answered == null) touch(cur.crewmate);
     } else |err| {
         if (answered == null) return err;
     }
-    if (!current and answered == null) return rt.fail(null, "ask {s} belongs to a superseded worker dispatch and has no reply", .{c.ask_id});
+    if (!current and answered == null) return rt.fail(null, "ask {s} belongs to a superseded crewmate dispatch and has no reply", .{c.ask_id});
     return a.?;
 }
 
@@ -555,7 +555,7 @@ fn ackOneTx(c: AckOneCtx, s: State) !void {
     if (findMessage(s, c.id)) |r| r.putBool("acked", true);
 }
 
-pub fn ask(ctx: WorkerContext, o: AskOpts) !AskResult {
+pub fn ask(ctx: CrewmateContext, o: AskOpts) !AskResult {
     var ask_id: []const u8 = undefined;
     var options = normalizeOptions(o.options);
     if (o.resumeId == null or o.resumeId.?.len == 0) {
@@ -563,9 +563,9 @@ pub fn ask(ctx: WorkerContext, o: AskOpts) !AskResult {
         if (body.len == 0) return rt.fail(null, "pass the question, or --id to keep waiting on one", .{});
         const r = try state.update(MsgRun, AskCtx{ .ctx = ctx, .body = body, .options = options }, askTx);
         ask_id = r.msg.str("id") orelse "";
-        state.log(json.object(.{ .{ "event", "worker.ask" }, .{ "run", ctx.run_id }, .{ "worker", ctx.worker }, .{ "id", ask_id } }));
+        state.log(json.object(.{ .{ "event", "crewmate.ask" }, .{ "run", ctx.run_id }, .{ "crewmate", ctx.crewmate }, .{ "id", ask_id } }));
         const choices = if (options.len > 0) rt.fmt(" Options: {s} (answer with one, a unique prefix, or --free for free text).", .{formatOptions(options)}) else "";
-        _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: worker {s} asks a question ({s}).{s} Run `lodestar check --wait --timeout 540000` and answer it with `{s}`.", .{ ctx.worker, ask_id, choices, replyHint(r.msg) }));
+        _ = nudgeOrchestrator(r.run, rt.fmt("Lodestar: crewmate {s} asks a question ({s}).{s} Run `lodestar check --wait --timeout 540000` and answer it with `{s}`.", .{ ctx.crewmate, ask_id, choices, replyHint(r.msg) }));
     } else {
         ask_id = o.resumeId.?;
         const a = try state.update(Message, ResumeCtx{ .ctx = ctx, .ask_id = ask_id }, resumeTx);
@@ -589,27 +589,27 @@ pub fn ask(ctx: WorkerContext, o: AskOpts) !AskResult {
             try state.update(void, AckOneCtx{ .id = rm.str("id") orelse "" }, ackOneTx);
             return .{ .result = "reply", .ask_id = ask_id, .options = options, .reply = rm };
         }
-        const w = state.getWorker(s, ctx.worker);
+        const w = state.getCrewmate(s, ctx.crewmate);
         const released = w == null or !rt.eqlOpt(w.?.str("run_id"), ctx.run_id) or blk: {
             const st = parseMs(w.?.str("started_at")) orelse break :blk false;
             const at = parseMs(asked_at) orelse break :blk false;
             break :blk st > at;
         };
-        if (released) return rt.fail(null, "worker \"{s}\" was released while waiting on ask {s}; no answer will come", .{ ctx.worker, ask_id });
-        _ = requireCurrentWorker(s, ctx) catch |err| return rt.fail(null, "worker \"{s}\" no longer has authority for ask {s}: {s}", .{ ctx.worker, ask_id, rt.errMessage(err) });
+        if (released) return rt.fail(null, "crewmate \"{s}\" was released while waiting on ask {s}; no answer will come", .{ ctx.crewmate, ask_id });
+        _ = requireCurrentCrewmate(s, ctx) catch |err| return rt.fail(null, "crewmate \"{s}\" no longer has authority for ask {s}: {s}", .{ ctx.crewmate, ask_id, rt.errMessage(err) });
         const left = deadline - rt.nowMs();
         if (left < 0) return .{ .result = "timeout", .ask_id = ask_id, .options = options };
         _ = changes.next(@min(ASK_TICK_MS, left + 1));
     }
 }
 
-const InboxCtx = struct { ctx: WorkerContext };
+const InboxCtx = struct { ctx: CrewmateContext };
 
 fn inboxTx(c: InboxCtx, s: State) ![]Message {
-    const cur = try requireCurrentWorker(s, c.ctx);
+    const cur = try requireCurrentCrewmate(s, c.ctx);
     var mine: std.ArrayListUnmanaged(Message) = .empty;
     for (state.messages(s).objs()) |m| {
-        if (!rt.eqlOpt(m.str("run_id"), cur.run.str("id")) or !rt.eqlOpt(m.str("to"), cur.worker.str("name")) or !(isType(m, "followup") or isType(m, "reply")) or m.truthy("acked") or !meantFor(s, cur.worker, m)) continue;
+        if (!rt.eqlOpt(m.str("run_id"), cur.run.str("id")) or !rt.eqlOpt(m.str("to"), cur.crewmate.str("name")) or !(isType(m, "followup") or isType(m, "reply")) or m.truthy("acked") or !meantFor(s, cur.crewmate, m)) continue;
         if (m.obj("delivery_claim")) |claim| if (deliveryClaimIsActive(claim)) continue;
         m.del("delivery_claim");
         m.del("delivery_unknown");
@@ -620,7 +620,7 @@ fn inboxTx(c: InboxCtx, s: State) ![]Message {
     return mine.items;
 }
 
-pub fn inbox(ctx: WorkerContext) ![]Message {
+pub fn inbox(ctx: CrewmateContext) ![]Message {
     return state.update([]Message, InboxCtx{ .ctx = ctx }, inboxTx);
 }
 
@@ -671,23 +671,23 @@ pub fn reply(run: Run, ask_id: []const u8, body: []const u8, o: ReplyOpts) !Mess
 
 pub const Sent = struct { message: Message, delivered: bool };
 
-const SendCtx = struct { run_id: []const u8, worker: []const u8, body: []const u8, from: []const u8, sender: ?WorkerContext };
+const SendCtx = struct { run_id: []const u8, crewmate: []const u8, body: []const u8, from: []const u8, sender: ?CrewmateContext };
 const SendPlan = struct { msg: Message, waiting: bool, target: []const u8, execution_host: ?Value };
 
 fn sendTx(c: SendCtx, s: State) !SendPlan {
     const current_run = state.getRun(s, c.run_id) orelse return rt.fail(null, "no run {s}", .{c.run_id});
     const run_id = current_run.str("id") orelse c.run_id;
     if (!rt.eqlOpt(current_run.str("status"), "active")) return rt.fail(null, "run {s} is closed", .{c.run_id});
-    const sender: ?Worker = if (c.sender) |sc| (try requireCurrentWorker(s, sc)).worker else null;
-    const w = state.getWorker(s, c.worker) orelse return rt.fail(null, "no worker \"{s}\" in run {s}", .{ c.worker, c.run_id });
-    if (sender) |snd| if (!rt.eqlOpt(w.str("run_id"), snd.str("run_id"))) return rt.fail(null, "worker \"{s}\" belongs to run {s}, not your run {s}; workers can only message workers of their own run", .{ c.worker, tpl(w.str("run_id")), tpl(snd.str("run_id")) });
-    if (!rt.eqlOpt(w.str("run_id"), run_id)) return rt.fail(null, "no worker \"{s}\" in run {s}", .{ c.worker, c.run_id });
+    const sender: ?Crewmate = if (c.sender) |sc| (try requireCurrentCrewmate(s, sc)).crewmate else null;
+    const w = state.getCrewmate(s, c.crewmate) orelse return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ c.crewmate, c.run_id });
+    if (sender) |snd| if (!rt.eqlOpt(w.str("run_id"), snd.str("run_id"))) return rt.fail(null, "crewmate \"{s}\" belongs to run {s}, not your run {s}; crewmates can only message crewmates of their own run", .{ c.crewmate, tpl(w.str("run_id")), tpl(snd.str("run_id")) });
+    if (!rt.eqlOpt(w.str("run_id"), run_id)) return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ c.crewmate, c.run_id });
     if (sender) |snd| touch(snd);
     const msg = message(s, json.object(.{
         .{ "run_id", run_id },
         .{ "type", "followup" },
         .{ "from", c.from },
-        .{ "to", c.worker },
+        .{ "to", c.crewmate },
         .{ "task_id", w.get("task_id") },
         .{ "dispatch_id", w.get("dispatch_id") },
         .{ "body", c.body },
@@ -695,12 +695,12 @@ fn sendTx(c: SendCtx, s: State) !SendPlan {
     }));
     const host = w.get("execution_host");
     const has_host = if (host) |h| h.truthy() else false;
-    return .{ .msg = msg, .waiting = w.truthy("awaiting_prompt"), .target = deliveryTarget(w, c.worker), .execution_host = if (has_host) host else null };
+    return .{ .msg = msg, .waiting = w.truthy("awaiting_prompt"), .target = deliveryTarget(w, c.crewmate), .execution_host = if (has_host) host else null };
 }
 
-pub fn send(run: Run, worker: []const u8, body: []const u8, force: bool, from: []const u8, sender_context: ?WorkerContext) !Sent {
+pub fn send(run: Run, crewmate: []const u8, body: []const u8, force: bool, from: []const u8, sender_context: ?CrewmateContext) !Sent {
     const run_id = run.str("id") orelse "";
-    const plan = try state.update(SendPlan, SendCtx{ .run_id = run_id, .worker = worker, .body = body, .from = from, .sender = sender_context }, sendTx);
+    const plan = try state.update(SendPlan, SendCtx{ .run_id = run_id, .crewmate = crewmate, .body = body, .from = from, .sender = sender_context }, sendTx);
     var ready = false;
     var seq: ?i64 = null;
     probe: {
@@ -710,8 +710,8 @@ pub fn send(run: Run, worker: []const u8, body: []const u8, force: bool, from: [
         ready = !plan.waiting and (force or mux.atRest(a.str("agent_status")));
         seq = safeSeq(a);
     }
-    const delivered = if (ready) try deliver(plan.msg.str("id").?, worker, body, from, seq) else false;
-    state.log(json.object(.{ .{ "event", if (rt.eql(from, "orchestrator")) "orchestrator.send" else "worker.send" }, .{ "run", run_id }, .{ "from", from }, .{ "to", worker }, .{ "delivered", delivered } }));
+    const delivered = if (ready) try deliver(plan.msg.str("id").?, crewmate, body, from, seq) else false;
+    state.log(json.object(.{ .{ "event", if (rt.eql(from, "orchestrator")) "orchestrator.send" else "crewmate.send" }, .{ "run", run_id }, .{ "from", from }, .{ "to", crewmate }, .{ "delivered", delivered } }));
     const current = if (state.load()) |s| findMessage(s, plan.msg.str("id").?) else |_| null;
     return .{ .message = current orelse plan.msg, .delivered = delivered };
 }
@@ -725,21 +725,21 @@ fn safeSeq(a: *Obj) ?i64 {
     return n;
 }
 
-const GROUP_HELP = "@all (dispatched workers), @idle (idle or done), @<kind> (e.g. @claude)";
+const GROUP_HELP = "@all (dispatched crewmates), @idle (idle or done), @<kind> (e.g. @claude)";
 
 pub fn expandAddress(s: State, run: Run, address: []const u8) ![]const []const u8 {
     const run_id = run.str("id") orelse "";
-    const ws = state.runWorkers(s, run_id);
+    const ws = state.runCrewmates(s, run_id);
     if (!rt.startsWith(address, "@")) {
-        const w = state.getWorker(s, address);
-        if (w == null or !rt.eqlOpt(w.?.str("run_id"), run_id)) return rt.fail(null, "no worker \"{s}\" in run {s}", .{ address, run_id });
+        const w = state.getCrewmate(s, address);
+        if (w == null or !rt.eqlOpt(w.?.str("run_id"), run_id)) return rt.fail(null, "no crewmate \"{s}\" in run {s}", .{ address, run_id });
         const out = rt.a.alloc([]const u8, 1) catch @panic("out of memory");
         out[0] = w.?.str("name") orelse address;
         return out;
     }
     const group = address[1..];
     if (group.len == 0) return rt.fail(null, "empty group address \"@\"; use {s}", .{GROUP_HELP});
-    if (ws.len == 0) return rt.fail(null, "{s} matched nobody: run {s} has no workers", .{ address, run_id });
+    if (ws.len == 0) return rt.fail(null, "{s} matched nobody: run {s} has no crewmates", .{ address, run_id });
     var names: std.ArrayListUnmanaged([]const u8) = .empty;
     var why: []const u8 = "";
     var parts: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -750,7 +750,7 @@ pub fn expandAddress(s: State, run: Run, address: []const u8) ![]const []const u
             const st = if (w.strNonEmpty("task_id")) |tid| (if (state.getTask(s, tid)) |tt| tt.str("status") orelse "no task" else "no task") else "no task";
             parts.append(rt.a, rt.fmt("{s}: {s}", .{ w.str("name") orelse "undefined", st })) catch {};
         }
-        why = rt.fmt("no worker in run {s} has a dispatched task ({s})", .{ run_id, joinStrs(parts.items, ", ") });
+        why = rt.fmt("no crewmate in run {s} has a dispatched task ({s})", .{ run_id, joinStrs(parts.items, ", ") });
     } else if (rt.eql(group, "idle")) {
         var local_by_pane = std.StringHashMapUnmanaged([]const u8).empty;
         var any_local = false;
@@ -761,11 +761,11 @@ pub fn expandAddress(s: State, run: Run, address: []const u8) ![]const []const u
             const agents = mux.listAgents() catch |err| return rt.fail(null, "@idle needs local herdr status and herdr did not answer: {s}", .{rt.errMessage(err)});
             for (agents) |ag| local_by_pane.put(rt.a, ag.str("pane_id") orelse "", ag.str("agent_status") orelse "unknown") catch {};
         }
-        var status_by_worker = std.StringHashMapUnmanaged([]const u8).empty;
+        var status_by_crewmate = std.StringHashMapUnmanaged([]const u8).empty;
         for (ws) |w| {
             const name = w.str("name") orelse "";
             if (!w.truthy("execution_host")) {
-                if (local_by_pane.get(w.str("pane_id") orelse "")) |st| status_by_worker.put(rt.a, name, st) catch {};
+                if (local_by_pane.get(w.str("pane_id") orelse "")) |st| status_by_crewmate.put(rt.a, name, st) catch {};
                 continue;
             }
             const host = w.get("execution_host").?;
@@ -774,14 +774,14 @@ pub fn expandAddress(s: State, run: Run, address: []const u8) ![]const []const u
                 const host_name = if (host.asObj()) |h| h.str("name") orelse "undefined" else "undefined";
                 return rt.fail(null, "@idle needs remote herdr status for host {s}: {s}", .{ host_name, rt.errMessage(err) });
             };
-            status_by_worker.put(rt.a, name, st) catch {};
+            status_by_crewmate.put(rt.a, name, st) catch {};
         }
         for (ws) |w| {
             const name = w.str("name") orelse "";
-            if (mux.atRest(status_by_worker.get(name))) names.append(rt.a, name) catch {};
-            parts.append(rt.a, rt.fmt("{s}: {s}", .{ name, status_by_worker.get(name) orelse "no agent" })) catch {};
+            if (mux.atRest(status_by_crewmate.get(name))) names.append(rt.a, name) catch {};
+            parts.append(rt.a, rt.fmt("{s}: {s}", .{ name, status_by_crewmate.get(name) orelse "no agent" })) catch {};
         }
-        why = rt.fmt("no worker in run {s} is idle or done right now ({s})", .{ run_id, joinStrs(parts.items, ", ") });
+        why = rt.fmt("no crewmate in run {s} is idle or done right now ({s})", .{ run_id, joinStrs(parts.items, ", ") });
     } else {
         var kinds: std.ArrayListUnmanaged([]const u8) = .empty;
         for (ws) |w| {
@@ -793,7 +793,7 @@ pub fn expandAddress(s: State, run: Run, address: []const u8) ![]const []const u
             };
             if (!seen) kinds.append(rt.a, kind) catch {};
         }
-        why = rt.fmt("no worker of kind \"{s}\" in run {s} (kinds: {s})", .{ group, run_id, joinStrs(kinds.items, ", ") });
+        why = rt.fmt("no crewmate of kind \"{s}\" in run {s} (kinds: {s})", .{ group, run_id, joinStrs(kinds.items, ", ") });
     }
     if (names.items.len == 0) return rt.fail(null, "{s} matched nobody: {s}", .{ address, why });
     return names.items;
@@ -806,8 +806,8 @@ fn remoteStatus(host: Value, pane: []const u8) ![]const u8 {
     return a.str("agent_status") orelse "unknown";
 }
 
-fn recipient(worker: []const u8, message_id: ?[]const u8, delivered: bool, err: ?[]const u8) Value {
-    const r = json.object(.{ .{ "worker", worker }, .{ "message_id", json.optStr(message_id) }, .{ "delivered", delivered } });
+fn recipient(crewmate: []const u8, message_id: ?[]const u8, delivered: bool, err: ?[]const u8) Value {
+    const r = json.object(.{ .{ "crewmate", crewmate }, .{ "message_id", json.optStr(message_id) }, .{ "delivered", delivered } });
     r.putStrIf("error", err);
     return r.val();
 }
@@ -835,11 +835,11 @@ pub fn sendTo(run: Run, address: []const u8, body: []const u8, force: bool) !*Ob
     return out;
 }
 
-pub fn workerSend(ctx: WorkerContext, to: []const u8, body: []const u8, force: bool) !*Obj {
-    if (rt.startsWith(to, "@")) return rt.fail(null, "group addresses like {s} are for the orchestrator only; a worker sends to one worker by name", .{to});
-    if (rt.eql(to, ctx.worker)) return rt.fail(null, "worker \"{s}\" cannot send to itself", .{ctx.worker});
+pub fn crewmateSend(ctx: CrewmateContext, to: []const u8, body: []const u8, force: bool) !*Obj {
+    if (rt.startsWith(to, "@")) return rt.fail(null, "group addresses like {s} are for the orchestrator only; a crewmate sends to one crewmate by name", .{to});
+    if (rt.eql(to, ctx.crewmate)) return rt.fail(null, "crewmate \"{s}\" cannot send to itself", .{ctx.crewmate});
     const run = state.getRun(try state.load(), ctx.run_id) orelse return rt.fail(null, "no run {s}", .{ctx.run_id});
-    const r = try send(run, to, body, force, ctx.worker, ctx);
+    const r = try send(run, to, body, force, ctx.crewmate, ctx);
     const recipients = json.newArr();
     recipients.push(recipient(to, r.message.str("id"), r.delivered, null));
     return json.object(.{ .{ "address", to }, .{ "recipients", recipients }, .{ "message", r.message }, .{ "delivered", r.delivered } });
@@ -863,13 +863,13 @@ fn followupPrompt(id: []const u8, body: []const u8, from: []const u8, owes_repor
     const head = if (rt.eql(from, "orchestrator"))
         rt.fmt("[Lodestar follow-up from the orchestrator] {s}\n[Lodestar message id: {s}]", .{ body, id })
     else
-        rt.fmt("[lodestar follow-up from worker {s}] {s}\n[Lodestar message id: {s}]", .{ from, body, id });
+        rt.fmt("[lodestar follow-up from crewmate {s}] {s}\n[Lodestar message id: {s}]", .{ from, body, id });
     return if (owes_report) rt.concat(&.{ head, "\n", CONTINUE_REMINDER }) else head;
 }
 
-fn deliveryTarget(w: Worker, worker: []const u8) []const u8 {
-    if (w.truthy("adopted") or w.truthy("execution_host")) return w.str("pane_id") orelse worker;
-    return worker;
+fn deliveryTarget(w: Crewmate, crewmate: []const u8) []const u8 {
+    if (w.truthy("adopted") or w.truthy("execution_host")) return w.str("pane_id") orelse crewmate;
+    return crewmate;
 }
 
 fn remoteHostKey(host: Value) []const u8 {
@@ -888,15 +888,15 @@ fn hostsMatch(a: ?Value, b: ?Value) bool {
     return rt.eql(remoteHostKey(x), remoteHostKey(y));
 }
 
-fn deliveryIdentityCurrent(s: State, worker: []const u8, m: Message, evidence: *Obj) bool {
-    const w = state.getWorker(s, worker) orelse return false;
-    return meantFor(s, w, m) and rt.eqlOpt(w.str("started_at"), evidence.str("worker_started_at")) and rt.eqlOpt(w.str("pane_id"), evidence.str("target")) and hostsMatch(w.get("execution_host"), evidence.get("execution_host"));
+fn deliveryIdentityCurrent(s: State, crewmate: []const u8, m: Message, evidence: *Obj) bool {
+    const w = state.getCrewmate(s, crewmate) orelse return false;
+    return meantFor(s, w, m) and rt.eqlOpt(w.str("started_at"), evidence.str("crewmate_started_at")) and rt.eqlOpt(w.str("pane_id"), evidence.str("target")) and hostsMatch(w.get("execution_host"), evidence.get("execution_host"));
 }
 
 const Reconciled = enum { none, received, not_received, unknown, stale };
 const PendingSource = enum { unknown, claim };
 
-const ReconcileCtx = struct { id: []const u8, worker: []const u8, evidence: *Obj, source: PendingSource, claim_token: ?[]const u8, observation: mux.PromptReceiptObservation };
+const ReconcileCtx = struct { id: []const u8, crewmate: []const u8, evidence: *Obj, source: PendingSource, claim_token: ?[]const u8, observation: mux.PromptReceiptObservation };
 
 fn reconcileTx(c: ReconcileCtx, s: State) !Reconciled {
     const cm = findMessage(s, c.id) orelse return .stale;
@@ -906,7 +906,7 @@ fn reconcileTx(c: ReconcileCtx, s: State) !Reconciled {
         .claim => if (cm.obj("delivery_claim")) |dc| rt.eqlOpt(dc.str("token"), c.claim_token) else false,
     };
     if (!same) return .stale;
-    if (!deliveryIdentityCurrent(s, c.worker, cm, c.evidence)) {
+    if (!deliveryIdentityCurrent(s, c.crewmate, cm, c.evidence)) {
         if (c.source == .claim) cm.del("delivery_claim");
         return .stale;
     }
@@ -933,10 +933,10 @@ fn reconcileTx(c: ReconcileCtx, s: State) !Reconciled {
     }
 }
 
-fn reconcileRemoteDelivery(id: []const u8, worker: []const u8) !Reconciled {
+fn reconcileRemoteDelivery(id: []const u8, crewmate: []const u8) !Reconciled {
     const s = try state.load();
     const m = findMessage(s, id) orelse return .none;
-    const w = state.getWorker(s, worker) orelse return .none;
+    const w = state.getCrewmate(s, crewmate) orelse return .none;
     if (m.truthy("delivered") or m.truthy("acked") or !meantFor(s, w, m)) return .none;
     var evidence: ?*Obj = null;
     var source: PendingSource = .unknown;
@@ -952,7 +952,7 @@ fn reconcileRemoteDelivery(id: []const u8, worker: []const u8) !Reconciled {
                 claim_token = claim.str("token");
                 const ev = json.object(.{
                     .{ "target", nn(claim.get("target")) orelse w.get("pane_id") },
-                    .{ "worker_started_at", nn(claim.get("worker_started_at")) orelse w.get("started_at") },
+                    .{ "crewmate_started_at", nn(claim.get("crewmate_started_at")) orelse w.get("started_at") },
                     .{ "execution_host", host.? },
                 });
                 if (claim.get("seq_before")) |sb| ev.put("seq_before", sb);
@@ -963,23 +963,23 @@ fn reconcileRemoteDelivery(id: []const u8, worker: []const u8) !Reconciled {
         }
     }
     const ev = evidence orelse return .none;
-    if (!deliveryIdentityCurrent(s, worker, m, ev)) return .stale;
+    if (!deliveryIdentityCurrent(s, crewmate, m, ev)) return .stale;
     const observation = blk: {
         const prev = try remote.enterHost(ev.get("execution_host"));
         defer remote.leaveHost(prev);
         break :blk mux.observePromptReceipt(ev.str("target") orelse "", ev.int("seq_before"));
     };
-    return state.update(Reconciled, ReconcileCtx{ .id = id, .worker = worker, .evidence = ev, .source = source, .claim_token = claim_token, .observation = observation }, reconcileTx);
+    return state.update(Reconciled, ReconcileCtx{ .id = id, .crewmate = crewmate, .evidence = ev, .source = source, .claim_token = claim_token, .observation = observation }, reconcileTx);
 }
 
-const ClaimCtx = struct { id: []const u8, worker: []const u8, seq_before: ?i64 };
-const Claim = struct { token: []const u8, target: []const u8, worker_started_at: ?[]const u8, execution_host: ?Value, owes_report: bool };
+const ClaimCtx = struct { id: []const u8, crewmate: []const u8, seq_before: ?i64 };
+const Claim = struct { token: []const u8, target: []const u8, crewmate_started_at: ?[]const u8, execution_host: ?Value, owes_report: bool };
 
 fn claimTx(c: ClaimCtx, s: State) !?Claim {
     const m = findMessage(s, c.id) orelse return null;
     if (m.truthy("delivered") or m.truthy("acked") or m.truthy("delivery_unknown")) return null;
     if (m.obj("delivery_claim")) |claim| if (deliveryClaimIsActive(claim)) return null;
-    const w = state.getWorker(s, c.worker) orelse return null;
+    const w = state.getCrewmate(s, c.crewmate) orelse return null;
     if (!meantFor(s, w, m)) return null;
     if (m.obj("delivery_claim")) |claim| {
         const ch = claim.get("execution_host");
@@ -988,7 +988,7 @@ fn claimTx(c: ClaimCtx, s: State) !?Claim {
     }
     m.del("delivery_claim");
     const token = state.nextId(s, "dc");
-    const target = deliveryTarget(w, c.worker);
+    const target = deliveryTarget(w, c.crewmate);
     const wh = w.get("execution_host");
     const host: ?Value = if (wh != null and wh.? != .null) wh else null;
     const claim = json.object(.{
@@ -998,23 +998,23 @@ fn claimTx(c: ClaimCtx, s: State) !?Claim {
         .{ "claimed_at", state.now() },
         .{ "lease_until", time.iso(rt.nowMs() + DELIVERY_CLAIM_LEASE_MS) },
         .{ "target", target },
-        .{ "worker_started_at", w.get("started_at") },
+        .{ "crewmate_started_at", w.get("started_at") },
         .{ "execution_host", host orelse json.nul },
     });
     if (c.seq_before) |sb| claim.putInt("seq_before", sb);
     m.put("delivery_claim", claim.val());
     const owes = if (w.strNonEmpty("task_id")) |tid| (if (state.getTask(s, tid)) |t| rt.eqlOpt(t.str("status"), "dispatched") else false) else false;
-    return .{ .token = token, .target = target, .worker_started_at = w.str("started_at"), .execution_host = if (host) |h| (if (h.truthy()) h else null) else null, .owes_report = owes };
+    return .{ .token = token, .target = target, .crewmate_started_at = w.str("started_at"), .execution_host = if (host) |h| (if (h.truthy()) h else null) else null, .owes_report = owes };
 }
 
-fn matchesClaim(s: State, worker: []const u8, m: Message, claim: Claim) bool {
-    const w = state.getWorker(s, worker) orelse return false;
-    if (!meantFor(s, w, m) or !rt.eqlOpt(w.str("started_at"), claim.worker_started_at) or !rt.eql(deliveryTarget(w, worker), claim.target)) return false;
+fn matchesClaim(s: State, crewmate: []const u8, m: Message, claim: Claim) bool {
+    const w = state.getCrewmate(s, crewmate) orelse return false;
+    if (!meantFor(s, w, m) or !rt.eqlOpt(w.str("started_at"), claim.crewmate_started_at) or !rt.eql(deliveryTarget(w, crewmate), claim.target)) return false;
     if (claim.execution_host) |h| return hostsMatch(w.get("execution_host"), h);
     return !w.truthy("execution_host");
 }
 
-const FinalizeCtx = struct { id: []const u8, worker: []const u8, claim: Claim };
+const FinalizeCtx = struct { id: []const u8, crewmate: []const u8, claim: Claim };
 
 fn claimTokenIs(m: Message, token: []const u8) bool {
     const dc = m.obj("delivery_claim") orelse return false;
@@ -1024,7 +1024,7 @@ fn claimTokenIs(m: Message, token: []const u8) bool {
 fn finalizeTx(c: FinalizeCtx, s: State) !bool {
     const m = findMessage(s, c.id) orelse return false;
     if (!claimTokenIs(m, c.claim.token)) return false;
-    if (!matchesClaim(s, c.worker, m, c.claim)) {
+    if (!matchesClaim(s, c.crewmate, m, c.claim)) {
         m.del("delivery_claim");
         return false;
     }
@@ -1041,18 +1041,18 @@ fn clearClaimTx(c: FinalizeCtx, s: State) !void {
     if (claimTokenIs(m, c.claim.token)) m.del("delivery_claim");
 }
 
-const UnknownCtx = struct { id: []const u8, worker: []const u8, claim: Claim, seq_before: ?i64, reason: []const u8 };
+const UnknownCtx = struct { id: []const u8, crewmate: []const u8, claim: Claim, seq_before: ?i64, reason: []const u8 };
 
 fn markUnknownTx(c: UnknownCtx, s: State) !void {
     const m = findMessage(s, c.id) orelse return;
     if (!claimTokenIs(m, c.claim.token)) return;
-    if (!matchesClaim(s, c.worker, m, c.claim)) {
+    if (!matchesClaim(s, c.crewmate, m, c.claim)) {
         m.del("delivery_claim");
         return;
     }
     const ev = json.object(.{
         .{ "target", c.claim.target },
-        .{ "worker_started_at", json.optStr(c.claim.worker_started_at) },
+        .{ "crewmate_started_at", json.optStr(c.claim.crewmate_started_at) },
         .{ "execution_host", c.claim.execution_host orelse json.nul },
     });
     if (c.seq_before) |sb| ev.putInt("seq_before", sb);
@@ -1062,12 +1062,12 @@ fn markUnknownTx(c: UnknownCtx, s: State) !void {
     m.del("delivery_claim");
 }
 
-fn deliver(id: []const u8, worker: []const u8, body: []const u8, from: []const u8, seq_before: ?i64) !bool {
-    const reconciled = try reconcileRemoteDelivery(id, worker);
+fn deliver(id: []const u8, crewmate: []const u8, body: []const u8, from: []const u8, seq_before: ?i64) !bool {
+    const reconciled = try reconcileRemoteDelivery(id, crewmate);
     if (reconciled == .received) return true;
     if (reconciled == .unknown or reconciled == .stale) return false;
-    const claim = (try state.update(?Claim, ClaimCtx{ .id = id, .worker = worker, .seq_before = seq_before }, claimTx)) orelse return false;
-    const fctx = FinalizeCtx{ .id = id, .worker = worker, .claim = claim };
+    const claim = (try state.update(?Claim, ClaimCtx{ .id = id, .crewmate = crewmate, .seq_before = seq_before }, claimTx)) orelse return false;
+    const fctx = FinalizeCtx{ .id = id, .crewmate = crewmate, .claim = claim };
     const prompt_err: ?anyerror = blk: {
         const prev = remote.enterHost(claim.execution_host) catch |err| break :blk err;
         defer remote.leaveHost(prev);
@@ -1084,19 +1084,19 @@ fn deliver(id: []const u8, worker: []const u8, body: []const u8, from: []const u
             break :blk mux.observePromptReceipt(claim.target, seq_before);
         };
         if (observation == .received) {
-            state.log(json.object(.{ .{ "event", "followup.remote_receipt_probable" }, .{ "worker", worker }, .{ "id", id } }));
+            state.log(json.object(.{ .{ "event", "followup.remote_receipt_probable" }, .{ "crewmate", crewmate }, .{ "id", id } }));
             return state.update(bool, fctx, finalizeTx);
         }
         if (observation == .unknown) {
-            try state.update(void, UnknownCtx{ .id = id, .worker = worker, .claim = claim, .seq_before = seq_before, .reason = rt.fmt("{s}: {s}", .{ code orelse "remote_error", msg }) }, markUnknownTx);
-            state.log(json.object(.{ .{ "event", "followup.delivery_unknown" }, .{ "worker", worker }, .{ "id", id } }));
+            try state.update(void, UnknownCtx{ .id = id, .crewmate = crewmate, .claim = claim, .seq_before = seq_before, .reason = rt.fmt("{s}: {s}", .{ code orelse "remote_error", msg }) }, markUnknownTx);
+            state.log(json.object(.{ .{ "event", "followup.delivery_unknown" }, .{ "crewmate", crewmate }, .{ "id", id } }));
             return false;
         }
         state.update(void, fctx, clearClaimTx) catch {};
         return false;
     }
     if (claim.execution_host == null and code != null and rt.eql(code.?, "timeout") and seq_before != null and mux.promptLanded(claim.target, seq_before.?)) {
-        state.log(json.object(.{ .{ "event", "followup.timeout_landed" }, .{ "worker", worker }, .{ "id", id } }));
+        state.log(json.object(.{ .{ "event", "followup.timeout_landed" }, .{ "crewmate", crewmate }, .{ "id", id } }));
         return state.update(bool, fctx, finalizeTx);
     }
     state.update(void, fctx, clearClaimTx) catch {};
@@ -1151,7 +1151,7 @@ pub fn herdrWarning(run: ?Run) ?[]const u8 {
     const r = run orelse return null;
     const since = r.get("herdr_unreachable_since") orelse return null;
     if (!since.truthy()) return null;
-    return rt.fmt("herdr unreachable since {s}; worker liveness is as last seen", .{remote.jsString(since) orelse ""});
+    return rt.fmt("herdr unreachable since {s}; crewmate liveness is as last seen", .{remote.jsString(since) orelse ""});
 }
 
 fn markUnreachableTx(_: void, s: State) !void {
@@ -1187,7 +1187,7 @@ const Snapshot = struct {
     }
 };
 
-const ToDeliver = struct { worker: []const u8, body: []const u8, id: []const u8, from: []const u8, seq: ?i64 };
+const ToDeliver = struct { crewmate: []const u8, body: []const u8, id: []const u8, from: []const u8, seq: ?i64 };
 const Renudge = struct { run: []const u8, pane: []const u8, text: []const u8 };
 
 const SyncCtx = struct {
@@ -1200,7 +1200,7 @@ const SyncCtx = struct {
     renudge_limit: i64,
 };
 
-pub const EXITED_SUMMARY = "worker exited before reporting";
+pub const EXITED_SUMMARY = "crewmate exited before reporting";
 
 fn setIfNull(o: *Obj, key: []const u8) void {
     const v = o.get(key);
@@ -1214,16 +1214,16 @@ fn jsRound(x: f64) i64 {
 fn syncTx(c: SyncCtx, s: State) ![]Message {
     var out: std.ArrayListUnmanaged(Message) = .empty;
     if (c.local != null) for (state.activeRuns(s)) |r| if (mux.ownsRun(r) and r.truthy("herdr_unreachable_since")) r.putNull("herdr_unreachable_since");
-    for (state.workers(s).objValues()) |w| {
+    for (state.crewmates(s).objValues()) |w| {
         const run = state.getRun(s, w.str("run_id") orelse "") orelse continue;
         if (!rt.eqlOpt(run.str("status"), "active")) continue;
         if (!mux.ownsRun(run)) continue;
         if (parseMs(w.str("started_at"))) |st| if (st > c.snap_at) continue;
         const host = w.get("execution_host");
-        const remote_worker = host != null and host.?.truthy();
-        const snapshot: ?*Snapshot = if (remote_worker) c.remote_pairs.get(remoteHostKey(host.?)) else c.local;
+        const remote_crewmate = host != null and host.?.truthy();
+        const snapshot: ?*Snapshot = if (remote_crewmate) c.remote_pairs.get(remoteHostKey(host.?)) else c.local;
         if (snapshot == null) {
-            if (remote_worker) {
+            if (remote_crewmate) {
                 setIfNull(w, "host_unreachable_since");
                 w.putStr("liveness", "unreachable");
                 const hn = if (host.?.asObj()) |h| h.str("name") orelse "undefined" else "undefined";
@@ -1233,7 +1233,7 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
             }
             continue;
         }
-        if (remote_worker) w.putNull("host_unreachable_since");
+        if (remote_crewmate) w.putNull("host_unreachable_since");
         const pane_id = w.str("pane_id") orelse "";
         const a = snapshot.?.by_pane.get(pane_id);
         const t = rt.nowMs();
@@ -1284,13 +1284,13 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
                 }
                 if (!recent) {
                     const body = if (blocked and !owes)
-                        rt.fmt("{s} is blocked on an approval or question in its own UI (pane {s}) after reporting{s}. Inspect with `lodestar worker read {s}`.", .{ name, pane_id, if (task) |tk| rt.fmt(" on task {s}", .{tk.str("id") orelse ""}) else "", name })
+                        rt.fmt("{s} is blocked on an approval or question in its own UI (pane {s}) after reporting{s}. Inspect with `lodestar crew read {s}`.", .{ name, pane_id, if (task) |tk| rt.fmt(" on task {s}", .{tk.str("id") orelse ""}) else "", name })
                     else if (blocked)
-                        rt.fmt("{s} is blocked on an approval or question in its own UI (pane {s}); it should have used `lodestar ask`. Inspect with `lodestar worker read {s}`.", .{ name, pane_id, name })
+                        rt.fmt("{s} is blocked on an approval or question in its own UI (pane {s}); it should have used `lodestar ask`. Inspect with `lodestar crew read {s}`.", .{ name, pane_id, name })
                     else if (exited)
                         rt.fmt("{s}'s pane {s} is gone without a report.", .{ name, pane_id })
                     else
-                        rt.fmt("{s} is {s} without having reported on task {s}. Read its screen with `lodestar worker read {s}`; if it finished, re-prompt it to run `lodestar done`.", .{ name, status, task.?.str("id") orelse "", name });
+                        rt.fmt("{s} is {s} without having reported on task {s}. Read its screen with `lodestar crew read {s}`; if it finished, re-prompt it to run `lodestar done`.", .{ name, status, task.?.str("id") orelse "", name });
                     out.append(rt.a, message(s, attentionFields(w, body, status))) catch {};
                 }
             }
@@ -1304,7 +1304,7 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
 
         if (owes and rt.eqlOpt(w.str("liveness"), "unverifiable") and !rt.eqlOpt(w.str("unverifiable_dispatch"), w.str("dispatch_id"))) {
             w.put("unverifiable_dispatch", w.get("dispatch_id") orelse .null);
-            const body = rt.fmt("{s}'s pane {s} is alive but no agent has been seen in it for over {d}s (agent gone, pane alive); it owes a report on task {s}. Read its screen with `lodestar worker read {s}`, then re-prompt it or `lodestar worker release {s} --force`.", .{ name, pane_id, @divTrunc(START_GRACE_MS, 1000), task.?.str("id") orelse "", name, name });
+            const body = rt.fmt("{s}'s pane {s} is alive but no agent has been seen in it for over {d}s (agent gone, pane alive); it owes a report on task {s}. Read its screen with `lodestar crew read {s}`, then re-prompt it or `lodestar crew release {s} --force`.", .{ name, pane_id, @divTrunc(START_GRACE_MS, 1000), task.?.str("id") orelse "", name, name });
             out.append(rt.a, message(s, attentionFields(w, body, "unverifiable"))) catch {};
         }
 
@@ -1319,7 +1319,7 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
         if (owes and c.stall_limit > 0 and rt.eqlOpt(w.str("liveness"), "live") and !w.truthy("stalled_since") and !asking and silent_for != null and silent_for.? > c.stall_limit) {
             w.putStr("stalled_since", state.now());
             const mins = jsRound(@as(f64, @floatFromInt(silent_for.?)) / 60_000.0);
-            const body = rt.fmt("{s} has shown no sign of life for {d} min (no heartbeat, question or herdr state change) while task {s} is open. Read its screen with `lodestar worker read {s}`.", .{ name, mins, task.?.str("id") orelse "", name });
+            const body = rt.fmt("{s} has shown no sign of life for {d} min (no heartbeat, question or herdr state change) while task {s} is open. Read its screen with `lodestar crew read {s}`.", .{ name, mins, task.?.str("id") orelse "", name });
             out.append(rt.a, message(s, attentionFields(w, body, "stalled"))) catch {};
         }
 
@@ -1329,9 +1329,9 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
                 if (!rt.eqlOpt(m.str("to"), name) or !isType(m, "followup") or m.truthy("delivered") or m.truthy("acked") or !meantFor(s, w, m)) continue;
                 if (m.obj("delivery_claim")) |claim| {
                     if (deliveryClaimIsActive(claim)) continue;
-                    if (!claim.truthy("execution_host") and !remote_worker) m.del("delivery_claim");
+                    if (!claim.truthy("execution_host") and !remote_crewmate) m.del("delivery_claim");
                 }
-                c.to_deliver.append(rt.a, .{ .worker = name, .body = m.str("body") orelse "", .id = m.str("id") orelse "", .from = m.str("from") orelse "orchestrator", .seq = if (first) receipt_seq else null }) catch {};
+                c.to_deliver.append(rt.a, .{ .crewmate = name, .body = m.str("body") orelse "", .id = m.str("id") orelse "", .from = m.str("from") orelse "orchestrator", .seq = if (first) receipt_seq else null }) catch {};
                 first = false;
             }
         }
@@ -1367,7 +1367,7 @@ fn syncTx(c: SyncCtx, s: State) ![]Message {
     return out.items;
 }
 
-fn attentionFields(w: Worker, body: []const u8, status: []const u8) *Obj {
+fn attentionFields(w: Crewmate, body: []const u8, status: []const u8) *Obj {
     return json.object(.{
         .{ "run_id", w.get("run_id") },
         .{ "type", "attention" },
@@ -1403,7 +1403,7 @@ pub fn sync(o: SyncOpts) ![]Message {
     if (local == null) markHerdrUnreachable();
     var remote_pairs = std.StringHashMapUnmanaged(*Snapshot).empty;
     var profiles = std.StringArrayHashMapUnmanaged(Value).empty;
-    for (state.workers(initial).objValues()) |w| {
+    for (state.crewmates(initial).objValues()) |w| {
         const run = state.getRun(initial, w.str("run_id") orelse "") orelse continue;
         if (!rt.eqlOpt(run.str("status"), "active")) continue;
         const host = w.get("execution_host") orelse continue;
@@ -1429,7 +1429,7 @@ pub fn sync(o: SyncOpts) ![]Message {
         .stall_limit = stallMs(),
         .renudge_limit = renudgeMs(),
     }, syncTx);
-    for (to_deliver.items) |d| _ = try deliver(d.id, d.worker, d.body, d.from, d.seq);
+    for (to_deliver.items) |d| _ = try deliver(d.id, d.crewmate, d.body, d.from, d.seq);
     for (renudge.items) |n| {
         if (mux.agentPrompt(n.pane, n.text)) |_| {
             state.log(json.object(.{ .{ "event", "orchestrator.renudged" }, .{ "run", n.run } }));
@@ -1437,7 +1437,7 @@ pub fn sync(o: SyncOpts) ![]Message {
             mux.logMuxError("renudge", err, json.object(.{.{ "run", n.run }}));
         }
     }
-    for (created) |m| state.log(json.object(.{ .{ "event", "attention" }, .{ "run", m.get("run_id") }, .{ "worker", m.get("from") }, .{ "status", m.get("status") } }));
+    for (created) |m| state.log(json.object(.{ .{ "event", "attention" }, .{ "run", m.get("run_id") }, .{ "crewmate", m.get("from") }, .{ "status", m.get("status") } }));
     return created;
 }
 
@@ -1468,11 +1468,11 @@ pub fn waitHeartbeat(s: State, run_id: []const u8, elapsed_ms: i64) *Obj {
         pending += 1;
     };
     const ws = json.newObj();
-    for (state.runWorkers(s, run_id)) |w| {
+    for (state.runCrewmates(s, run_id)) |w| {
         const lv = w.get("liveness");
         ws.put(w.str("name") orelse "undefined", if (lv != null and lv.? != .null) lv.? else json.s("unknown"));
     }
-    const out = json.object(.{ .{ "waiting", true }, .{ "elapsed_ms", elapsed_ms }, .{ "pending", pending }, .{ "workers", ws } });
+    const out = json.object(.{ .{ "waiting", true }, .{ "elapsed_ms", elapsed_ms }, .{ "pending", pending }, .{ "crewmates", ws } });
     out.putStrIf("warning", warning);
     return out;
 }
@@ -1649,9 +1649,9 @@ test "checkTypes, envMs and heartbeat shape" {
     try std.testing.expectEqual(@as(i64, 9), envMs("LODESTAR_T_MS", 9));
     const s = state.emptyState();
     state.runs(s).put("r1", json.object(.{ .{ "id", "r1" }, .{ "status", "active" }, .{ "herdr_unreachable_since", "2026-01-01T00:00:00.000Z" } }).val());
-    state.workers(s).put("a", json.object(.{ .{ "name", "a" }, .{ "run_id", "r1" }, .{ "liveness", "live" } }).val());
-    state.workers(s).put("b", json.object(.{ .{ "name", "b" }, .{ "run_id", "r1" } }).val());
-    try std.testing.expectEqualStrings("{\"waiting\":true,\"elapsed_ms\":5,\"pending\":0,\"workers\":{\"a\":\"live\",\"b\":\"unknown\"},\"warning\":\"herdr unreachable since 2026-01-01T00:00:00.000Z; worker liveness is as last seen\"}", json.stringify(waitHeartbeat(s, "r1", 5).val(), false));
+    state.crewmates(s).put("a", json.object(.{ .{ "name", "a" }, .{ "run_id", "r1" }, .{ "liveness", "live" } }).val());
+    state.crewmates(s).put("b", json.object(.{ .{ "name", "b" }, .{ "run_id", "r1" } }).val());
+    try std.testing.expectEqualStrings("{\"waiting\":true,\"elapsed_ms\":5,\"pending\":0,\"crewmates\":{\"a\":\"live\",\"b\":\"unknown\"},\"warning\":\"herdr unreachable since 2026-01-01T00:00:00.000Z; crewmate liveness is as last seen\"}", json.stringify(waitHeartbeat(s, "r1", 5).val(), false));
 }
 
 test "message ids, prune and meantFor" {

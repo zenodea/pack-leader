@@ -18,8 +18,8 @@ const str = args_mod.str;
 const has = args_mod.has;
 const list = args_mod.list;
 
-fn contextFrom(a: *const Args) !inbox.WorkerContext {
-    return inbox.workerContext(.{ .task = str(a, "task"), .dispatch = str(a, "dispatch"), .worker = str(a, "worker"), .run = str(a, "run") });
+fn contextFrom(a: *const Args) !inbox.CrewmateContext {
+    return inbox.crewmateContext(.{ .task = str(a, "task"), .dispatch = str(a, "dispatch"), .crewmate = str(a, "crewmate"), .run = str(a, "run") });
 }
 
 fn currentRun(a: *const Args) !state.Run {
@@ -148,23 +148,23 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
     }
 }
 
-/// The run's shared worktree when this worker was started in it.
-fn sharedCheckout(ctx: inbox.WorkerContext) ?*Obj {
+/// The run's shared worktree when this crewmate was started in it.
+fn sharedCheckout(ctx: inbox.CrewmateContext) ?*Obj {
     const s = state.load() catch return null;
     const run = state.getRun(s, ctx.run_id) orelse return null;
-    const w = state.getWorker(s, ctx.worker) orelse return null;
+    const w = state.getCrewmate(s, ctx.crewmate) orelse return null;
     if (!shared_worktree.contains(run, w.str("cwd") orelse return null)) return null;
     return shared_worktree.of(run);
 }
 
-fn commitShared(ctx: inbox.WorkerContext, files: []const []const u8, summary: []const u8) !?*Obj {
+fn commitShared(ctx: inbox.CrewmateContext, files: []const []const u8, summary: []const u8) !?*Obj {
     const sw = sharedCheckout(ctx) orelse return null;
     const path = sw.str("path") orelse return null;
     // Refuse a report `done` would refuse before anything is committed.
     const task_id = try inbox.doneTaskId(ctx);
     var abs: std.ArrayListUnmanaged([]const u8) = .empty;
     for (files) |f| abs.append(rt.a, fs.resolve(rt.cwd(), f)) catch {};
-    return shared_worktree.commitFiles(.{ .cwd = path, .files = abs.items, .worker = ctx.worker, .run_id = ctx.run_id, .task_id = task_id, .summary = summary }) catch |err|
+    return shared_worktree.commitFiles(.{ .cwd = path, .files = abs.items, .crewmate = ctx.crewmate, .run_id = ctx.run_id, .task_id = task_id, .summary = summary }) catch |err|
         rt.fail("commit_failed", "your report was not recorded: committing your files on {s} failed: {s}. Fix that, then run the same `lodestar done` again.", .{ sw.str("branch") orelse "the shared branch", rt.errMessage(err) });
 }
 
@@ -245,7 +245,7 @@ fn check(a: *const Args) !void {
     out.assign(raised);
     if (hasDone(r) and !config.reviewFor(run)) {
         out.putStr("review", "off");
-        out.putStr("review_note", "Review is off for this run: accept each done report as the worker states it. Do not read its diff, rerun its tests or inspect its files; reuse, retain or release the worker and dispatch what is next.");
+        out.putStr("review_note", "Review is off for this run: accept each done report as the crewmate states it. Do not read its diff, rerun its tests or inspect its files; reuse, retain or release the crewmate and dispatch what is next.");
     }
     shared.outObj(out);
 }
@@ -281,11 +281,11 @@ fn reply(a: *const Args) !void {
 }
 
 fn send(a: *const Args) !void {
-    const worker_mode = rt.getenvNonEmpty("LODESTAR_WORKER") != null;
-    if (!worker_mode) {
+    const crewmate_mode = rt.getenvNonEmpty("LODESTAR_CREWMATE") != null;
+    if (!crewmate_mode) {
         var flags: std.ArrayListUnmanaged([]const u8) = .empty;
-        for ([_][]const u8{ "worker", "task", "dispatch" }) |f| if (has(a, f)) flags.append(rt.a, rt.concat(&.{ "--", f })) catch {};
-        if (flags.items.len > 0) return rt.fail(null, "{s} require worker mode (LODESTAR_WORKER)", .{std.mem.join(rt.a, ", ", flags.items) catch ""});
+        for ([_][]const u8{ "crewmate", "task", "dispatch" }) |f| if (has(a, f)) flags.append(rt.a, rt.concat(&.{ "--", f })) catch {};
+        if (flags.items.len > 0) return rt.fail(null, "{s} require crewmate mode (LODESTAR_CREWMATE)", .{std.mem.join(rt.a, ", ", flags.items) catch ""});
     }
     const name = a.pos(0);
     const words = if (a.positional.len > 1) a.positional[1..] else a.positional[0..0];
@@ -293,22 +293,22 @@ fn send(a: *const Args) !void {
     if (name == null or name.?.len == 0 or body.len == 0) return rt.fail(null, "usage: lodestar send NAME|@all|@idle|@KIND \"text\" [--now]", .{});
     const now_flag = has(a, "now");
     var sub: ?state.Run = null;
-    if (worker_mode) {
+    if (crewmate_mode) {
         for (state.activeRuns(try state.load())) |r| if (shared.coordinatesSubRun(r)) {
             sub = r;
             break;
         };
     }
     if (sub) |sr| {
-        const target_in_sub = if (state.getWorker(try state.load(), name.?)) |w| rt.eqlOpt(w.str("run_id"), sr.str("id")) else false;
+        const target_in_sub = if (state.getCrewmate(try state.load(), name.?)) |w| rt.eqlOpt(w.str("run_id"), sr.str("id")) else false;
         if (rt.startsWith(name.?, "@") or target_in_sub) {
             shared.outObj(try inbox.sendTo(sr, name.?, body, now_flag));
             return;
         }
     }
-    if (worker_mode) {
+    if (crewmate_mode) {
         const ctx = try contextFrom(a);
-        shared.outObj(try inbox.workerSend(ctx, name.?, body, now_flag));
+        shared.outObj(try inbox.crewmateSend(ctx, name.?, body, now_flag));
     } else shared.outObj(try inbox.sendTo(try currentRun(a), name.?, body, now_flag));
 }
 

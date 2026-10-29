@@ -32,7 +32,7 @@ fn rexArgv(args: []const []const u8) []const []const u8 {
 }
 
 fn refuseRemote() !void {
-    if (remote.currentExecutionHost() != null) return rt.fail("unsupported", "Rex runs workers on this machine only; remote execution hosts need herdr", .{});
+    if (remote.currentExecutionHost() != null) return rt.fail("unsupported", "Rex runs crewmates on this machine only; remote execution hosts need herdr", .{});
 }
 
 /// Run a rex command. Exit 3 is a missing or ambiguous target and 4 an unreachable server (Rex's documented codes).
@@ -359,7 +359,7 @@ fn findByName(name: []const u8) !?Raw {
     return null;
 }
 
-/// "sU:bB" or "block:B"; anything else is an agent name (worker names never contain ':').
+/// "sU:bB" or "block:B"; anything else is an agent name (crewmate names never contain ':').
 fn isPaneRef(target: []const u8) bool {
     if (rt.startsWith(target, "block:")) return target.len > "block:".len;
     const c = std.mem.indexOfScalar(u8, target, ':') orelse return false;
@@ -400,7 +400,7 @@ fn loginShell() []const u8 {
 /// without a shell, so `env` carries Lodestar's variables. With no command, the user's shell starts.
 fn appendCommand(argv: *std.ArrayListUnmanaged([]const u8), env: ?*Obj, command: []const []const u8) void {
     argv.appendSlice(rt.a, &.{ "--", "env", "LODESTAR_MUX=rex" }) catch {};
-    // Processes in the new block (workers, the sidebar, hooks) must use the same state as this leader.
+    // Processes in the new block (crewmates, the sidebar, hooks) must use the same state as this leader.
     for ([_][]const u8{ "HERDR_PLUGIN_STATE_DIR", "HERDR_PLUGIN_CONFIG_DIR", "LODESTAR_REX_SERVER" }) |k| {
         if (rt.getenvNonEmpty(k)) |v| argv.append(rt.a, rt.concat(&.{ k, "=", v })) catch {};
     }

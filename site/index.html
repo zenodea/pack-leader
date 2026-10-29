@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#05070d">
-  <meta name="description" content="Lodestar lets one coding agent run a team of others: Claude Code, Codex and pi workers in their own panes and Git worktrees, in herdr or tmux.">
+  <meta name="description" content="Lodestar lets one coding agent run a team of others: Claude Code, Codex and pi crewmates in their own panes and Git worktrees, in herdr or tmux.">
   <meta property="og:title" content="Lodestar">
-  <meta property="og:description" content="One coding agent hands out the tasks, answers the questions and writes down what each worker did.">
+  <meta property="og:description" content="One coding agent hands out the tasks, answers the questions and writes down what each crewmate did.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="assets/og.png">
   <title>Lodestar</title>
@@ -50,8 +50,8 @@
         <div class="step-text">
           <p class="kicker">01 · Delegate</p>
           <h2 id="s1">You ask once.</h2>
-          <p>Tell your agent what you want, the way you'd tell a colleague: CSV import, parser and validator as separate jobs, tests for both. It splits that into tasks and starts a worker for each, with a written spec so nobody has to guess.</p>
-          <pre><code>lodestar worker start parser --worktree new \
+          <p>Tell your agent what you want, the way you'd tell a colleague: CSV import, parser and validator as separate jobs, tests for both. It splits that into tasks and starts a crewmate for each, with a written spec so nobody has to guess.</p>
+          <pre><code>lodestar crew start parser --worktree new \
   --spec "Parse CSV input. Add tests. Report back."</code></pre>
         </div>
       </div>
@@ -61,8 +61,8 @@
       <div class="wrap">
         <div class="step-text">
           <p class="kicker">02 · Panes</p>
-          <h2 id="s2">Every worker gets a pane of its own.</h2>
-          <p>Workers run in their own tabs or splits, and with <code>--worktree new</code> each one gets its own Git checkout on its own branch. Two agents never edit the same file.</p>
+          <h2 id="s2">Every crewmate gets a pane of its own.</h2>
+          <p>Crewmates run in their own tabs or splits, and with <code>--worktree new</code> each one gets its own Git checkout on its own branch. Two agents never edit the same file.</p>
           <p>Lodestar drives herdr or tmux, whichever you're inside. Rex is next.</p>
         </div>
       </div>
@@ -72,9 +72,9 @@
       <div class="wrap">
         <div class="step-text">
           <p class="kicker">03 · Supervise</p>
-          <h2 id="s3">Stuck workers ask instead of guessing.</h2>
-          <p>A worker that can't go on asks the leader, with options if it has some, and waits. The others leave notes, escalate, or check in so the leader knows they're alive. One <code>check</code> hands the leader everything that's waiting.</p>
-          <p>A task is finished when its worker says <code>done</code>. A quiet pane doesn't count.</p>
+          <h2 id="s3">Stuck crewmates ask instead of guessing.</h2>
+          <p>A crewmate that can't go on asks the leader, with options if it has some, and waits. The others leave notes, escalate, or check in so the leader knows they're alive. One <code>check</code> hands the leader everything that's waiting.</p>
+          <p>A task is finished when its crewmate says <code>done</code>. A quiet pane doesn't count.</p>
         </div>
       </div>
     </section>
@@ -84,7 +84,7 @@
         <div class="step-text">
           <p class="kicker">04 · Record</p>
           <h2 id="s4">It all gets written down.</h2>
-          <p>Tasks, specs, every attempt, the exact instructions each worker got, every report. It lives in a state file outside every agent's context window, so closing a tab or clearing a session loses nothing.</p>
+          <p>Tasks, specs, every attempt, the exact instructions each crewmate got, every report. It lives in a state file outside every agent's context window, so closing a tab or clearing a session loses nothing.</p>
           <p>When the leader's own context fills up, it writes itself a note, gets a fresh session and carries on from the note.</p>
           <pre><code>lodestar dispatch show d4 --preamble</code></pre>
         </div>
@@ -96,19 +96,19 @@
         <div class="step-text">
           <p class="kicker">05 · Merge</p>
           <h2 id="s5">Then it puts it all back together.</h2>
-          <p>Each worker commits to its own branch. Once the reports are in, the leader reads them, checks the work and merges the branches into main. A branch outlives its worker, so nothing is lost if a pane closes first.</p>
+          <p>Each crewmate commits to its own branch. Once the reports are in, the leader reads them, checks the work and merges the branches into main. A branch outlives its crewmate, so nothing is lost if a pane closes first.</p>
           <p>Rather merge yourself? Say so, and the leader leaves the branches for you.</p>
         </div>
       </div>
     </section>
 
-    <section class="step" id="advisor" data-scene="advisor" aria-labelledby="s6">
+    <section class="step" id="navigator" data-scene="navigator" aria-labelledby="s6">
       <div class="wrap">
         <div class="step-text">
-          <p class="kicker">06 · Advisor</p>
+          <p class="kicker">06 · Navigator</p>
           <h2 id="s6">Talk to it without interrupting it.</h2>
-          <p>Next to the leader sits a second agent whose only job is answering you. Ask what a worker is doing, why something's blocked, how close it is. The Advisor reads the run and the leader's recent turns, so the leader never has to stop and explain itself.</p>
-          <p>Want to change course? Tell the Advisor to pass it on. It lands in the leader's inbox and gets picked up on the next check, not in the middle of whatever the leader is doing.</p>
+          <p>Next to the leader sits a second agent whose only job is answering you. Ask what a crewmate is doing, why something's blocked, how close it is. The Navigator reads the run and the leader's recent turns, so the leader never has to stop and explain itself.</p>
+          <p>Want to change course? Tell the Navigator to pass it on. It lands in the leader's inbox and gets picked up on the next check, not in the middle of whatever the leader is doing.</p>
           <pre><code>lodestar say "Leave the docs task for last."</code></pre>
         </div>
       </div>
@@ -130,7 +130,7 @@ herdr plugin action invoke install-skill --plugin lodestar</code></pre>
 
           <p class="sub then">Then tell your agent something like:</p>
           <div class="code code-prompt">
-            <p id="first-prompt">Implement CSV import. Give parsing and validation to separate workers in isolated worktrees. Have them write tests, review their reports, then integrate.</p>
+            <p id="first-prompt">Implement CSV import. Give parsing and validation to separate crewmates in isolated worktrees. Have them write tests, review their reports, then integrate.</p>
             <button class="copy" type="button" data-copy="first-prompt" hidden>Copy</button>
           </div>
           <p class="copy-status" role="status" aria-live="polite"></p>

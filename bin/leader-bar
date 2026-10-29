@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The two-row worker bar. Click (release), Enter, o or space returns to the leader;
+# The two-row crewmate bar. Click (release), Enter, o or space returns to the leader;
 # q closes it. LODESTAR_RUN_ID pins navigation even when several runs share a workspace.
 set -u
 run="${LODESTAR_RUN_ID:-}"
-worker="${LODESTAR_WORKER:-}"
+crewmate="${LODESTAR_CREWMATE:-}"
 objective="${LODESTAR_OBJECTIVE:-}"
 where="${LODESTAR_WHERE:-}"
 where_label="${LODESTAR_WHERE_LABEL:-Where}"
@@ -41,7 +41,7 @@ draw() {
     if (( width > ${#btn} + 12 )); then
       printf '    \033[2m%s\033[0m' "$(cut "Leader $(printf '%s' "$objective" | plain)" $(( width - ${#btn} - 4 )))"
     fi
-    [[ -n "$worker" ]] && info="Worker $worker"
+    [[ -n "$crewmate" ]] && info="Crewmate $crewmate"
     [[ -n "$where" ]] && info+="   $where_label $where"
     [[ -n "$task" ]] && info+="   Task $task"
     printf '\033[2;1H\033[2m%s\033[0m' "$(cut "$(printf '%s' "$info" | plain)" "$width")"
@@ -54,7 +54,7 @@ go() {
   # in this two-row pane, including launcher errors when Node is not on PATH.
   if output=$(
     # The host pins its own HERDR_* paths on plugin panes; restore the creator's
-    # private aliases only for navigation, never for a worker callback or SSH relay.
+    # private aliases only for navigation, never for a crewmate callback or SSH relay.
     [[ -z "${LODESTAR_STATE_DIR:-}" ]] || export HERDR_PLUGIN_STATE_DIR="$LODESTAR_STATE_DIR"
     [[ -z "${LODESTAR_SOCKET_PATH:-}" ]] || export HERDR_SOCKET_PATH="$LODESTAR_SOCKET_PATH"
     export LODESTAR_ROLE=bar LODESTAR_REMOTE_CALLBACK_TARGET=""

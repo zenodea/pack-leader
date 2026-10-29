@@ -31,7 +31,7 @@ fn tmuxArgv(args: []const []const u8) []const []const u8 {
 }
 
 fn refuseRemote() !void {
-    if (remote.currentExecutionHost() != null) return rt.fail("unsupported", "tmux runs workers on this machine only; remote execution hosts need herdr", .{});
+    if (remote.currentExecutionHost() != null) return rt.fail("unsupported", "tmux runs crewmates on this machine only; remote execution hosts need herdr", .{});
 }
 
 /// Run a tmux command; failures map to herdr-style codes (pane_not_found, tab_not_found, unreachable).
@@ -260,7 +260,7 @@ fn allDigits(s: []const u8) bool {
     return true;
 }
 
-/// "%12" or "s3:p12"; anything else is an agent name (worker names never contain ':' or '%').
+/// "%12" or "s3:p12"; anything else is an agent name (crewmate names never contain ':' or '%').
 fn isPaneRef(target: []const u8) bool {
     if (target.len > 1 and target[0] == '%') return allDigits(target[1..]);
     const c = std.mem.lastIndexOfScalar(u8, target, ':') orelse return false;
@@ -297,7 +297,7 @@ fn listPanes(workspace_id: ?[]const u8) anyerror![]*Obj {
 
 fn appendEnv(argv: *std.ArrayListUnmanaged([]const u8), env: ?*Obj) void {
     argv.appendSlice(rt.a, &.{ "-e", "LODESTAR_MUX=tmux" }) catch {};
-    // Processes in the new pane (workers, the sidebar, hooks) must use the same state as this leader.
+    // Processes in the new pane (crewmates, the sidebar, hooks) must use the same state as this leader.
     for ([_][]const u8{ "HERDR_PLUGIN_STATE_DIR", "HERDR_PLUGIN_CONFIG_DIR", "LODESTAR_TMUX_SOCKET" }) |k| {
         if (rt.getenvNonEmpty(k)) |v| argv.appendSlice(rt.a, &.{ "-e", rt.concat(&.{ k, "=", v }) }) catch {};
     }

@@ -7,7 +7,7 @@ const args_mod = @import("../args.zig");
 const shared = @import("../shared.zig");
 const mux = @import("../../mux/index.zig");
 const inbox = @import("../../messaging/inbox.zig");
-const observer = @import("../../agents/observer.zig");
+const navigator = @import("../../agents/navigator.zig");
 const config = @import("../../core/config.zig");
 const leader = @import("../../ui/leader.zig");
 const settings_ui = @import("../../ui/settings.zig");
@@ -33,10 +33,10 @@ fn joinNotes(note: *json.Arr) []const u8 {
     return out.items;
 }
 
-const ClearObserverCtx = struct { run_id: []const u8 };
+const ClearNavigatorCtx = struct { run_id: []const u8 };
 
-fn clearObserver(ctx: ClearObserverCtx, s: state.State) !void {
-    if (state.getRun(s, ctx.run_id)) |r| r.putNull("observer");
+fn clearNavigator(ctx: ClearNavigatorCtx, s: state.State) !void {
+    if (state.getRun(s, ctx.run_id)) |r| r.putNull("navigator");
 }
 
 fn leaderCmd(a: *const Args) !void {
@@ -98,14 +98,14 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
         return;
     }
 
-    if (rt.eql(command, "observe")) {
+    if (rt.eql(command, "survey")) {
         const s = try state.load();
         const run = try shared.currentRun(a, s, true);
-        const turns = try args_mod.numInt(a, "turns", observer.OBSERVER_TURNS);
-        const file = try observer.transcriptPath(run);
+        const turns = try args_mod.numInt(a, "turns", navigator.NAVIGATOR_TURNS);
+        const file = try navigator.transcriptPath(run);
         var tail: []*Obj = &.{};
         if (file) |f| if (fs.readFileOpt(f)) |text| {
-            tail = observer.transcriptTail(text, @floatFromInt(turns));
+            tail = navigator.transcriptTail(text, @floatFromInt(turns));
         };
         var live: ?*Obj = null;
         if (mux.listAgents()) |agents| {
@@ -113,25 +113,25 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
             for (agents) |ag| m.put(ag.str("pane_id") orelse continue, json.object(.{.{ "status", ag.get("agent_status") orelse json.Value.null }}).val());
             live = m;
         } else |_| {}
-        rt.writeStdout(rt.concat(&.{ observer.digest(s, run, live, tail, file), "\n" }));
+        rt.writeStdout(rt.concat(&.{ navigator.digest(s, run, live, tail, file), "\n" }));
         return;
     }
 
-    if (rt.eql(command, "observer")) {
+    if (rt.eql(command, "navigator")) {
         try shared.requireHerdr();
         const run = try shared.currentRunLoaded(a);
         if (has(a, "close")) {
-            shared.outObj(json.object(.{.{ "closed_observer", json.optStr(try observer.closeObserver(run)) }}));
+            shared.outObj(json.object(.{.{ "closed_navigator", json.optStr(try navigator.closeNavigator(run)) }}));
             return;
         }
-        if (run.obj("observer")) |ob| if (ob.strNonEmpty("pane_id")) |pane| {
+        if (run.obj("navigator")) |ob| if (ob.strNonEmpty("pane_id")) |pane| {
             if (mux.getPane(pane)) |_| {
-                return rt.fail(null, "run {s} already has an observer in pane {s}; pass --close first", .{ run.str("id") orelse "", pane });
+                return rt.fail(null, "run {s} already has a navigator in pane {s}; pass --close first", .{ run.str("id") orelse "", pane });
             } else |_| {
-                try state.update(void, ClearObserverCtx{ .run_id = run.str("id") orelse "" }, clearObserver);
+                try state.update(void, ClearNavigatorCtx{ .run_id = run.str("id") orelse "" }, clearNavigator);
             }
         };
-        shared.outObj(json.object(.{.{ "observer", try observer.startObserver(run, .{}) }}));
+        shared.outObj(json.object(.{.{ "navigator", try navigator.startNavigator(run, .{}) }}));
         return;
     }
 }

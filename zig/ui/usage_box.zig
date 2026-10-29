@@ -1,4 +1,4 @@
-//! The usage box under the pack in the sidebar: each agent's spend and how much of each plan limit is used.
+//! The usage box under the crew in the sidebar: each agent's spend and how much of each plan limit is used.
 
 const std = @import("std");
 const rt = @import("../rt.zig");

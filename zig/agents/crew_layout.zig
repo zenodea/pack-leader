@@ -11,7 +11,7 @@ const Obj = json.Obj;
 /// { type: "pane", pane_id } | { type: "split", direction, ratio, first, second }
 pub const LayoutNode = *Obj;
 
-pub const PackSplit = struct { target: []const u8, direction: []const u8 };
+pub const CrewSplit = struct { target: []const u8, direction: []const u8 };
 
 const LOCK_STALE_MS: i64 = 60_000;
 const LOCK_WAIT_MS: i64 = 90_000;
@@ -82,7 +82,7 @@ fn runPane(r: state.Run, key: []const u8) ?[]const u8 {
 
 pub fn areaPanes(root: LayoutNode, run: state.Run) []const []const u8 {
     var left: std.ArrayListUnmanaged([]const u8) = .empty;
-    for ([_]?[]const u8{ runPane(run, "orchestrator"), runPane(run, "observer"), run.str("sidebar_pane_id") }) |p| {
+    for ([_]?[]const u8{ runPane(run, "orchestrator"), runPane(run, "navigator"), run.str("sidebar_pane_id") }) |p| {
         if (p) |x| if (x.len > 0) left.append(rt.a, x) catch {};
     }
     var out: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -90,10 +90,10 @@ pub fn areaPanes(root: LayoutNode, run: state.Run) []const []const u8 {
     return out.items;
 }
 
-pub fn nextSplit(root: LayoutNode, worker_panes: []const []const u8) ?PackSplit {
+pub fn nextSplit(root: LayoutNode, crewmate_panes: []const []const u8) ?CrewSplit {
     const all = paneIds(root);
     var present: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (worker_panes) |id| if (has(all, id) and !has(present.items, id)) present.append(rt.a, id) catch {};
+    for (crewmate_panes) |id| if (has(all, id) and !has(present.items, id)) present.append(rt.a, id) catch {};
     if (present.items.len == 0) return null;
     var queue: std.ArrayListUnmanaged(LayoutNode) = .empty;
     queue.append(rt.a, commonAncestor(root, present.items)) catch {};
@@ -124,7 +124,7 @@ pub fn enterLayoutLock(run_id: []const u8) ![]const u8 {
         if (fs.stat(dir)) |st| {
             if (rt.nowMs() - st.mtime_ms > LOCK_STALE_MS) fs.rmdir(dir) catch {};
         } else |_| {}
-        if (rt.nowMs() > deadline) return rt.fail(null, "the pack layout of run {s} stayed locked; remove {s} if no worker is starting", .{ run_id, dir });
+        if (rt.nowMs() > deadline) return rt.fail(null, "the crew layout of run {s} stayed locked; remove {s} if no crewmate is starting", .{ run_id, dir });
         rt.sleepMs(150);
     }
 }
@@ -140,19 +140,19 @@ fn split(target: []const u8, direction: []const u8, spec: PaneSpec) !*Obj {
 }
 
 fn openRightHalf(run: state.Run, leader: *Obj, spec: PaneSpec) !*Obj {
-    const observer = runPane(run, "observer");
+    const navigator = runPane(run, "navigator");
     const leader_id = leader.str("pane_id").?;
     var here = false;
-    if (observer) |ob| if (ob.len > 0) {
+    if (navigator) |ob| if (ob.len > 0) {
         if (mux.getPane(ob)) |p| {
             here = rt.eqlOpt(p.str("tab_id"), leader.str("tab_id"));
         } else |_| {}
     };
     if (!here) return split(leader_id, "right", spec);
-    _ = try mux.paneMove(observer.?, json.object(.{ .{ "type", "new_tab" }, .{ "workspace_id", json.optStr(leader.str("workspace_id")) }, .{ "label", HOLD_TAB } }));
+    _ = try mux.paneMove(navigator.?, json.object(.{ .{ "type", "new_tab" }, .{ "workspace_id", json.optStr(leader.str("workspace_id")) }, .{ "label", HOLD_TAB } }));
     defer {
-        _ = mux.paneMove(observer.?, json.object(.{ .{ "type", "tab" }, .{ "tab_id", leader.str("tab_id") orelse "" }, .{ "split", "down" }, .{ "target_pane_id", leader_id }, .{ "ratio", 0.5 } })) catch |err| {
-            mux.logMuxError("pack_layout.observer_back", err, json.object(.{ .{ "run", run.str("id") orelse "" }, .{ "pane", observer.? } }));
+        _ = mux.paneMove(navigator.?, json.object(.{ .{ "type", "tab" }, .{ "tab_id", leader.str("tab_id") orelse "" }, .{ "split", "down" }, .{ "target_pane_id", leader_id }, .{ "ratio", 0.5 } })) catch |err| {
+            mux.logMuxError("crew_layout.navigator_back", err, json.object(.{ .{ "run", run.str("id") orelse "" }, .{ "pane", navigator.? } }));
         };
     }
     return split(leader_id, "right", spec);
@@ -161,7 +161,7 @@ fn openRightHalf(run: state.Run, leader: *Obj, spec: PaneSpec) !*Obj {
 pub fn placeInPack(run: state.Run, spec: PaneSpec) !*Obj {
     const run_id = run.str("id") orelse "";
     const leader_id = runPane(run, "orchestrator") orelse "";
-    if (leader_id.len == 0) return rt.fail(null, "run {s} has no orchestrator pane to place workers beside", .{run_id});
+    if (leader_id.len == 0) return rt.fail(null, "run {s} has no orchestrator pane to place crewmates beside", .{run_id});
     const lock = try enterLayoutLock(run_id);
     defer leaveLayoutLock(lock);
     const loaded = try state.load();
@@ -169,14 +169,14 @@ pub fn placeInPack(run: state.Run, spec: PaneSpec) !*Obj {
     const leader = try mux.getPane(leader_id);
     if (!mux.caps().layout_tree) {
         const pane = try split(leader_id, "right", spec);
-        state.log(json.object(.{ .{ "event", "pack_layout.placed" }, .{ "run", run_id }, .{ "pane", pane.str("pane_id") orelse "" }, .{ "beside", leader_id }, .{ "direction", "right" } }));
+        state.log(json.object(.{ .{ "event", "crew_layout.placed" }, .{ "run", run_id }, .{ "pane", pane.str("pane_id") orelse "" }, .{ "beside", leader_id }, .{ "direction", "right" } }));
         return pane;
     }
     const root = try mux.layoutExport(leader.str("tab_id") orelse "");
     const next = nextSplit(root, areaPanes(root, fresh));
     const pane = if (next) |s| try split(s.target, s.direction, spec) else try openRightHalf(fresh, leader, spec);
     state.log(json.object(.{
-        .{ "event", "pack_layout.placed" },
+        .{ "event", "crew_layout.placed" },
         .{ "run", run_id },
         .{ "pane", pane.str("pane_id") orelse "" },
         .{ "beside", if (next) |s| s.target else leader_id },
@@ -193,7 +193,7 @@ fn splitNode(dir: []const u8, a: json.Value, b: json.Value) json.Value {
     return json.object(.{ .{ "type", "split" }, .{ "direction", dir }, .{ "ratio", 0.5 }, .{ "first", a }, .{ "second", b } }).val();
 }
 
-test "nextSplit fills the worker area breadth first and alternates direction" {
+test "nextSplit fills the crewmate area breadth first and alternates direction" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var map = std.process.Environ.Map.init(arena.allocator());

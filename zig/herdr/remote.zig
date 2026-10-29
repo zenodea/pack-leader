@@ -210,26 +210,26 @@ fn absNoControl(v: ?[]const u8) bool {
     return rt.startsWith(s, "/") and !rt.hasControl(s);
 }
 
-pub fn forwardWorkerCallback(argv: []const []const u8) !void {
+pub fn forwardCrewmateCallback(argv: []const []const u8) !void {
     const command = if (argv.len > 0) argv[0] else null;
-    if (command == null or !isCallbackCommand(command.?)) return rt.fail("remote_callback_denied", "remote worker callback does not allow {s}", .{command orelse "an empty command"});
+    if (command == null or !isCallbackCommand(command.?)) return rt.fail("remote_callback_denied", "remote crewmate callback does not allow {s}", .{command orelse "an empty command"});
     const target = rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_TARGET");
     const executable = rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_LEADER_BIN") orelse "lodestar";
     const state_dir = rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_STATE_DIR");
     const leader_socket = rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_LEADER_SOCKET");
-    if (target == null or state_dir == null or leader_socket == null) return rt.fail("remote_callback_unconfigured", "remote worker callback is missing its leader SSH target, state directory or resolved leader socket", .{});
+    if (target == null or state_dir == null or leader_socket == null) return rt.fail("remote_callback_unconfigured", "remote crewmate callback is missing its leader SSH target, state directory or resolved leader socket", .{});
     _ = try hosts.validateSshTargetField(target.?, "leader SSH target");
     if (!absNoControl(state_dir)) return rt.fail("remote_callback_unconfigured", "leader state directory must be an absolute path without control characters", .{});
     if (!absNoControl(leader_socket)) return rt.fail("remote_callback_unconfigured", "leader herdr socket must be an absolute path without control characters", .{});
     const run_id = rt.getenv("LODESTAR_RUN_ID") orelse "";
-    const worker = rt.getenv("LODESTAR_WORKER") orelse "";
+    const crewmate = rt.getenv("LODESTAR_CREWMATE") orelse "";
     const context = json.object(.{
         .{ "run_id", run_id },
-        .{ "worker", worker },
+        .{ "crewmate", crewmate },
         .{ "task_id", json.optStr(rt.getenv("LODESTAR_TASK_ID")) },
         .{ "dispatch_id", json.optStr(rt.getenv("LODESTAR_DISPATCH_ID")) },
     });
-    if (run_id.len == 0 or worker.len == 0) return rt.fail("remote_callback_unconfigured", "remote worker callback is missing its run/worker identity", .{});
+    if (run_id.len == 0 or crewmate.len == 0) return rt.fail("remote_callback_unconfigured", "remote crewmate callback is missing its run/crewmate identity", .{});
     const payload = json.object(.{
         .{ "argv", json.strArr(argv) },
         .{ "state_dir", state_dir.? },
@@ -287,12 +287,12 @@ pub fn validateCallbackRequest(request: Value) !void {
     if (!absNoControl(o.str("leader_socket"))) return rt.fail("bad_callback_request", "callback leader_socket must be an absolute path without control characters", .{});
     if (!absNoControl(o.str("cwd"))) return rt.fail("bad_callback_request", "callback cwd must be an absolute path without control characters", .{});
     const ctx = o.obj("context");
-    if (ctx == null or (ctx.?.strNonEmpty("run_id") == null) or (ctx.?.strNonEmpty("worker") == null)) return rt.fail("bad_callback_request", "callback worker context is incomplete", .{});
+    if (ctx == null or (ctx.?.strNonEmpty("run_id") == null) or (ctx.?.strNonEmpty("crewmate") == null)) return rt.fail("bad_callback_request", "callback crewmate context is incomplete", .{});
     for ([_][]const u8{ "task_id", "dispatch_id" }) |key| {
         const v = ctx.?.get(key) orelse Value.null;
         if (v != .null and v != .str) return rt.fail("bad_callback_request", "callback context {s} must be a string or null", .{key});
     }
-    const pairs = [_][2][]const u8{ .{ "run", ctx.?.str("run_id").? }, .{ "worker", ctx.?.str("worker").? } };
+    const pairs = [_][2][]const u8{ .{ "run", ctx.?.str("run_id").? }, .{ "crewmate", ctx.?.str("crewmate").? } };
     for (pairs) |p| {
         const values = try callbackFlagValues(argv, p[0]);
         for (values) |v| {

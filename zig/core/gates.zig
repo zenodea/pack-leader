@@ -58,7 +58,7 @@ pub fn createGateInState(s: State, run_id: []const u8, task_id: []const u8, reas
     if (rt.eqlOpt(task.?.str("status"), "dispatched")) return gateErr("gate_task_dispatched", "task {s} is already dispatched; gates can only be created for non-dispatched tasks", .{task_id});
 
     var registered: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (state.workers(s).objValues()) |w| if (w.strNonEmpty("dispatch_id")) |id| registered.append(rt.a, id) catch {};
+    for (state.crewmates(s).objValues()) |w| if (w.strNonEmpty("dispatch_id")) |id| registered.append(rt.a, id) catch {};
     if (s.obj("dispatches")) |ds| for (ds.objValues()) |d| {
         if (!rt.eqlOpt(d.str("task_id"), task_id) or !rt.eqlOpt(d.str("run_id"), run_id) or d.truthy("settled_at")) continue;
         const did = d.str("id") orelse "";
@@ -68,7 +68,7 @@ pub fn createGateInState(s: State, run_id: []const u8, task_id: []const u8, reas
         };
         if (reg) continue;
         if (claims.startClaimIsFresh(d, state.START_CLAIM_MS)) {
-            return gateErr("gate_start_claim_active", "task {s} is being started by worker \"{s}\" (dispatch {s}); wait for that start to finish", .{ task_id, d.str("worker") orelse "undefined", did });
+            return gateErr("gate_start_claim_active", "task {s} is being started by crewmate \"{s}\" (dispatch {s}); wait for that start to finish", .{ task_id, d.str("crewmate") orelse "undefined", did });
         }
         d.putStr("settled_at", state.now());
         d.putStr("outcome", "failed");

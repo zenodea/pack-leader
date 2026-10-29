@@ -1,12 +1,12 @@
 # Automatic model routing
 
 Lodestar can ask **OpenAI Decisions** or **TypeSafe Jev** which approved model
-profile should handle a new worker's task. Routing is **off by default**. You
+profile should handle a new crewmate's task. Routing is **off by default**. You
 choose the active provider; Lodestar does not silently switch providers.
 
 The router chooses a **model and optional effort**, not a harness. Your selected
-harness (`--kind`, then the configured default) stays in control. Existing worker
-sessions are never rerouted by `worker prompt`, adoption, or follow-ups.
+harness (`--kind`, then the configured default) stays in control. Existing crewmate
+sessions are never rerouted by `crewmate prompt`, adoption, or follow-ups.
 
 ## Configure approved profiles
 
@@ -47,7 +47,7 @@ lodestar config show
 ```
 
 Profiles are grouped by harness under `kinds`. Add a separate entry for `claude`
-or `codex` to route those workers; their model names and effort settings may
+or `codex` to route those crewmates; their model names and effort settings may
 differ. Every configured harness needs a `fallback` naming one of its profiles.
 Lodestar never accepts an arbitrary model name returned by a decision model.
 A profile with no `thinking` field keeps the per-harness effort default; set
@@ -58,7 +58,7 @@ match `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`. Model IDs, descriptions, and effort nam
 are nonempty, single-line strings, bounded to 256, 2048, and 64 UTF-8 bytes
 respectively.
 
-If the selected harness has no routing profiles, the worker keeps its ordinary
+If the selected harness has no routing profiles, the crewmate keeps its ordinary
 model/effort defaults and no decision request is sent.
 
 ## Select a provider
@@ -89,27 +89,27 @@ The adapter uses `POST https://api.typesafe.ai/v1/systemone` with decision model
 are not interchangeable API endpoints.
 
 Keys are read from the leader's environment, not saved in Lodestar's
-configuration or copied into remote worker launch arguments. Do not put keys in
+configuration or copied into remote crewmate launch arguments. Do not put keys in
 task specs or profile descriptions.
 
 ## Start and override
 
-Start workers normally once routing is configured:
+Start crewmates normally once routing is configured:
 
 ```bash
-lodestar worker start tests --spec "Add regression tests for the CSV parser"
+lodestar crew start tests --spec "Add regression tests for the CSV parser"
 ```
 
 Select a different provider for one start without changing saved settings:
 
 ```bash
-lodestar worker start parser --router jev --spec "Implement the CSV parser"
+lodestar crew start parser --router jev --spec "Implement the CSV parser"
 ```
 
-Disable routing for one worker or globally:
+Disable routing for one crewmate or globally:
 
 ```bash
-lodestar worker start parser --router off --spec "Implement the CSV parser"
+lodestar crew start parser --router off --spec "Implement the CSV parser"
 lodestar config set --router off
 ```
 
@@ -122,8 +122,8 @@ Precedence:
 4. Ordinary per-harness defaults fill unset selections, including when routing
    is disabled or unsupported for the selected harness.
 
-Routing happens once for a **new worker session**. To choose a different runtime
-for later work, start a new worker instead of expecting `worker prompt` to change
+Routing happens once for a **new crewmate session**. To choose a different runtime
+for later work, start a new crewmate instead of expecting `crewmate prompt` to change
 an existing session's model.
 
 ## Fallbacks, supervision, and privacy
@@ -134,10 +134,10 @@ invalid answer, or reports confidence below `min_confidence`. There is one
 bounded request, no automatic retry loop, and no fallback to another provider.
 `timeout_ms` must be an integer from 1 to 30000.
 
-Decision requests run on the leader, including for remote workers. Routing runs
-after task/name/approval-gate admission, outside the state lock, and before worker
+Decision requests run on the leader, including for remote crewmates. Routing runs
+after task/name/approval-gate admission, outside the state lock, and before crewmate
 resources are created. Start authority is checked again after the decision so a
-closed run cannot launch a worker when an outstanding request returns.
+closed run cannot launch a crewmate when an outstanding request returns.
 
 Enabling routing sends the task title/spec and approved profile descriptions to
 the selected provider. It does not intentionally include repository contents,

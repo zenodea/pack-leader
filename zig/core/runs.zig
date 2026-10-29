@@ -6,8 +6,8 @@ const time = @import("time.zig");
 const state = @import("state.zig");
 const dispatch = @import("dispatch.zig");
 const mux = @import("../mux/index.zig");
-const observer = @import("../agents/observer.zig");
-const workers = @import("../agents/workers.zig");
+const navigator = @import("../agents/navigator.zig");
+const crewmates = @import("../agents/crewmates.zig");
 
 const Obj = json.Obj;
 const Value = json.Value;
@@ -80,13 +80,13 @@ pub fn pruneRuns(s: State, o: PruneRunsOpts) *Obj {
     for (closed.items[start..]) |r| {
         if (o.olderThanMs) |older| if (!(@as(f64, @floatFromInt(at - closedAt(r))) > older)) continue;
         var names: std.ArrayListUnmanaged([]const u8) = .empty;
-        for (state.workers(s).objValues()) |w| if (rt.eqlOpt(w.str("run_id"), r.str("id"))) names.append(rt.a, w.str("name") orelse "undefined") catch {};
+        for (state.crewmates(s).objValues()) |w| if (rt.eqlOpt(w.str("run_id"), r.str("id"))) names.append(rt.a, w.str("name") orelse "undefined") catch {};
         if (names.items.len == 0 or at - closedAt(r) > CLOSE_GRACE_MS) {
             doomed.append(rt.a, r) catch {};
             continue;
         }
         const id = r.str("id") orelse "";
-        skipped.push(json.object(.{ .{ "id", id }, .{ "reason", rt.fmt("workers still recorded ({s}): a run close may still be releasing them. If none is, run `lodestar run close --run {s} --force` to forget them, then prune again", .{ std.mem.join(rt.a, ", ", names.items) catch "", id }) } }).val());
+        skipped.push(json.object(.{ .{ "id", id }, .{ "reason", rt.fmt("crewmates still recorded ({s}): a run close may still be releasing them. If none is, run `lodestar run close --run {s} --force` to forget them, then prune again", .{ std.mem.join(rt.a, ", ", names.items) catch "", id }) } }).val());
     }
     var ids: std.StringHashMapUnmanaged(void) = .empty;
     for (doomed.items) |r| ids.put(rt.a, r.str("id") orelse "", {}) catch {};
@@ -144,7 +144,7 @@ fn strictEq(x: ?Value, y: ?Value) bool {
 }
 
 const CloseTx = struct { run_id: []const u8, release: bool, force: bool };
-const CloseSnap = struct { run: *Obj, workers: []*Obj, failed: []const []const u8 };
+const CloseSnap = struct { run: *Obj, crewmates: []*Obj, failed: []const []const u8 };
 
 fn runOutcome() *Obj {
     return json.object(.{ .{ "summary", "run closed" }, .{ "files_modified", json.newArr() }, .{ "report_path", json.nul } });
@@ -153,7 +153,7 @@ fn runOutcome() *Obj {
 fn closeTx(c: CloseTx, s: State) !CloseSnap {
     const run = state.getRun(s, c.run_id) orelse return rt.fail(null, "no run {s}", .{c.run_id});
     if (rt.eqlOpt(run.str("status"), "closed") and !c.force) return rt.fail(null, "run {s} is already closed; pass --force to close it again", .{c.run_id});
-    const ws = state.runWorkers(s, c.run_id);
+    const ws = state.runCrewmates(s, c.run_id);
     var busy: std.ArrayListUnmanaged([]const u8) = .empty;
     var registered: std.StringHashMapUnmanaged(void) = .empty;
     for (ws) |w| {
@@ -165,11 +165,11 @@ fn closeTx(c: CloseTx, s: State) !CloseSnap {
     if (s.obj("dispatches")) |ds| for (ds.objValues()) |d| {
         if (!rt.eqlOpt(d.str("run_id"), c.run_id) or d.truthy("settled_at") or registered.contains(d.str("id") orelse "")) continue;
         starting.append(rt.a, d) catch {};
-        if (dispatch.startClaimIsFresh(d, state.START_CLAIM_MS)) active_starts.append(rt.a, d.str("worker") orelse "undefined") catch {};
+        if (dispatch.startClaimIsFresh(d, state.START_CLAIM_MS)) active_starts.append(rt.a, d.str("crewmate") orelse "undefined") catch {};
     };
     if (!c.release and !c.force) {
-        if (busy.items.len > 0) return rt.fail(null, "workers still dispatched in run {s}: {s}; pass --release to release them, or --force to close anyway", .{ c.run_id, std.mem.join(rt.a, ", ", busy.items) catch "" });
-        if (active_starts.items.len > 0) return rt.fail(null, "workers still starting in run {s}: {s}; pass --release to release them, or --force to close anyway", .{ c.run_id, std.mem.join(rt.a, ", ", active_starts.items) catch "" });
+        if (busy.items.len > 0) return rt.fail(null, "crewmates still dispatched in run {s}: {s}; pass --release to release them, or --force to close anyway", .{ c.run_id, std.mem.join(rt.a, ", ", busy.items) catch "" });
+        if (active_starts.items.len > 0) return rt.fail(null, "crewmates still starting in run {s}: {s}; pass --release to release them, or --force to close anyway", .{ c.run_id, std.mem.join(rt.a, ", ", active_starts.items) catch "" });
     }
     var failed: std.ArrayListUnmanaged([]const u8) = .empty;
     for (state.tasks(s).objValues()) |t| {
@@ -185,7 +185,7 @@ fn closeTx(c: CloseTx, s: State) !CloseSnap {
         if (!rt.eqlOpt(t.str("run_id"), c.run_id)) continue;
         if (!rt.eqlOpt(t.str("status"), "pending") and !rt.eqlOpt(t.str("status"), "failed")) continue;
         t.putStr("status", "failed");
-        t.put("worker", d.get("worker") orelse Value.null);
+        t.put("crewmate", d.get("crewmate") orelse Value.null);
         t.put("dispatch_id", d.get("id") orelse Value.null);
         t.putInt("attempts", (t.int("attempts") orelse 0) + 1);
         t.putStr("updated_at", state.now());
@@ -205,7 +205,7 @@ fn closeTx(c: CloseTx, s: State) !CloseSnap {
     run.putStr("status", "closed");
     run.putStr("closed_at", state.now());
     run.del("herdr_unreachable_since");
-    return .{ .run = run.clone(), .workers = ws, .failed = failed.items };
+    return .{ .run = run.clone(), .crewmates = ws, .failed = failed.items };
 }
 
 fn closeLocked(c: CloseTx) !CloseSnap {
@@ -219,19 +219,19 @@ const ForgetOut = struct { forgotten: *json.Arr, shared: bool };
 
 fn forgetTx(c: ForgetCtx, s: State) !ForgetOut {
     const forgotten = json.newArr();
-    for (state.runWorkers(s, c.run_id)) |w| {
-        forgotten.push(json.object(.{ .{ "worker", w.get("name") orelse Value.null }, .{ "pane_id", w.get("pane_id") orelse Value.null }, .{ "tab_id", nonUndef(w.get("tab_id")) } }).val());
+    for (state.runCrewmates(s, c.run_id)) |w| {
+        forgotten.push(json.object(.{ .{ "crewmate", w.get("name") orelse Value.null }, .{ "pane_id", w.get("pane_id") orelse Value.null }, .{ "tab_id", nonUndef(w.get("tab_id")) } }).val());
         if (w.obj("worktree")) |wt_info| {
             const wts = s.obj("worktrees");
             const wt = if (wts) |x| (if (wt_info.str("path")) |p| x.obj(p) else null) else null;
             if (wt) |rec| {
-                if (strictEq(rec.get("worker"), w.get("name")) and strictEq(rec.get("run_id"), w.get("run_id")) and strictEq(rec.get("dispatch_id"), w.get("worktree_dispatch_id"))) {
+                if (strictEq(rec.get("crewmate"), w.get("name")) and strictEq(rec.get("run_id"), w.get("run_id")) and strictEq(rec.get("dispatch_id"), w.get("worktree_dispatch_id"))) {
                     rec.del("released_at");
                     rec.putStr("cleanup_protection", "forgotten");
                 }
             }
         }
-        state.workers(s).del(w.str("name") orelse "");
+        state.crewmates(s).del(w.str("name") orelse "");
     }
     if (state.getRun(s, c.run_id)) |r| r.putNull("sidebar_pane_id");
     var shared = false;
@@ -245,7 +245,7 @@ fn nonUndef(v: ?Value) Value {
     return v orelse .null;
 }
 
-/// `CloseResult`: { closed, released, forgotten, failed_tasks, closed_sidebar, closed_observer, sub_runs? }.
+/// `CloseResult`: { closed, released, forgotten, failed_tasks, closed_sidebar, closed_navigator, sub_runs? }.
 pub fn closeRun(run_id: []const u8, o: CloseRunOpts) !*Obj {
     const release = o.release orelse false;
     const force = o.force orelse false;
@@ -261,23 +261,23 @@ pub fn closeRun(run_id: []const u8, o: CloseRunOpts) !*Obj {
         for (state.activeRuns(try state.load())) |child| {
             const p = child.obj("parent") orelse continue;
             if (!rt.eqlOpt(p.str("run_id"), run_id)) continue;
-            open.append(rt.a, rt.fmt("{s} ({s})", .{ child.str("id") orelse "", p.str("worker") orelse "undefined" })) catch {};
+            open.append(rt.a, rt.fmt("{s} ({s})", .{ child.str("id") orelse "", p.str("crewmate") orelse "undefined" })) catch {};
         }
-        if (open.items.len > 0) return rt.fail("sub_run_open", "workers of run {s} still coordinate sub-runs: {s}; pass --release to close them too, or --force", .{ run_id, std.mem.join(rt.a, ", ", open.items) catch "" });
+        if (open.items.len > 0) return rt.fail("sub_run_open", "crewmates of run {s} still coordinate sub-runs: {s}; pass --release to close them too, or --force", .{ run_id, std.mem.join(rt.a, ", ", open.items) catch "" });
     }
     const snap = try closeLocked(.{ .run_id = run_id, .release = release, .force = force });
     const run = snap.run;
 
     const released = json.newArr();
     if (release) {
-        for (snap.workers) |w| {
+        for (snap.crewmates) |w| {
             const name = w.str("name") orelse "";
-            if (workers.releaseWorker(run, name, .{ .force = true })) |res| {
-                const item = json.object(.{.{ "worker", name }});
+            if (crewmates.releaseCrewmate(run, name, .{ .force = true })) |res| {
+                const item = json.object(.{.{ "crewmate", name }});
                 item.assign(res);
                 released.push(item.val());
             } else |err| {
-                state.log(json.object(.{ .{ "event", "worker.release_failed" }, .{ "run", run_id }, .{ "worker", name }, .{ "error", rt.errMessage(err) } }));
+                state.log(json.object(.{ .{ "event", "crewmate.release_failed" }, .{ "run", run_id }, .{ "crewmate", name }, .{ "error", rt.errMessage(err) } }));
             }
         }
     }
@@ -293,7 +293,7 @@ pub fn closeRun(run_id: []const u8, o: CloseRunOpts) !*Obj {
             } else |err| mux.logMuxError("sidebar.close", err, json.object(.{ .{ "run", run_id }, .{ "pane", sb } }));
         } else |err| mux.logMuxError("sidebar.close", err, json.object(.{ .{ "run", run_id }, .{ "pane", sb } }));
     };
-    const closed_observer = try observer.closeObserver(run);
+    const closed_navigator = try navigator.closeNavigator(run);
     const orch = run.obj("orchestrator");
     if (orch) |or_| {
         if (or_.strNonEmpty("pane_id")) |p| mux.renamePane(p, null);
@@ -302,9 +302,9 @@ pub fn closeRun(run_id: []const u8, o: CloseRunOpts) !*Obj {
         };
     }
     const released_names = json.newArr();
-    for (released.slice()) |r| released_names.push(r.obj.get("worker").?);
+    for (released.slice()) |r| released_names.push(r.obj.get("crewmate").?);
     const forgotten_names = json.newArr();
-    for (forgot.forgotten.slice()) |f| forgotten_names.push(f.obj.get("worker").?);
+    for (forgot.forgotten.slice()) |f| forgotten_names.push(f.obj.get("crewmate").?);
     state.log(json.object(.{
         .{ "event", "run.closed" },
         .{ "run", run_id },
@@ -312,7 +312,7 @@ pub fn closeRun(run_id: []const u8, o: CloseRunOpts) !*Obj {
         .{ "forgotten", forgotten_names },
         .{ "failed_tasks", json.strArr(snap.failed) },
         .{ "closed_sidebar", json.optStr(closed_sidebar) },
-        .{ "closed_observer", json.optStr(closed_observer) },
+        .{ "closed_navigator", json.optStr(closed_navigator) },
     }));
     const out = json.object(.{
         .{ "closed", run_id },
@@ -320,7 +320,7 @@ pub fn closeRun(run_id: []const u8, o: CloseRunOpts) !*Obj {
         .{ "forgotten", forgot.forgotten },
         .{ "failed_tasks", json.strArr(snap.failed) },
         .{ "closed_sidebar", json.optStr(closed_sidebar) },
-        .{ "closed_observer", json.optStr(closed_observer) },
+        .{ "closed_navigator", json.optStr(closed_navigator) },
     });
     if (sub_runs.len() > 0) out.put("sub_runs", sub_runs.val());
     return out;

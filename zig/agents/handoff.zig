@@ -8,7 +8,7 @@ const state = @import("../core/state.zig");
 const config = @import("../core/config.zig");
 const mux = @import("../mux/index.zig");
 const args_mod = @import("../cli/args.zig");
-const observer = @import("observer.zig");
+const navigator = @import("navigator.zig");
 
 const Obj = json.Obj;
 const Value = json.Value;
@@ -170,9 +170,9 @@ pub fn mentionsCheck(command: []const u8) bool {
 }
 
 pub fn claudeOrchestratorFile(cwd: []const u8, home: ?[]const u8) !?[]const u8 {
-    const dir = observer.claudeSessionDir(cwd, home);
+    const dir = navigator.claudeSessionDir(cwd, home);
     if (!fs.exists(dir)) return null;
-    const newest = try observer.jsonlFilesNewestFirst(dir);
+    const newest = try navigator.jsonlFilesNewestFirst(dir);
     for (newest[0..@min(newest.len, CLAUDE_CANDIDATES)]) |c| {
         if (mentionsCheck(lastToolCommand(try readTail(c.f, TAIL_BYTES)) orelse "")) return c.f;
     }
@@ -219,7 +219,7 @@ pub fn handoffInstructions(due: HandoffDue) []const u8 {
     const parts = [_][]const u8{
         rt.fmt("Your context passed {s} tokens ({s} now), so hand off before you wait again.", .{ config.formatTokens(due.at), config.formatTokens(roundThousands(due.tokens)) }),
         "Write a note for the session that replaces you: the user's goal, every instruction, decision and constraint they gave you, anything you promised them, and what you were about to do next.",
-        "Leave out tasks, workers, reports and messages: Lodestar's state already holds them and the next session reads them with `lodestar status`.",
+        "Leave out tasks, crewmates, reports and messages: Lodestar's state already holds them and the next session reads them with `lodestar status`.",
         "Save it with `lodestar handoff --body \"<note>\"`, then end your turn with one line saying you are handing off. Lodestar clears this session and starts the next one with your note.",
     };
     return std.mem.join(rt.a, " ", &parts) catch @panic("out of memory");

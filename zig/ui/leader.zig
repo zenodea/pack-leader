@@ -12,11 +12,11 @@ pub fn resolveLeaderRun(s: state.State, opts: ResolveLeaderRunOpts) !state.Run {
         var direct = false;
         for (state.runs(s).objValues()) |run| {
             if (!rt.eqlOpt(run.str("status"), "active")) continue;
-            const ob = run.obj("observer");
+            const ob = run.obj("navigator");
             if (rt.eqlOpt(state.orchestratorPane(run), pane) or rt.eqlOpt(run.str("sidebar_pane_id"), pane) or (ob != null and rt.eqlOpt(ob.?.str("pane_id"), pane))) direct = true;
         }
         var bar_runs: std.ArrayListUnmanaged([]const u8) = .empty;
-        for (state.workers(s).objValues()) |w| {
+        for (state.crewmates(s).objValues()) |w| {
             if (w.truthy("execution_host")) continue;
             const r = state.getRun(s, w.str("run_id") orelse continue) orelse continue;
             if (!rt.eqlOpt(r.str("status"), "active")) continue;

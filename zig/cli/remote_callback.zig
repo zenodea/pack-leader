@@ -19,10 +19,10 @@ fn validateCallbackAuthority(request: *Obj) !void {
     const run_id = context.str("run_id").?;
     const run = state.getRun(s, run_id);
     if (run == null or !rt.eqlOpt(run.?.str("status"), "active")) return stale("callback run {s} is missing or closed", .{run_id});
-    const wname = context.str("worker").?;
-    const worker = state.getWorker(s, wname);
-    if (worker == null or !rt.eqlOpt(worker.?.str("run_id"), run.?.str("id"))) return stale("worker {s} is not currently registered in run {s}", .{ wname, run.?.str("id").? });
-    const w = worker.?;
+    const wname = context.str("crewmate").?;
+    const crewmate = state.getCrewmate(s, wname);
+    if (crewmate == null or !rt.eqlOpt(crewmate.?.str("run_id"), run.?.str("id"))) return stale("crewmate {s} is not currently registered in run {s}", .{ wname, run.?.str("id").? });
+    const w = crewmate.?;
     const argv = request.arr("argv").?.strs();
     const task_flags = try remote.callbackFlagValues(argv, "task");
     const dispatch_flags = try remote.callbackFlagValues(argv, "dispatch");
@@ -35,15 +35,15 @@ fn validateCallbackAuthority(request: *Obj) !void {
     if (!rt.eqlOpt(task_id, current_task) or !rt.eqlOpt(dispatch_id, current_dispatch)) {
         return stale("callback context for {s} is stale: supplied task {s}/dispatch {s}, current task {s}/dispatch {s}", .{ wn, task_id orelse "none", dispatch_id orelse "none", current_task orelse "none", current_dispatch orelse "none" });
     }
-    if ((current_task == null) != (current_dispatch == null)) return stale("worker {s} has an incomplete current task/dispatch binding", .{wn});
+    if ((current_task == null) != (current_dispatch == null)) return stale("crewmate {s} has an incomplete current task/dispatch binding", .{wn});
     if (current_task) |ct| {
         const task = state.getTask(s, ct);
-        if (task == null or !rt.eqlOpt(task.?.str("run_id"), run.?.str("id")) or !rt.eqlOpt(task.?.str("worker"), wn) or !rt.eqlOpt(task.?.str("dispatch_id"), current_dispatch)) {
-            return stale("worker {s} has no current task binding for {s}/{s}", .{ wn, ct, current_dispatch.? });
+        if (task == null or !rt.eqlOpt(task.?.str("run_id"), run.?.str("id")) or !rt.eqlOpt(task.?.str("crewmate"), wn) or !rt.eqlOpt(task.?.str("dispatch_id"), current_dispatch)) {
+            return stale("crewmate {s} has no current task binding for {s}/{s}", .{ wn, ct, current_dispatch.? });
         }
         if (state.getDispatch(s, current_dispatch.?)) |d| {
-            if (!rt.eqlOpt(d.str("run_id"), run.?.str("id")) or !rt.eqlOpt(d.str("worker"), wn) or !rt.eqlOpt(d.str("task_id"), ct)) {
-                return stale("dispatch {s} is not bound to worker {s} and task {s}", .{ current_dispatch.?, wn, ct });
+            if (!rt.eqlOpt(d.str("run_id"), run.?.str("id")) or !rt.eqlOpt(d.str("crewmate"), wn) or !rt.eqlOpt(d.str("task_id"), ct)) {
+                return stale("dispatch {s} is not bound to crewmate {s} and task {s}", .{ current_dispatch.?, wn, ct });
             }
         }
     }
@@ -64,10 +64,10 @@ pub fn runRemoteCallbackRelay() !void {
         .{ "HERDR_PLUGIN_STATE_DIR", req.str("state_dir").? },
         .{ "HERDR_SOCKET_PATH", req.str("leader_socket").? },
         .{ "LODESTAR_REMOTE_CALLBACK_CWD", req.str("cwd").? },
-        .{ "LODESTAR_ROLE", "worker" },
+        .{ "LODESTAR_ROLE", "crewmate" },
         .{ "LODESTAR_REMOTE_CALLBACK_ACTIVE", "1" },
         .{ "LODESTAR_RUN_ID", ctx.str("run_id").? },
-        .{ "LODESTAR_WORKER", ctx.str("worker").? },
+        .{ "LODESTAR_CREWMATE", ctx.str("crewmate").? },
     });
     var unset: std.ArrayListUnmanaged([]const u8) = .empty;
     try unset.appendSlice(rt.a, &.{ "HERDR_SESSION", "HERDR_PLUGIN_ID", "HERDR_PLUGIN_CONTEXT_JSON", "LODESTAR_REMOTE_CALLBACK_TARGET", "LODESTAR_REMOTE_CALLBACK_LEADER_BIN", "LODESTAR_REMOTE_CALLBACK_STATE_DIR", "LODESTAR_REMOTE_CALLBACK_LEADER_SOCKET", "LODESTAR_REMOTE_CALLBACK_CWD" });

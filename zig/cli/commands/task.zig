@@ -5,7 +5,7 @@ const state = @import("../../core/state.zig");
 const gates = @import("../../core/gates.zig");
 const dispatch = @import("../../core/dispatch.zig");
 const hierarchy = @import("../../core/hierarchy.zig");
-const workers = @import("../../agents/workers.zig");
+const crewmates = @import("../../agents/crewmates.zig");
 const args_mod = @import("../args.zig");
 const shared = @import("../shared.zig");
 
@@ -16,21 +16,21 @@ const Args = args_mod.Args;
 const str = args_mod.str;
 const has = args_mod.has;
 
-fn actsAsWorker(s: State, run: *Obj) bool {
+fn actsAsCrewmate(s: State, run: *Obj) bool {
     if (shared.coordinatesSubRun(run)) return false;
-    if (rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "worker") or rt.getenvNonEmpty("LODESTAR_WORKER") != null) return true;
+    if (rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "crewmate") or rt.getenvNonEmpty("LODESTAR_CREWMATE") != null) return true;
     const pane = shared.here().pane_id orelse return false;
-    for (state.workers(s).objValues()) |w| if (!w.truthy("execution_host") and rt.eqlOpt(w.str("pane_id"), pane)) return true;
+    for (state.crewmates(s).objValues()) |w| if (!w.truthy("execution_host") and rt.eqlOpt(w.str("pane_id"), pane)) return true;
     return false;
 }
 
 fn requireGateCoordinator(s: State, run: *Obj) !void {
     if (!rt.eqlOpt(run.str("status"), "active")) return rt.fail("gate_run_closed", "run {s} is closed", .{run.str("id") orelse ""});
-    if (actsAsWorker(s, run)) return rt.fail("gate_coordinator_only", "task gates can only be changed by the run coordinator", .{});
+    if (actsAsCrewmate(s, run)) return rt.fail("gate_coordinator_only", "task gates can only be changed by the run coordinator", .{});
 }
 
 fn requireCoordinatorParentMutation(s: State, run: *Obj) !void {
-    if (actsAsWorker(s, run)) return rt.fail("TASK_PARENT_COORDINATOR_ONLY", "only the coordinator may change task parent provenance", .{});
+    if (actsAsCrewmate(s, run)) return rt.fail("TASK_PARENT_COORDINATOR_ONLY", "only the coordinator may change task parent provenance", .{});
 }
 
 fn isSettable(s: []const u8) bool {
@@ -44,11 +44,11 @@ fn transitionAllowed(from: []const u8, to: []const u8) bool {
     return false;
 }
 
-/// `t`: { id, status, worker }.
+/// `t`: { id, status, crewmate }.
 pub fn refuseTransition(t: *Obj, to: []const u8, force: bool) !void {
     const status = t.str("status") orelse "undefined";
     const id = t.str("id") orelse "";
-    if (rt.eql(status, "dispatched")) return rt.fail(null, "task {s} is dispatched to {s}; it settles through `lodestar done` or `lodestar worker release --force`", .{ id, t.str("worker") orelse "null" });
+    if (rt.eql(status, "dispatched")) return rt.fail(null, "task {s} is dispatched to {s}; it settles through `lodestar done` or `lodestar crew release --force`", .{ id, t.str("crewmate") orelse "null" });
     if (rt.eql(status, to) or transitionAllowed(status, to)) return;
     if (rt.eql(status, "succeeded") and force) return;
     if (rt.eql(status, "succeeded")) return rt.fail(null, "task {s} is {s}; pass --force to set it {s}", .{ id, status, to });
@@ -109,7 +109,7 @@ fn updateTx(c: UpdateCtx, s: State) !*Obj {
         try refuseTransition(t, status, has(c.a, "force"));
         t.putStr("status", status);
         if (rt.eql(status, "pending")) {
-            t.putNull("worker");
+            t.putNull("crewmate");
             t.putNull("dispatch_id");
             t.putNull("outcome");
             t.putStr("retry_reset_at", state.now());
@@ -145,7 +145,7 @@ fn brief(s: State, t: *Obj) *Obj {
         .{ "title", t.get("title") orelse Value.null },
         .{ "status", t.get("status") orelse Value.null },
         .{ "ready", state.ready(s, t) },
-        .{ "worker", t.get("worker") orelse Value.null },
+        .{ "crewmate", t.get("crewmate") orelse Value.null },
         .{ "depends_on", t.get("depends_on") orelse Value.null },
         .{ "spec", if (long) rt.concat(&.{ state.utf16Slice(spec, 159), "…" }) else spec },
     });
@@ -164,7 +164,7 @@ fn handleTask(a: *const Args) !void {
         const spec = str(a, "spec") orelse return rt.fail(null, "pass --spec \"<self-contained task spec>\"", .{});
         const run = try shared.currentRunLoaded(a);
         const r = try state.update(Created, CreateCtx{ .a = a, .run_id = run.str("id") orelse "", .spec = spec }, createTx);
-        const out = json.object(.{.{ "task", workers.taskSummary(r.task, try state.load()) }});
+        const out = json.object(.{.{ "task", crewmates.taskSummary(r.task, try state.load()) }});
         if (r.stuck.len > 0) {
             const tid = r.task.str("id") orelse "";
             out.putStr("warning", rt.fmt("depends on {s}; {s} is not ready until {s} (task update ID --status pending to retry one)", .{ joinStrs(r.stuck), tid, if (r.stuck.len == 1) "it succeeds" else "they succeed" }));
@@ -182,7 +182,7 @@ fn handleTask(a: *const Args) !void {
             if (has(a, "ready") and !state.ready(s, t)) continue;
             if (status) |st| if (!rt.eqlOpt(t.str("status"), st)) continue;
             if (has(a, "brief")) list.push(brief(s, t).val()) else {
-                const o = workers.taskSummary(t, s).clone();
+                const o = crewmates.taskSummary(t, s).clone();
                 o.putBool("ready", state.ready(s, t));
                 list.push(o.val());
             }
@@ -226,7 +226,7 @@ fn handleTask(a: *const Args) !void {
         if (id == null or (status == null and !change_parent)) return rt.fail(null, "usage: lodestar task update ID [--status pending|blocked|failed|succeeded] [--parent ID|none] [--summary S] [--force]", .{});
         if (status) |st| if (!isSettable(st)) return rt.fail(null, "bad status {s}", .{st});
         const t = try state.update(*Obj, UpdateCtx{ .a = a, .id = id.?, .status = status, .change_parent = change_parent, .parent_arg = parent_arg }, updateTx);
-        shared.outObj(json.object(.{.{ "task", workers.taskSummary(t, try state.load()) }}));
+        shared.outObj(json.object(.{.{ "task", crewmates.taskSummary(t, try state.load()) }}));
         return;
     }
     return rt.fail(null, "unknown: lodestar task {s}", .{sub});
@@ -296,12 +296,12 @@ test "task transitions" {
     defer arena.deinit();
     var map = std.process.Environ.Map.init(arena.allocator());
     rt.initForTest(arena.allocator(), &map);
-    const t = json.object(.{ .{ "id", "t1" }, .{ "status", "succeeded" }, .{ "worker", json.nul } });
+    const t = json.object(.{ .{ "id", "t1" }, .{ "status", "succeeded" }, .{ "crewmate", json.nul } });
     try std.testing.expectError(error.Fail, refuseTransition(t, "pending", false));
     try std.testing.expectEqualStrings("task t1 is succeeded; pass --force to set it pending", rt.last.message);
     try refuseTransition(t, "pending", true);
     t.putStr("status", "dispatched");
-    t.putStr("worker", "w");
+    t.putStr("crewmate", "w");
     try std.testing.expectError(error.Fail, refuseTransition(t, "failed", true));
     try std.testing.expectEqualStrings("a b c", collapseSpace("  a \n b\t\tc "));
 }

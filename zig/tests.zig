@@ -3,12 +3,12 @@ const std = @import("std");
 test {
     std.testing.refAllDecls(@import("agents/adoption.zig"));
     std.testing.refAllDecls(@import("agents/handoff.zig"));
-    std.testing.refAllDecls(@import("agents/observer.zig"));
-    std.testing.refAllDecls(@import("agents/pack_layout.zig"));
+    std.testing.refAllDecls(@import("agents/navigator.zig"));
+    std.testing.refAllDecls(@import("agents/crew_layout.zig"));
     std.testing.refAllDecls(@import("agents/setup_policy.zig"));
     std.testing.refAllDecls(@import("agents/setup.zig"));
     std.testing.refAllDecls(@import("agents/spawn.zig"));
-    std.testing.refAllDecls(@import("agents/workers.zig"));
+    std.testing.refAllDecls(@import("agents/crewmates.zig"));
     std.testing.refAllDecls(@import("agents/worktree.zig"));
     std.testing.refAllDecls(@import("agents/shared_worktree.zig"));
     std.testing.refAllDecls(@import("cli/args.zig"));
@@ -19,7 +19,7 @@ test {
     std.testing.refAllDecls(@import("cli/commands/plugin.zig"));
     std.testing.refAllDecls(@import("cli/commands/run.zig"));
     std.testing.refAllDecls(@import("cli/commands/task.zig"));
-    std.testing.refAllDecls(@import("cli/commands/worker.zig"));
+    std.testing.refAllDecls(@import("cli/commands/crew.zig"));
     std.testing.refAllDecls(@import("cli/remote_callback.zig"));
     std.testing.refAllDecls(@import("cli/shared.zig"));
     std.testing.refAllDecls(@import("cli/skill.zig"));
@@ -34,6 +34,7 @@ test {
     std.testing.refAllDecls(@import("core/paths.zig"));
     std.testing.refAllDecls(@import("core/proc.zig"));
     std.testing.refAllDecls(@import("core/requests.zig"));
+    std.testing.refAllDecls(@import("core/renames.zig"));
     std.testing.refAllDecls(@import("core/routing.zig"));
     std.testing.refAllDecls(@import("core/runs.zig"));
     std.testing.refAllDecls(@import("core/sock.zig"));

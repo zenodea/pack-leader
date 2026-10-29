@@ -66,7 +66,7 @@ button { font: inherit; cursor: pointer; }
 .side a { display: block; padding: 6px 10px; border-radius: 7px; font-size: 14.5px; color: var(--muted); text-decoration: none; }
 .side a:hover { color: var(--ink); background: rgba(255, 255, 255, .04); }
 .side a[aria-current="page"] { color: var(--ink); background: rgba(124, 196, 255, .1); box-shadow: inset 2px 0 0 var(--focus); }
-/* With the dots running, a ball of workers marks the current page instead. */
+/* With the dots running, a ball of crewmates marks the current page instead. */
 .js .side a[aria-current="page"] { background: none; box-shadow: none; }
 
 .page { min-width: 0; padding: 44px 56px 80px; }

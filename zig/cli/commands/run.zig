@@ -6,8 +6,8 @@ const runs = @import("../../core/runs.zig");
 const config = @import("../../core/config.zig");
 const mux = @import("../../mux/index.zig");
 const inbox = @import("../../messaging/inbox.zig");
-const observer = @import("../../agents/observer.zig");
-const workers = @import("../../agents/workers.zig");
+const navigator = @import("../../agents/navigator.zig");
+const crewmates = @import("../../agents/crewmates.zig");
 const shared_worktree = @import("../../agents/shared_worktree.zig");
 const args_mod = @import("../args.zig");
 const shared = @import("../shared.zig");
@@ -85,7 +85,7 @@ fn pruneTx(c: PruneCtx, s: State) !*Obj {
 }
 
 fn collectGarbage(opts: runs.PruneRunsOpts) !*Obj {
-    const worktrees = try workers.sweepWorktrees(.{});
+    const worktrees = try crewmates.sweepWorktrees(.{});
     const r = try state.update(*Obj, PruneCtx{ .opts = opts }, pruneTx);
     var ids: std.ArrayListUnmanaged([]const u8) = .empty;
     for (r.arr("runs").?.objs()) |x| ids.append(rt.a, x.str("id") orelse "") catch {};
@@ -100,30 +100,30 @@ const SubRunParent = struct { parent: *Obj, depth: i64 };
 
 fn subRunParent(s: State, pane_id: ?[]const u8) !?SubRunParent {
     var w: ?*Obj = null;
-    if (rt.getenvNonEmpty("LODESTAR_WORKER")) |name| if (state.getWorker(s, name)) |named| {
+    if (rt.getenvNonEmpty("LODESTAR_CREWMATE")) |name| if (state.getCrewmate(s, name)) |named| {
         const want_run = rt.getenvNonEmpty("LODESTAR_RUN_ID");
         if (want_run == null or rt.eqlOpt(named.str("run_id"), want_run)) w = named;
     };
-    if (w == null) if (pane_id) |p| for (state.workers(s).objValues()) |x| {
+    if (w == null) if (pane_id) |p| for (state.crewmates(s).objValues()) |x| {
         if (!x.truthy("execution_host") and rt.eqlOpt(x.str("pane_id"), p)) {
             w = x;
             break;
         }
     };
-    const worker = w orelse {
-        if (rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "worker") or rt.getenvNonEmpty("LODESTAR_WORKER") != null) return rt.fail(null, "this worker is not registered in an active run, so it cannot coordinate a sub-run", .{});
+    const crewmate = w orelse {
+        if (rt.eqlOpt(rt.getenv("LODESTAR_ROLE"), "crewmate") or rt.getenvNonEmpty("LODESTAR_CREWMATE") != null) return rt.fail(null, "this crewmate is not registered in an active run, so it cannot coordinate a sub-run", .{});
         return null;
     };
-    const wrun = worker.str("run_id") orelse "";
+    const wrun = crewmate.str("run_id") orelse "";
     const parent_run = state.getRun(s, wrun);
     if (parent_run == null or !rt.eqlOpt(parent_run.?.str("status"), "active")) return rt.fail(null, "run {s} is closed", .{wrun});
-    const task: ?*Obj = if (worker.strNonEmpty("task_id")) |tid| state.getTask(s, tid) else null;
-    const name = worker.str("name") orelse "";
-    if (task == null or !rt.eqlOpt(task.?.str("status"), "dispatched")) return rt.fail(null, "worker {s} has no dispatched task; a sub-run belongs to the task that needs it", .{name});
+    const task: ?*Obj = if (crewmate.strNonEmpty("task_id")) |tid| state.getTask(s, tid) else null;
+    const name = crewmate.str("name") orelse "";
+    if (task == null or !rt.eqlOpt(task.?.str("status"), "dispatched")) return rt.fail(null, "crewmate {s} has no dispatched task; a sub-run belongs to the task that needs it", .{name});
     const depth = (parent_run.?.int("depth") orelse 0) + 1;
     const max = state.maxRunDepth();
     if (depth > max) return rt.fail("nested_depth_exceeded", "a sub-run here would be depth {d}, past the limit of {d} (LODESTAR_MAX_RUN_DEPTH); do the work yourself or tell the orchestrator with `lodestar escalate`", .{ depth, max });
-    return .{ .parent = json.object(.{ .{ "run_id", parent_run.?.get("id") orelse Value.null }, .{ "worker", name }, .{ "task_id", worker.get("task_id") orelse Value.null }, .{ "dispatch_id", worker.get("dispatch_id") orelse Value.null } }), .depth = depth };
+    return .{ .parent = json.object(.{ .{ "run_id", parent_run.?.get("id") orelse Value.null }, .{ "crewmate", name }, .{ "task_id", crewmate.get("task_id") orelse Value.null }, .{ "dispatch_id", crewmate.get("dispatch_id") orelse Value.null } }), .depth = depth };
 }
 
 fn dispatchCount(s: State, run: *Obj, task_id: []const u8) i64 {
@@ -134,7 +134,7 @@ fn dispatchCount(s: State, run: *Obj, task_id: []const u8) i64 {
     return n;
 }
 
-/// How the run is led: whether the orchestrator reviews code, and where workers check out.
+/// How the run is led: whether the orchestrator reviews code, and where crewmates check out.
 fn modes(run: *Obj) *Obj {
     return json.object(.{
         .{ "review", config.reviewFor(run) },
@@ -151,15 +151,15 @@ fn view(s: State, run: *Obj) *Obj {
     const run_id = run.str("id") orelse "";
     const tasks = json.newArr();
     for (state.runTasks(s, run_id)) |t| {
-        const o = workers.taskSummary(t, s).clone();
+        const o = crewmates.taskSummary(t, s).clone();
         o.putBool("ready", state.ready(s, t));
         o.putInt("dispatches", dispatchCount(s, run, t.str("id") orelse ""));
         tasks.push(o.val());
     }
     out.put("tasks", tasks.val());
     const ws = json.newArr();
-    for (state.runWorkers(s, run_id)) |w| ws.push(workers.workerSummary(w, s).val());
-    out.put("workers", ws.val());
+    for (state.runCrewmates(s, run_id)) |w| ws.push(crewmates.crewmateSummary(w, s).val());
+    out.put("crewmates", ws.val());
     const box = json.newArr();
     for (state.unacked(s, run_id)) |m| box.push(json.object(.{ .{ "id", m.get("id") orelse Value.null }, .{ "type", m.get("type") orelse Value.null }, .{ "from", m.get("from") orelse Value.null }, .{ "body", m.get("body") orelse Value.null } }).val());
     out.put("inbox", box.val());
@@ -178,7 +178,7 @@ fn statusText(s: State, run: *Obj) []const u8 {
     if (mode_parts.items.len > 0) lines.append(rt.a, dim(joinStrs(mode_parts.items, " · "))) catch {};
     lines.append(rt.a, "") catch {};
     if (inbox.herdrWarning(run)) |w| lines.insert(rt.a, @as(usize, 2) + @min(@as(usize, 1), mode_parts.items.len), red(rt.fmt("warning: {s}", .{w}))) catch {};
-    for (state.runWorkers(s, run_id)) |w| {
+    for (state.runCrewmates(s, run_id)) |w| {
         const t: ?*Obj = if (w.strNonEmpty("task_id")) |tid| state.getTask(s, tid) else null;
         const n: i64 = if (t) |x| dispatchCount(s, run, x.str("id") orelse "") else 0;
         const liveness = w.strNonEmpty("liveness");
@@ -188,7 +188,7 @@ fn statusText(s: State, run: *Obj) []const u8 {
         const task_text = if (t) |x| rt.fmt("{s} {s}{s} · {s}", .{ x.str("id") orelse "", x.str("status") orelse "", if (n > 1) dim(rt.fmt(" ({d} dispatches)", .{n})) else "", x.str("title") orelse "" }) else dim("no task");
         lines.append(rt.a, rt.fmt("{s} {s} {s}{s} {s} {s}", .{ glyph(shown), bold(w.str("name") orelse ""), host_tag, dim(w.str("pane_id") orelse ""), live, task_text })) catch {};
         if (w.obj("worktree")) |wt| lines.append(rt.a, dim(rt.fmt("  worktree {s} · {s}", .{ wt.str("branch") orelse "(detached)", wt.str("path") orelse "" }))) catch {};
-        if (workers.nextAction(s, w)) |next| lines.append(rt.a, rt.concat(&.{ "  ", yellow("next:"), " ", shellLine(next) })) catch {};
+        if (crewmates.nextAction(s, w)) |next| lines.append(rt.a, rt.concat(&.{ "  ", yellow("next:"), " ", shellLine(next) })) catch {};
     }
     var pending: std.ArrayListUnmanaged([]const u8) = .empty;
     var blocked: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -251,7 +251,7 @@ fn sidebarTx(c: SidebarCtx, s: State) !void {
     r.putStr("sidebar_pane_id", c.pane);
 }
 
-const Extras = struct { sidebar: ?[]const u8 = null, observer: ?*Obj = null };
+const Extras = struct { sidebar: ?[]const u8 = null, navigator: ?*Obj = null };
 
 fn afterCreate(a: *const Args, h: shared.Here, run_id: []const u8, ex: *Extras) !void {
     state.log(json.object(.{ .{ "event", "run.created" }, .{ "run", run_id }, .{ "pane", json.optStr(h.pane_id) } }));
@@ -268,12 +268,12 @@ fn afterCreate(a: *const Args, h: shared.Here, run_id: []const u8, ex: *Extras) 
         ex.sidebar = shared.openSidebar(h.pane_id.?, has(a, "left"), false) catch null;
         if (ex.sidebar) |sb| {
             try state.update(void, SidebarCtx{ .run_id = run_id, .pane = sb }, sidebarTx);
-            mux.renamePane(sb, "Workers");
+            mux.renamePane(sb, "Crew");
         }
     }
-    if (!has(a, "no-observer") and config.settingsOf(try config.loadConfig()).observer and h.pane_id != null) {
+    if (!has(a, "no-navigator") and config.settingsOf(try config.loadConfig()).navigator and h.pane_id != null) {
         if (state.getRun(try state.load(), run_id)) |current| {
-            ex.observer = observer.startObserver(current, .{}) catch |err| json.object(.{.{ "warning", rt.fmt("observer not opened: {s}", .{rt.errMessage(err)}) }});
+            ex.navigator = navigator.startNavigator(current, .{}) catch |err| json.object(.{.{ "warning", rt.fmt("navigator not opened: {s}", .{rt.errMessage(err)}) }});
         }
     }
 }
@@ -312,9 +312,9 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         const run = try state.update(*Obj, CreateCtx{ .a = a, .h = h, .objective = objective, .cwd = cwd }, createTx);
         const run_id = run.str("id").?;
         if (run.obj("parent")) |p| {
-            state.log(json.object(.{ .{ "event", "run.created" }, .{ "run", run_id }, .{ "pane", json.optStr(h.pane_id) }, .{ "parent", p.get("run_id") orelse Value.null }, .{ "worker", p.get("worker") orelse Value.null } }));
+            state.log(json.object(.{ .{ "event", "run.created" }, .{ "run", run_id }, .{ "pane", json.optStr(h.pane_id) }, .{ "parent", p.get("run_id") orelse Value.null }, .{ "crewmate", p.get("crewmate") orelse Value.null } }));
             const prun = p.str("run_id") orelse "";
-            shared.outObj(json.object(.{ .{ "run", run }, .{ "hint", rt.fmt("Sub-run of {s}, coordinated by you (worker {s}). Orchestrator commands from this pane now act on {s}; your own done/ask/note/escalate still go to {s}. Close it with `lodestar run close --run {s}` before you report done.", .{ prun, p.str("worker") orelse "", run_id, prun, run_id }) } }));
+            shared.outObj(json.object(.{ .{ "run", run }, .{ "hint", rt.fmt("Sub-run of {s}, coordinated by you (crewmate {s}). Orchestrator commands from this pane now act on {s}; your own done/ask/note/escalate still go to {s}. Close it with `lodestar run close --run {s}` before you report done.", .{ prun, p.str("crewmate") orelse "", run_id, prun, run_id }) } }));
             return;
         }
         var ex: Extras = .{};
@@ -327,9 +327,9 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         shown.putStr("sidebar_pane_id", ex.sidebar);
         const out = json.object(.{
             .{ "run", shown },
-            .{ "observer", if (ex.observer) |o| o.val() else Value.null },
+            .{ "navigator", if (ex.navigator) |o| o.val() else Value.null },
             .{ "modes", modes(run) },
-            .{ "hint", rt.fmt("Workers start in hidden tabs of workspace {s}; the sidebar {s} shows them. LODESTAR_RUN_ID={s} selects this run explicitly.", .{ h.workspace_id orelse "?", if (ex.sidebar) |sb| rt.fmt("(pane {s})", .{sb}) else "was not opened", run_id }) },
+            .{ "hint", rt.fmt("Crewmates start in hidden tabs of workspace {s}; the sidebar {s} shows them. LODESTAR_RUN_ID={s} selects this run explicitly.", .{ h.workspace_id orelse "?", if (ex.sidebar) |sb| rt.fmt("(pane {s})", .{sb}) else "was not opened", run_id }) },
         });
         if (warning) |w| out.putStr("warning", w);
         shared.outObj(out);
@@ -369,7 +369,7 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         for (state.runs(s).objValues()) |r| {
             const o = r.clone();
             const rid = r.str("id") orelse "";
-            o.putInt("workers", @intCast(state.runWorkers(s, rid).len));
+            o.putInt("crewmates", @intCast(state.runCrewmates(s, rid).len));
             o.putInt("tasks", @intCast(state.runTasks(s, rid).len));
             list.push(o.val());
         }
@@ -382,7 +382,7 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         const r = try runs.closeRun(run_id, .{ .release = has(a, "release"), .force = has(a, "force") });
         if (from_action) {
             var names: std.ArrayListUnmanaged([]const u8) = .empty;
-            for (r.arr("released").?.objs()) |x| names.append(rt.a, x.str("worker") orelse "") catch {};
+            for (r.arr("released").?.objs()) |x| names.append(rt.a, x.str("crewmate") orelse "") catch {};
             mux.notify("Lodestar", rt.fmt("run {s} closed{s}", .{ run_id, if (names.items.len > 0) rt.fmt(", released {s}", .{joinStrs(names.items, ", ")}) else "" }), "none");
         }
         const gc: *Obj = collectGarbage(.{}) catch |err| json.object(.{.{ "error", rt.errMessage(err) }});
@@ -412,7 +412,7 @@ fn handleRunCmd(a: *const Args, from_action: bool) !void {
         const opts: runs.PruneRunsOpts = .{ .keep = keep, .all = has(a, "all"), .olderThanMs = if (older_than) |o| (if (o.len > 0) try runs.parseDuration(o) else null) else null };
         if (has(a, "dry-run")) {
             const r = runs.pruneRuns(try state.load(), opts);
-            const worktrees = try workers.sweepWorktrees(.{ .dryRun = true });
+            const worktrees = try crewmates.sweepWorktrees(.{ .dryRun = true });
             const out = json.object(.{ .{ "dry_run", true }, .{ "pruned", r.get("runs").? }, .{ "removed", r.get("removed").? }, .{ "worktrees", worktrees } });
             out.putIf("skipped", r.get("skipped"));
             shared.outObj(out);

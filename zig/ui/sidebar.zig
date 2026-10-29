@@ -20,7 +20,7 @@ const proc = @import("../core/proc.zig");
 const Obj = json.Obj;
 const State = state.State;
 const Run = state.Run;
-const Worker = state.Worker;
+const Crewmate = state.Crewmate;
 const Task = state.Task;
 const Message = state.Message;
 const Theme = theme_mod.Theme;
@@ -78,7 +78,7 @@ fn elapsed(iso: []const u8, until: ?[]const u8) []const u8 {
     return rt.fmt("{d}h{d:0>2}m{d:0>2}s", .{ @divFloor(s, 3600), @as(u64, @intCast(@divFloor(@mod(s, 3600), 60))), @as(u64, @intCast(sec)) });
 }
 
-pub fn lastMessageFor(s: State, runId: []const u8, worker: []const u8, dispatchId: ?[]const u8) ?Message {
+pub fn lastMessageFor(s: State, runId: []const u8, crewmate: []const u8, dispatchId: ?[]const u8) ?Message {
     const ms = state.messages(s).slice();
     var i = ms.len;
     while (i > 0) {
@@ -87,8 +87,8 @@ pub fn lastMessageFor(s: State, runId: []const u8, worker: []const u8, dispatchI
         if (!rt.eqlOpt(m.str("run_id"), runId)) continue;
         if (dispatchId) |d| if (d.len > 0 and !rt.eqlOpt(m.str("dispatch_id"), d)) continue;
         const t = m.str("type") orelse "";
-        if (rt.eqlOpt(m.str("from"), worker) and rt.oneOf(t, &.{ "heartbeat", "note", "escalation", "done", "ask" })) return m;
-        if (rt.eqlOpt(m.str("to"), worker) and rt.eql(t, "reply")) return m;
+        if (rt.eqlOpt(m.str("from"), crewmate) and rt.oneOf(t, &.{ "heartbeat", "note", "escalation", "done", "ask" })) return m;
+        if (rt.eqlOpt(m.str("to"), crewmate) and rt.eql(t, "reply")) return m;
     }
     return null;
 }
@@ -135,7 +135,7 @@ fn appendAll(list: *std.ArrayListUnmanaged([]const u8), items: []const []const u
     list.appendSlice(rt.a, items) catch {};
 }
 
-pub fn boxLines(w: Worker, t: ?Task, last: ?Message, st: []const u8, cols: i64, selected: bool, theme: Theme) []const []const u8 {
+pub fn boxLines(w: Crewmate, t: ?Task, last: ?Message, st: []const u8, cols: i64, selected: bool, theme: Theme) []const []const u8 {
     const inner: usize = @intCast(@max(1, cols - 4));
     const accent: Paint = if (theme.accent) |hex| .{ .color = ansi.rgb(hex) } else Paint.of(&fg.cyan);
     const wname = w.str("name") orelse "";
@@ -288,7 +288,7 @@ pub fn boxAt(boxes: []const Span, scroll: i64, row: i64, avail: i64) i64 {
     return -1;
 }
 
-pub fn statusOf(w: Worker, live: ?*const Live) []const u8 {
+pub fn statusOf(w: Crewmate, live: ?*const Live) []const u8 {
     const liveness = w.str("liveness");
     if (rt.eqlOpt(liveness, "unverifiable")) return "unverifiable";
     if (rt.eqlOpt(liveness, "unreachable")) return "unreachable";
@@ -301,7 +301,7 @@ pub fn statusOf(w: Worker, live: ?*const Live) []const u8 {
     return if (rt.eqlOpt(liveness, "exited")) "exited" else "unknown";
 }
 
-pub fn sidebarWorkerTarget(w: Worker) []const u8 {
+pub fn sidebarCrewmateTarget(w: Crewmate) []const u8 {
     return if (w.truthy("adopted") or w.truthy("execution_host")) w.str("pane_id") orelse "" else w.str("name") orelse "";
 }
 
@@ -343,7 +343,7 @@ const IdBuf = struct {
     }
 };
 
-const Row = struct { run: Run, worker: Worker };
+const Row = struct { run: Run, crewmate: Crewmate };
 
 const Sidebar = struct {
     state: State,
@@ -430,7 +430,7 @@ const Sidebar = struct {
 
     fn rows(self: *Sidebar) []Row {
         var list: std.ArrayListUnmanaged(Row) = .empty;
-        for (self.mine()) |run| for (state.runWorkers(self.state, run.str("id") orelse "")) |w| list.append(rt.a, .{ .run = run, .worker = w }) catch {};
+        for (self.mine()) |run| for (state.runCrewmates(self.state, run.str("id") orelse "")) |w| list.append(rt.a, .{ .run = run, .crewmate = w }) catch {};
         return list.items;
     }
 
@@ -657,10 +657,10 @@ const Sidebar = struct {
             var i: usize = 0;
             for (runs) |run| {
                 const run_id = run.str("id") orelse "";
-                const ws = state.runWorkers(self.state, run_id);
+                const ws = state.runCrewmates(self.state, run_id);
                 if (lines.items.len > 0) lines.append(rt.a, "") catch {};
                 if (runs.len > 1) lines.append(rt.a, dim(truncate(rt.concat(&.{ "── ", run_id, " · ", oneLine(run.str("objective") orelse "") }), cols))) catch {};
-                if (ws.len == 0) lines.append(rt.a, dim("  no workers yet")) catch {};
+                if (ws.len == 0) lines.append(rt.a, dim("  no crewmates yet")) catch {};
                 for (ws) |w| {
                     const t: ?Task = if (w.strNonEmpty("task_id")) |tid| state.getTask(self.state, tid) else null;
                     const start = lines.items.len;
@@ -776,10 +776,10 @@ const Sidebar = struct {
         if (self.panel != null) return;
         const rws = self.rows();
         if (self.sel >= rws.len) return;
-        const w = rws[self.sel].worker;
+        const w = rws[self.sel].crewmate;
         const prev = remote.enterHost(w.get("execution_host")) catch |err| return self.errorMessage(err);
         defer remote.leaveHost(prev);
-        _ = mux.agentFocus(sidebarWorkerTarget(w)) catch |err| self.errorMessage(err);
+        _ = mux.agentFocus(sidebarCrewmateTarget(w)) catch |err| self.errorMessage(err);
     }
 
     fn move(self: *Sidebar, by: i64) void {
@@ -873,15 +873,15 @@ const Sidebar = struct {
         }
         if (rt.eql(n, "r")) {
             const c = cur orelse return;
-            const wname = c.worker.str("name") orelse "";
+            const wname = c.crewmate.str("name") orelse "";
             if (self.preview_for != null and rt.eql(self.preview_for.?, wname)) {
                 self.clearPreview();
                 self.schedule();
                 return;
             }
-            const prev = remote.enterHost(c.worker.get("execution_host")) catch |err| return self.errorMessage(err);
+            const prev = remote.enterHost(c.crewmate.get("execution_host")) catch |err| return self.errorMessage(err);
             defer remote.leaveHost(prev);
-            const text = mux.agentRead(sidebarWorkerTarget(c.worker), 12) catch |err| return self.errorMessage(err);
+            const text = mux.agentRead(sidebarCrewmateTarget(c.crewmate), 12) catch |err| return self.errorMessage(err);
             self.setPreview(text, wname);
             self.schedule();
             return;
@@ -903,7 +903,7 @@ const USAGE_SCAN_MS: i64 = 60_000;
 pub fn runSidebar() !void {
     const tty = term.isTty(0);
     const own_pane = shared.here().pane_id;
-    if (!tty and own_pane == null) return rt.fail(null, "the sidebar needs a terminal: herdr opens it in a pane (\"Lodestar: show the workers\")", .{});
+    if (!tty and own_pane == null) return rt.fail(null, "the sidebar needs a terminal: herdr opens it in a pane (\"Lodestar: show the crewmates\")", .{});
     _ = rt.cwd();
     var sb: Sidebar = .{
         .state = undefined,
@@ -1057,7 +1057,7 @@ test "boxLines, goalLines and statusOf" {
     try testing.expectEqualStrings("exited", statusOf(w, &live));
     w.putStr("stalled_since", "x");
     try testing.expectEqualStrings("stalled", statusOf(w, &live));
-    try testing.expectEqualStrings("parser", sidebarWorkerTarget(w));
+    try testing.expectEqualStrings("parser", sidebarCrewmateTarget(w));
     const lines = wrapLines("aaa bbb ccc ddd", 7, 2);
     try testing.expectEqual(@as(usize, 2), lines.len);
     try testing.expectEqualStrings("aaa bbb", lines[0]);

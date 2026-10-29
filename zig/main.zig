@@ -7,6 +7,7 @@ const args_mod = @import("cli/args.zig");
 const command_args = @import("cli/command_args.zig");
 const shared = @import("cli/shared.zig");
 const usage = @import("cli/usage.zig");
+const renames = @import("core/renames.zig");
 const remote = @import("herdr/remote.zig");
 const remote_callback = @import("cli/remote_callback.zig");
 
@@ -15,7 +16,7 @@ const Handler = *const fn (command: []const u8, a: *const Args, from_action: boo
 
 const run_cmd = @import("cli/commands/run.zig");
 const task_cmd = @import("cli/commands/task.zig");
-const worker_cmd = @import("cli/commands/worker.zig");
+const crew_cmd = @import("cli/commands/crew.zig");
 const messaging_cmd = @import("cli/commands/messaging.zig");
 const config_cmd = @import("cli/commands/config.zig");
 const plugin_cmd = @import("cli/commands/plugin.zig");
@@ -29,9 +30,9 @@ const commands = [_]Route{
     .{ .name = "status", .handler = run_cmd.handle },
     .{ .name = "task", .handler = task_cmd.handle },
     .{ .name = "gate", .handler = task_cmd.handle },
-    .{ .name = "worker", .handler = worker_cmd.handle },
-    .{ .name = "dispatch", .handler = worker_cmd.handle },
-    .{ .name = "spawn", .handler = worker_cmd.handle },
+    .{ .name = "crew", .handler = crew_cmd.handle },
+    .{ .name = "dispatch", .handler = crew_cmd.handle },
+    .{ .name = "spawn", .handler = crew_cmd.handle },
     .{ .name = "check", .handler = messaging_cmd.handle },
     .{ .name = "handoff", .handler = messaging_cmd.handle },
     .{ .name = "reply", .handler = messaging_cmd.handle },
@@ -51,8 +52,8 @@ const commands = [_]Route{
     .{ .name = "sidebar-open", .handler = plugin_cmd.handle },
     .{ .name = "leader", .handler = plugin_cmd.handle },
     .{ .name = "event", .handler = plugin_cmd.handle },
-    .{ .name = "observe", .handler = plugin_cmd.handle },
-    .{ .name = "observer", .handler = plugin_cmd.handle },
+    .{ .name = "survey", .handler = plugin_cmd.handle },
+    .{ .name = "navigator", .handler = plugin_cmd.handle },
     .{ .name = "host", .handler = host_cmd.handle },
     .{ .name = "usage", .handler = usage_cmd.handle },
 };
@@ -77,7 +78,10 @@ fn runCommand(command: []const u8, a: *const Args, from_action: bool) !void {
 }
 
 fn mainInner(argv: []const []const u8) !void {
-    const command = if (argv.len > 0) argv[0] else "help";
+    renames.env();
+    const named = renames.command(if (argv.len > 0) argv[0] else "help");
+    const command = named.name;
+    if (named.old) rt.writeStderr(rt.fmt("lodestar: `{s}` is now `lodestar {s}`\n", .{ argv[0], command }));
     const rest = if (argv.len > 0) argv[1..] else argv;
     if (rt.eql(command, "__remote-rpc")) {
         const request = remote.readStdinJson() catch |err| {
@@ -97,7 +101,7 @@ fn mainInner(argv: []const []const u8) !void {
     try command_args.validateCommandArgs(command, &a);
     const from_action = rt.getenvNonEmpty("HERDR_PLUGIN_ID") != null and rt.getenvNonEmpty("LODESTAR_ROLE") == null;
     if (rt.getenvNonEmpty("LODESTAR_REMOTE_CALLBACK_TARGET") != null and !rt.eqlOpt(rt.getenv("LODESTAR_REMOTE_CALLBACK_ACTIVE"), "1")) {
-        if (!isHelp(command) and !rt.eql(command, "skill")) return remote.forwardWorkerCallback(argv);
+        if (!isHelp(command) and !rt.eql(command, "skill")) return remote.forwardCrewmateCallback(argv);
     }
     const request_id = args_mod.str(&a, "retry-request") orelse return runCommand(command, &a, from_action);
     const name = command_args.commandName(command, &a);

@@ -132,7 +132,7 @@ const FORMS = {
     return { pts, doc: true, leader: { ...lead, s: Math.max(5, Math.min(13, fs * .075)) } };
   },
 
-  // The leader on top, one cluster of workers per task.
+  // The leader on top, one cluster of crewmates per task.
   delegate() {
     const S = stage(), names = ["parser", "validator", "tests", "docs"];
     const r = Math.min(S.w / 10, 50), m = narrow ? 50 : 90;
@@ -147,7 +147,7 @@ const FORMS = {
     return { pts, lines, labels, leader: { x: lx, y: ly, s: 9 } };
   },
 
-  // The multiplexer: the leader's pane and three worker panes, each with a little output.
+  // The multiplexer: the leader's pane and three crewmate panes, each with a little output.
   panes() {
     const S = stage(), g = 14, half = (S.w - g) / 2, hh = (S.h - 2 * g) / 3;
     const panes = [
@@ -172,7 +172,7 @@ const FORMS = {
     return { pts: fit(pts, dots.length), labels, leader: { x: L.x + 20, y: ly, s: 6 } };
   },
 
-  // Three workers: one done, one busy, one waiting on an answer. A question travels up.
+  // Three crewmates: one done, one busy, one waiting on an answer. A question travels up.
   ask() {
     const S = stage(), r = Math.min(S.w / 8, 58), m = narrow ? 60 : 110;
     const lx = S.x + S.w / 2, ly = S.y + S.h * .12;
@@ -230,7 +230,7 @@ const FORMS = {
     return { pts: fit(pts, dots.length), labels, leader: { ...end, s: 6 } };
   },
 
-  // Each worker's branch, merged back into main by the leader, which sits at main's tip.
+  // Each crewmate's branch, merged back into main by the leader, which sits at main's tip.
   review() {
     const S = stage(), mainY = S.y + S.h * .84, x0 = S.x, x1 = S.x + S.w * .93;
     const pts = [...lineDots(x0, mainY, x1, mainY, 7, { c: C.dim, s: 1.3 })];
@@ -254,8 +254,8 @@ const FORMS = {
     return { pts, lines, labels, leader: { x: x0 + S.w * .97, y: mainY, s: 7 } };
   },
 
-  // You talk to the Advisor; the Advisor only reads the leader, which keeps working.
-  advisor() {
+  // You talk to the Navigator; the Navigator only reads the leader, which keeps working.
+  navigator() {
     const S = stage(), cy = S.y + S.h * .44;
     const you = { x: S.x + S.w * .04, y: cy }, adv = { x: S.x + S.w * .32, y: cy };
     const lx = S.x + S.w * .66, ly = cy, R = Math.min(S.w * .22, S.h * .36);
@@ -270,7 +270,7 @@ const FORMS = {
     });
     const labels = [
       { x: you.x, y: you.y + 30, text: "you" },
-      { x: adv.x, y: adv.y + 38, text: "advisor", color: C.violet },
+      { x: adv.x, y: adv.y + 38, text: "navigator", color: C.violet },
       { x: lx, y: ly - 32, text: "leader", color: C.leader },
       { x: (adv.x + lx) / 2, y: cy + 18, text: "reads", dim: true },
     ];
@@ -292,7 +292,7 @@ const FORMS = {
     };
   },
 
-  // The pack at rest: slow orbits around the leader.
+  // The crew at rest: slow orbits around the leader.
   rest() {
     const S = stage(), cx = S.x + S.w / 2, cy = S.y + S.h / 2, R = Math.min(S.w, S.h) / 2;
     const rings = [[.28, .14], [.5, .22], [.74, .3], [.96, .34]];
@@ -355,7 +355,7 @@ function setScene(name, force) {
   if (still) { leader.x = leader.tx; leader.y = leader.ty - (form.doc ? scrollY : 0); }
 }
 
-// The leader calls the pack: a ring of light goes out, and the dots it passes flare.
+// The leader calls the crew: a ring of light goes out, and the dots it passes flare.
 const RING_LIFE = 1800;
 function call(at) { leader.rings.push(at); leader.lastRing = at; }
 
@@ -572,7 +572,7 @@ function frame(now) {
 const watcher = new IntersectionObserver((entries) => {
   for (const e of entries) if (e.isIntersecting) setScene(e.target.dataset.scene);
 }, { rootMargin: "-50% 0px -50% 0px" });
-document.querySelectorAll("[data-scene]").forEach((s) => watcher.observe(s));
+document.querySelectorAll("[data-scene]").forEach((s) => watcher.survey(s));
 
 addEventListener("pointermove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; }, { passive: true });
 addEventListener("pointerleave", () => { mouse.x = mouse.y = -1e4; });
@@ -643,7 +643,7 @@ function docsLines(root, selDelay = 0) {
   row("bar", bar.left, bar.right, bar.bottom - 1.5);
   const side = box(root.querySelector(".side"));
   if (side.left >= -1 && side.width) col("side", side.right - 1.5, side.top, Math.min(side.bottom, H));
-  // The page you're on: a ball of workers under its name in the page list. It appears once the
+  // The page you're on: a ball of crewmates under its name in the page list. It appears once the
   // page has loaded: keyed by page, so a new page's ball fades in while the old one fades out.
   const cur = root.querySelector('.side a[aria-current="page"]');
   const page = cur && cur.getAttribute("href");

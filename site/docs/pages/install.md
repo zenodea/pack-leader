@@ -50,7 +50,7 @@ A Claude Code leader asks permission before each shell command. To let it run `l
 { "permissions": { "allow": ["Bash(lodestar:*)"] } }
 ```
 
-Workers that Lodestar starts get this rule automatically.
+Crewmates that Lodestar starts get this rule automatically.
 
 ## Updating
 

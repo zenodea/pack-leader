@@ -4,7 +4,7 @@ const json = @import("../core/json.zig");
 const state = @import("../core/state.zig");
 const mux = @import("../mux/index.zig");
 const worktree = @import("worktree.zig");
-const workers = @import("workers.zig");
+const crewmates = @import("crewmates.zig");
 
 const Obj = json.Obj;
 const Value = json.Value;
@@ -35,7 +35,7 @@ fn nonEmpty(v: ?[]const u8) ?[]const u8 {
 /// Start an unsupervised agent in its own tab and type the prompt. Returns
 /// { name, kind, pane_id, tab_id, cwd, worktree, prompted, warning? }.
 pub fn spawnAgent(o: SpawnAgentOpts) !*Obj {
-    if (!state.isWorkerName(o.name)) return rt.fail(null, "agent name must match {s}", .{state.WORKER_NAME_PATTERN});
+    if (!state.isCrewmateName(o.name)) return rt.fail(null, "agent name must match {s}", .{state.CREWMATE_NAME_PATTERN});
     if (rt.trim(o.prompt).len == 0) return rt.fail(null, "pass the task: --prompt \"<self-contained brief>\"", .{});
     if (nonEmpty(o.worktree) == null and (nonEmpty(o.base) != null or nonEmpty(o.branch) != null)) return rt.fail(null, "--base and --branch need --worktree new", .{});
     const live = mux.listAgents() catch |err| blk: {
@@ -43,10 +43,10 @@ pub fn spawnAgent(o: SpawnAgentOpts) !*Obj {
         break :blk &[_]*Obj{};
     };
     for (live) |a| if (rt.eqlOpt(a.str("name"), o.name)) return rt.fail(null, "a live herdr agent is already named \"{s}\"", .{o.name});
-    const wt: ?*Obj = if (nonEmpty(o.worktree)) |spec| try worktree.planWorktree(.{ .spec = spec, .cwd = o.cwd, .runId = "spawn", .worker = o.name, .base = o.base, .branch = o.branch }) else null;
+    const wt: ?*Obj = if (nonEmpty(o.worktree)) |spec| try worktree.planWorktree(.{ .spec = spec, .cwd = o.cwd, .runId = "spawn", .crewmate = o.name, .base = o.base, .branch = o.branch }) else null;
     const cwd = if (wt) |w| w.str("path") orelse o.cwd else o.cwd;
 
-    const shell_tab: ?[]const u8 = if (wt) |w| (try workers.materializeWorktree(w, o.name, true)).shellTab else null;
+    const shell_tab: ?[]const u8 = if (wt) |w| (try crewmates.materializeWorktree(w, o.name, true)).shellTab else null;
     const workspace = (if (wt) |w| w.strNonEmpty("workspace_id") else null) orelse nonEmpty(o.workspaceId) orelse return rt.fail(null, "no herdr workspace to open the tab in: run spawn from a herdr pane", .{});
     const t = try mux.tabCreate(json.object(.{ .{ "workspace_id", workspace }, .{ "label", o.name }, .{ "cwd", cwd } }));
     const pane = (if (t.root_pane) |p| p.strNonEmpty("pane_id") else null) orelse {
@@ -61,8 +61,8 @@ pub fn spawnAgent(o: SpawnAgentOpts) !*Obj {
     };
     const result = json.object(.{ .{ "name", o.name }, .{ "kind", o.kind }, .{ "pane_id", pane }, .{ "tab_id", json.optStr(tab_id) }, .{ "cwd", cwd }, .{ "worktree", if (wt) |w| w.val() else Value.null } });
 
-    const args = std.mem.concat(rt.a, []const u8, &.{ if (o.noDefaultArgs) &.{} else workers.defaultAgentArgs(o.kind), o.extraArgs, workers.modelArgs(o.kind, o.model, o.thinking) }) catch @panic("out of memory");
-    workers.startWhenShellReady(json.object(.{ .{ "name", o.name }, .{ "kind", o.kind }, .{ "pane_id", pane }, .{ "args", json.strArr(args) }, .{ "timeout_ms", o.timeoutMs } }), 15_000) catch |err| {
+    const args = std.mem.concat(rt.a, []const u8, &.{ if (o.noDefaultArgs) &.{} else crewmates.defaultAgentArgs(o.kind), o.extraArgs, crewmates.modelArgs(o.kind, o.model, o.thinking) }) catch @panic("out of memory");
+    crewmates.startWhenShellReady(json.object(.{ .{ "name", o.name }, .{ "kind", o.kind }, .{ "pane_id", pane }, .{ "args", json.strArr(args) }, .{ "timeout_ms", o.timeoutMs } }), 15_000) catch |err| {
         const message = rt.errMessage(err);
         state.log(json.object(.{ .{ "event", "spawn.start_failed" }, .{ "agent", o.name }, .{ "pane", pane }, .{ "error", message } }));
         result.putBool("prompted", false);
@@ -70,7 +70,7 @@ pub fn spawnAgent(o: SpawnAgentOpts) !*Obj {
         return result;
     };
     mux.labelPane(pane, o.name);
-    if (try workers.clearStartupDialog(pane)) {
+    if (try crewmates.clearStartupDialog(pane)) {
         state.log(json.object(.{ .{ "event", "spawn.blocked" }, .{ "agent", o.name }, .{ "pane", pane } }));
         result.putBool("prompted", false);
         result.putStr("warning", rt.fmt("{s} is blocked on a dialog in pane {s} and has not received the prompt. Answer it with `herdr agent send-keys {s} <keys>` only if it is safe, then `herdr agent prompt {s} \"<prompt>\"`.", .{ o.name, pane, o.name, o.name }));

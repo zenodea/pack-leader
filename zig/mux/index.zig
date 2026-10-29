@@ -214,7 +214,7 @@ pub fn isRemotePromptReceiptErrorOn(err: anyerror, is_remote: bool) bool {
 
 /// Fails with code "remote_delivery_unknown"; `cause_code`/`cause_message` describe the transport error.
 pub fn promptDeliveryUnknown(target: []const u8, cause_code: ?[]const u8, cause_message: []const u8) error{Fail} {
-    return rt.fail("remote_delivery_unknown", "delivery of the remote prompt to pane {s} is unknown ({s}: {s}); do not resend automatically. Inspect the worker on its snapshotted execution host and confirm its task/dispatch state before using `lodestar worker prompt`; the current attempt remains authoritative.", .{ target, cause_code orelse "error", cause_message });
+    return rt.fail("remote_delivery_unknown", "delivery of the remote prompt to pane {s} is unknown ({s}: {s}); do not resend automatically. Inspect the crewmate on its snapshotted execution host and confirm its task/dispatch state before using `lodestar crew prompt`; the current attempt remains authoritative.", .{ target, cause_code orelse "error", cause_message });
 }
 
 const KNOWN_STATUSES = [_][]const u8{ "idle", "working", "blocked", "done", "unknown" };

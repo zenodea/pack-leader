@@ -14,9 +14,9 @@ Each run remembers which multiplexer it was created under, and only that one man
 
 ## How it knows what agents are doing
 
-herdr can see whether an agent is working or idle. tmux can't, so Lodestar starts Claude Code and Codex workers with hooks that report their status back (`lodestar __agent-status`).
+herdr can see whether an agent is working or idle. tmux can't, so Lodestar starts Claude Code and Codex crewmates with hooks that report their status back (`lodestar __agent-status`).
 
-pi has no such hooks. Its status stays `unknown`, which never counts as idle. pi workers still report through `done` and `ask` as usual; they just don't get the idle-based nudges.
+pi has no such hooks. Its status stays `unknown`, which never counts as idle. pi crewmates still report through `done` and `ask` as usual; they just don't get the idle-based nudges.
 
 ## What's different from herdr
 
@@ -24,10 +24,10 @@ pi has no such hooks. Its status stays `unknown`, which never counts as idle. pi
 | --- | --- | --- |
 | Agent status | Native | Hooks for Claude Code and Codex; pi is `unknown` |
 | Updates | Live event stream | Polling |
-| Sidebar and Advisor | Yes | No |
-| Worker placement | Hidden tabs or beside the leader | Split beside the leader |
+| Sidebar and Navigator | Yes | No |
+| Crewmate placement | Hidden tabs or beside the leader | Split beside the leader |
 | Moving and swapping panes | Yes | No |
 | Worktrees | Opened as a herdr workspace | Plain `git worktree` checkouts |
-| Remote workers over SSH | Yes | No |
+| Remote crewmates over SSH | Yes | No |
 
 Everything else (runs, tasks, gates, messages, worktrees, handoffs, the state file) works the same way.

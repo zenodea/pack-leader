@@ -1,12 +1,12 @@
-# Lodestar: an orchestrator agent and its workers. The agent you talk to starts worker
+# Lodestar: an orchestrator agent and its crewmates. The agent you talk to starts crewmate
 # agents in hidden tabs (or a split beside it), hands each one a task, and waits for their reports;
 # Lodestar keeps the run state outside the agents so it survives context compaction.
-# The sidebar pane shows one box per worker. See the README.
+# The sidebar pane shows one box per crewmate. See the README.
 id = "lodestar"
 name = "Lodestar"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
-description = "An orchestrator agent, its workers, and a sidebar that shows them"
+description = "An orchestrator agent, its crewmates, and a sidebar that shows them"
 platforms = ["linux", "macos"]
 
 # Paths in action and event commands: herdr runs them with the plugin root as cwd, so
@@ -15,14 +15,14 @@ platforms = ["linux", "macos"]
 # not depend on the cwd herdr gives a pane. Keep new actions and events on the relative
 # form; if herdr ever runs them elsewhere, switch them to the pane entry's form.
 
-# prefix+<your key>: the workers, as a column next to the focused pane.
+# prefix+<your key>: the crewmates, as a column next to the focused pane.
 [[actions]]
 id = "sidebar"
-title = "Lodestar: show the workers"
+title = "Lodestar: show the crew"
 command = ["bin/lodestar", "sidebar-open"]
 
 # prefix+<your key>: back to the orchestrator of the run the focused pane belongs to
-# (a worker's pane, the sidebar, or the orchestrator itself).
+# (a crewmate's pane, the sidebar, or the orchestrator itself).
 [[actions]]
 id = "focus-leader"
 title = "Lodestar: back to the leader"
@@ -34,7 +34,7 @@ id = "install-skill"
 title = "Lodestar: install the skill"
 command = ["bin/lodestar", "skill", "--install"]
 
-# Closes the run bound to the focused pane and releases its workers' panes.
+# Closes the run bound to the focused pane and releases its crewmates' panes.
 [[actions]]
 id = "close-run"
 title = "Lodestar: close this pane's run"
@@ -42,18 +42,18 @@ command = ["bin/lodestar", "run", "close", "--release"]
 
 [[panes]]
 id = "sidebar"
-title = "Workers"
+title = "Crew"
 placement = "split"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/lodestar\" sidebar"]
 
-# The two-row bar above a worker's pane: a click (or Enter) there goes back to the orchestrator.
+# The two-row bar above a crewmate's pane: a click (or Enter) there goes back to the orchestrator.
 [[panes]]
 id = "bar"
-title = "Worker bar"
+title = "Crewmate bar"
 placement = "split"
 command = ["sh", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/bin/leader-bar\""]
 
-# A worker's pane going away settles its dispatch as exited.
+# A crewmate's pane going away settles its dispatch as exited.
 [[events]]
 on = "pane.closed"
 command = ["bin/lodestar", "event", "pane.closed"]
@@ -62,7 +62,7 @@ command = ["bin/lodestar", "event", "pane.closed"]
 on = "pane.exited"
 command = ["bin/lodestar", "event", "pane.exited"]
 
-# A hidden-tab worker's tab closing goes the same way (herdr sends tab.closed, not always pane.closed).
+# A hidden-tab crewmate's tab closing goes the same way (herdr sends tab.closed, not always pane.closed).
 [[events]]
 on = "tab.closed"
 command = ["bin/lodestar", "event", "tab.closed"]
