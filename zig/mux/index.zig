@@ -5,6 +5,7 @@ const state = @import("../core/state.zig");
 const remote = @import("../herdr/remote.zig");
 const herdr_backend = @import("herdr.zig");
 const tmux_backend = @import("tmux.zig");
+const rex_backend = @import("rex.zig");
 pub const agent_status = @import("agent_status.zig");
 pub const types = @import("types.zig");
 
@@ -19,19 +20,21 @@ pub const ScreenSource = types.ScreenSource;
 pub const TabCreated = types.TabCreated;
 pub const atRest = types.atRest;
 
-const BACKENDS = [_]*const Multiplexer{ &herdr_backend.backend, &tmux_backend.backend };
+const BACKENDS = [_]*const Multiplexer{ &herdr_backend.backend, &tmux_backend.backend, &rex_backend.backend };
 
-/// LODESTAR_MUX wins; otherwise herdr when its environment is present, tmux inside a tmux client, else herdr.
+/// LODESTAR_MUX wins; otherwise herdr when its environment is present, tmux inside a tmux client, Rex inside a
+/// Rex terminal, else herdr.
 pub fn detectBackend() ![]const u8 {
     if (rt.getenv("LODESTAR_MUX")) |raw| {
         const want = rt.trim(raw);
         if (want.len > 0) {
             for (BACKENDS) |b| if (rt.eql(b.name, want)) return b.name;
-            return rt.fail("unknown_mux", "LODESTAR_MUX={s} is not a known multiplexer (known: herdr, tmux)", .{want});
+            return rt.fail("unknown_mux", "LODESTAR_MUX={s} is not a known multiplexer (known: herdr, tmux, rex)", .{want});
         }
     }
     if (herdr_backend.backend.reachable()) return "herdr";
     if (tmux_backend.backend.reachable()) return "tmux";
+    if (rex_backend.inRex()) return "rex";
     return "herdr";
 }
 

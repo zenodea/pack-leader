@@ -46,6 +46,7 @@ test {
     std.testing.refAllDecls(@import("mux/herdr.zig"));
     std.testing.refAllDecls(@import("mux/index.zig"));
     std.testing.refAllDecls(@import("mux/tmux.zig"));
+    std.testing.refAllDecls(@import("mux/rex.zig"));
     std.testing.refAllDecls(@import("mux/agent_status.zig"));
     std.testing.refAllDecls(@import("mux/types.zig"));
     std.testing.refAllDecls(@import("rt.zig"));

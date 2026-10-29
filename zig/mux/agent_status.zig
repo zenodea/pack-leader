@@ -1,4 +1,4 @@
-//! Agent status for multiplexers that cannot see inside a pane (tmux). Agents report through hooks that run
+//! Agent status for multiplexers that cannot see inside a pane (tmux, Rex). Agents report through hooks that run
 //! `lodestar __agent-status STATUS`; the record lives in `<state_dir>/agent-status/<server>-<pane>.json`.
 
 const std = @import("std");
@@ -101,14 +101,27 @@ pub fn tmuxServerFromEnv() ?[]const u8 {
     return if (pid.len > 0) pid else null;
 }
 
+/// Rex block ids are never reused, so one server key serves every Rex server.
+pub const REX_SERVER = "rex";
+
+/// `block:<uuid>` -> `<uuid>`, the pane part of a Rex block's record.
+pub fn rexPaneKey(block: []const u8) []const u8 {
+    return if (std.mem.lastIndexOfScalar(u8, block, ':')) |c| block[c + 1 ..] else block;
+}
+
 /// `lodestar __agent-status STATUS [...]`, run by an agent's hook inside its pane. Never fails loudly.
 pub fn runHookCommand(argv: []const []const u8) void {
     const raw = if (argv.len > 0) argv[0] else return;
     const status = if (rt.eql(raw, "stop")) "idle" else raw;
     if (!isStatus(status)) return;
-    const server = tmuxServerFromEnv() orelse return;
-    const pane = rt.getenvNonEmpty("TMUX_PANE") orelse return;
-    _ = write(server, pane, .{ .status = status }) catch {};
+    // tmux first: a tmux running inside a Rex terminal owns the pane the agent is in.
+    if (tmuxServerFromEnv()) |server| {
+        const pane = rt.getenvNonEmpty("TMUX_PANE") orelse return;
+        _ = write(server, pane, .{ .status = status }) catch {};
+        return;
+    }
+    const block = rt.getenvNonEmpty("REX_BLOCK") orelse return;
+    _ = write(REX_SERVER, rexPaneKey(block), .{ .status = status }) catch {};
 }
 
 fn shellQuote(v: []const u8) []const u8 {
