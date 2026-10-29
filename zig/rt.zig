@@ -5,6 +5,8 @@ pub const Allocator = std.mem.Allocator;
 
 pub var io: Io = undefined;
 pub var a: Allocator = undefined;
+/// Process-lifetime allocator for caches. Long-running loops swap `a` for per-frame arenas; `perm` never moves.
+pub var perm: Allocator = undefined;
 pub var env: *std.process.Environ.Map = undefined;
 pub var pid: i32 = 0;
 var host_buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
@@ -14,6 +16,7 @@ pub var exit_code: u8 = 0;
 pub fn init(init_: std.process.Init) void {
     io = init_.io;
     a = init_.arena.allocator();
+    perm = a;
     env = init_.environ_map;
     pid = std.c.getpid();
     hostname = std.posix.gethostname(&host_buf) catch "localhost";
@@ -22,6 +25,8 @@ pub fn init(init_: std.process.Init) void {
 pub fn initForTest(alloc: Allocator, map: *std.process.Environ.Map) void {
     io = std.testing.io;
     a = alloc;
+    perm = alloc;
+    cwd_cache = null;
     env = map;
     pid = std.c.getpid();
     hostname = std.posix.gethostname(&host_buf) catch "localhost";
@@ -91,6 +96,11 @@ pub fn dupe(s: []const u8) []u8 {
     return a.dupe(u8, s) catch @panic("out of memory");
 }
 
+/// A copy that outlives per-frame arenas, for caches.
+pub fn dupePerm(s: []const u8) []u8 {
+    return perm.dupe(u8, s) catch @panic("out of memory");
+}
+
 pub fn concat(parts: []const []const u8) []u8 {
     return std.mem.concat(a, u8, parts) catch @panic("out of memory");
 }
@@ -156,7 +166,7 @@ var cwd_cache: ?[]const u8 = null;
 
 pub fn cwd() []const u8 {
     if (cwd_cache) |c| return c;
-    const p = std.process.currentPathAlloc(io, a) catch return "/";
+    const p = std.process.currentPathAlloc(io, perm) catch return "/";
     cwd_cache = p;
     return p;
 }
