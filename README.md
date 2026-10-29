@@ -173,6 +173,21 @@ New Claude Code workers receive this rule by default.
 
 </details>
 
+## Running under tmux
+
+Pack Leader also runs inside a plain tmux session (tmux 3.x): a session is a
+workspace, a window is a tab. Inside tmux it picks tmux automatically; inside
+herdr it picks herdr; `PACK_LEADER_MUX=herdr|tmux` overrides the choice.
+
+tmux cannot see what an agent is doing, so Pack Leader starts Claude Code and
+Codex workers with hooks that report it (`pack-leader __agent-status`). pi has no
+such hooks: its status stays `unknown`, which never counts as idle, so it still
+reports through `done`/`ask` but gets no idle-based nudges. Compared with herdr,
+tmux runs have no live event stream (Pack Leader polls), no pane moves or layout
+tree (new workers split beside the leader), no herdr workspaces (worktrees are
+plain `git worktree` checkouts) and no remote execution hosts. Each run remembers
+its multiplexer, and only that multiplexer manages it.
+
 ## Remote workers
 
 Both machines need Pack Leader (with Zig to build it) and herdr, plus an existing remote herdr
