@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { HerdrError } from "../herdr/herdr.ts";
+import type { MuxError } from "../mux/index.ts";
 import type { WorktreeMode } from "../core/config.ts";
 
 export type WorktreeInfo = {
@@ -117,7 +117,7 @@ export function gitWorktreeRemove(info: WorktreeInfo): void {
   git(info.repo, ["worktree", "remove", info.path]);
 }
 
-export const isUnknownMethod = (err: unknown): boolean => (err as HerdrError)?.code === "invalid_request" && /unknown variant/.test((err as Error).message ?? "");
+export const isUnknownMethod = (err: unknown): boolean => (err as MuxError)?.code === "invalid_request" && /unknown variant/.test((err as Error).message ?? "");
 
 export type WorktreeChoice = { worktree?: string; note?: string };
 

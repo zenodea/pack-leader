@@ -1,6 +1,6 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { herdr } from "../herdr/herdr.ts";
+import { readScreen, type ScreenSource } from "../mux/index.ts";
 import { ensureDir, stateDir } from "./paths.ts";
 import { idSeq, now, type Dispatch, type State, type Task } from "./state.ts";
 import { assertTaskGatesApproved } from "./gates.ts";
@@ -81,7 +81,7 @@ export const taskDispatchIds = (state: State, taskId: string): string[] =>
 const ARCHIVE_LINES = 10_000;
 
 export async function readFullScreen(target: string): Promise<{ text: string; source: string }> {
-  const tries: { source: string; lines?: number; label: string }[] = [
+  const tries: { source: ScreenSource; lines?: number; label: string }[] = [
     { source: "recent_unwrapped", lines: ARCHIVE_LINES, label: `recent_unwrapped:${ARCHIVE_LINES}` },
     { source: "recent_unwrapped", label: "recent_unwrapped" },
     { source: "visible", label: "visible" },
@@ -89,8 +89,7 @@ export async function readFullScreen(target: string): Promise<{ text: string; so
   const errors: string[] = [];
   for (const t of tries) {
     try {
-      const res = await herdr("agent.read", { target, source: t.source, ...(t.lines ? { lines: t.lines } : {}), strip_ansi: true }, { timeoutMs: 60_000 });
-      const text = typeof res?.read?.text === "string" ? res.read.text : typeof res?.text === "string" ? res.text : null;
+      const text = await readScreen(target, { source: t.source, lines: t.lines, timeoutMs: 60_000 });
       if (text !== null) return { text, source: t.label };
       errors.push(`${t.label}: no text`);
     } catch (err) {

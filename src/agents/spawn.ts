@@ -1,4 +1,4 @@
-import { agentPrompt, getAgent, labelPane, listAgents, logHerdrError, promptLanded, tabClose, tabCreate, HerdrError } from "../herdr/herdr.ts";
+import { agentPrompt, getAgent, labelPane, listAgents, logMuxError, promptLanded, tabClose, tabCreate, MuxError } from "../mux/index.ts";
 import { log, WORKER_NAME } from "../core/state.ts";
 import { planWorktree, type WorktreeInfo } from "./worktree.ts";
 import { clearStartupDialog, defaultAgentArgs, materializeWorktree, modelArgs, startWhenShellReady } from "./workers.ts";
@@ -34,7 +34,7 @@ export async function spawnAgent(o: SpawnOptions): Promise<SpawnResult> {
   if (!WORKER_NAME.test(o.name)) throw new Error(`agent name must match ${WORKER_NAME}`);
   if (!o.prompt.trim()) throw new Error('pass the task: --prompt "<self-contained brief>"');
   if (!o.worktree && (o.base || o.branch)) throw new Error("--base and --branch need --worktree new");
-  const live = await listAgents().catch((err) => (logHerdrError("agent.list", err, { agent: o.name }), []));
+  const live = await listAgents().catch((err) => (logMuxError("agent.list", err, { agent: o.name }), []));
   if (live.some((a) => a.name === o.name)) throw new Error(`a live herdr agent is already named "${o.name}"`);
   const wt = o.worktree ? planWorktree({ spec: o.worktree, cwd: o.cwd, runId: "spawn", worker: o.name, base: o.base, branch: o.branch }) : null;
   const cwd = wt ? wt.path : o.cwd;
@@ -44,19 +44,19 @@ export async function spawnAgent(o: SpawnOptions): Promise<SpawnResult> {
   if (!workspace) throw new Error("no herdr workspace to open the tab in: run spawn from a herdr pane");
   const t = await tabCreate({ workspace_id: workspace, label: o.name, cwd });
   if (!t.root_pane?.pane_id) {
-    if (t.tab?.tab_id) await tabClose(t.tab.tab_id).catch((err) => logHerdrError("tab.close", err, { tab: t.tab.tab_id }));
-    throw new HerdrError("bad_result", "herdr did not return the new tab's pane");
+    if (t.tab?.tab_id) await tabClose(t.tab.tab_id).catch((err) => logMuxError("tab.close", err, { tab: t.tab.tab_id }));
+    throw new MuxError("bad_result", "herdr did not return the new tab's pane");
   }
   const pane = t.root_pane.pane_id;
   const tabId = t.tab?.tab_id ?? null;
-  if (shellTab && shellTab !== tabId) await tabClose(shellTab).catch((err) => logHerdrError("spawn.shell_tab.close", err, { agent: o.name, tab: shellTab }));
+  if (shellTab && shellTab !== tabId) await tabClose(shellTab).catch((err) => logMuxError("spawn.shell_tab.close", err, { agent: o.name, tab: shellTab }));
   const base = { name: o.name, kind: o.kind, pane_id: pane, tab_id: tabId, cwd, worktree: wt };
 
   const args = [...(o.noDefaultArgs ? [] : defaultAgentArgs(o.kind)), ...o.extraArgs, ...modelArgs(o.kind, o.model, o.thinking)];
   try {
     await startWhenShellReady({ name: o.name, kind: o.kind, pane_id: pane, args, timeout_ms: o.timeoutMs });
   } catch (err) {
-    const e = err as HerdrError;
+    const e = err as MuxError;
     log({ event: "spawn.start_failed", agent: o.name, pane, error: e.message });
     return { ...base, prompted: false, warning: `agent did not come up (${e.code ?? "error"}: ${e.message}); tab ${tabId ?? pane} is left for inspection` };
   }
@@ -73,7 +73,7 @@ export async function spawnAgent(o: SpawnOptions): Promise<SpawnResult> {
   try {
     await agentPrompt(pane, o.prompt);
   } catch (err) {
-    const e = err as HerdrError;
+    const e = err as MuxError;
     if (!(e.code === "timeout" && seq !== undefined && (await promptLanded(pane, seq)))) {
       log({ event: "spawn.prompt_failed", agent: o.name, pane, error: e.message });
       return { ...base, prompted: false, warning: `${o.name} started but the prompt did not go in (${e.code ?? "error"}: ${e.message}); send it with \`herdr agent prompt ${o.name} "<prompt>"\`` };

@@ -1,11 +1,11 @@
-import { HerdrError, getAgent, getPane, listAgents, type AgentInfo, type PaneInfo } from "../herdr/herdr.ts";
+import { MuxError, getAgent, getPane, listAgents, type AgentInfo, type PaneInfo } from "../mux/index.ts";
 import { createDispatch, settleDispatch, taskDispatchIds } from "../core/dispatch.ts";
 import { startClaimIsFresh } from "../core/claims.ts";
 import { assertTaskGatesApproved } from "../core/gates.ts";
 import { addTask, load, nextId, now, ready, update, withRunStartFence, WORKER_NAME, type Message, type Run, type State, type Task, type Worker } from "../core/state.ts";
 import { markPrompted, preamble, promptWithRetry, refuseStartInFlight, START_CLAIM_MS } from "./workers.ts";
 
-export class AdoptionError extends HerdrError {}
+export class AdoptionError extends MuxError {}
 
 export type AdoptOptions = {
   run: Run;

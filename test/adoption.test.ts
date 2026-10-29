@@ -6,7 +6,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { AgentInfo } from "../src/herdr/herdr.ts";
+import type { AgentInfo } from "../src/mux/index.ts";
 import { parseArgs } from "../src/cli/args.ts";
 import { validateCommandArgs } from "../src/cli/command-args.ts";
 import type { State, Task, Worker } from "../src/core/state.ts";

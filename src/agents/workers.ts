@@ -1,9 +1,9 @@
-import { agentPrompt, agentRead, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, listPanes, logHerdrError, paneClose, paneSplit, paneSwap, pluginPaneOpen, promptLanded, PromptDeliveryUnknownError, isRemotePromptReceiptError, observePromptReceipt, setSplitRatio, tabClose, tabCreate, workspaceGet, worktreeCreate, worktreeOpen, worktreeRemove, HerdrError } from "../herdr/herdr.ts";
+import { agentPrompt, agentRead, atRest, caps, agentSendKeys, agentStart, agentWait, getAgent, getPane, labelPane, listAgents, listPanes, logMuxError, paneClose, paneSplit, paneSwap, openToolPane, promptLanded, PromptDeliveryUnknownError, isRemotePromptReceiptError, observePromptReceipt, setSplitRatio, tabClose, tabCreate, workspaceGet, worktreeCreate, worktreeOpen, worktreeRemove, MuxError } from "../mux/index.ts";
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
 import { loadTheme } from "../ui/theme.ts";
-import { placeInPack } from "../herdr/pack-layout.ts";
+import { placeInPack } from "./pack-layout.ts";
 import { dropUndelivered, envMs, EXITED_SUMMARY, touch } from "../messaging/inbox.ts";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -158,13 +158,15 @@ async function openLeaderBar(run: Run, name: string, paneId: string, info: { whe
     };
     const accent = loadTheme().accent;
     if (accent) env.PACK_ACCENT = accent;
-    const bar = await pluginPaneOpen({ entrypoint: "bar", target_pane_id: paneId, direction: "down", env });
-    await paneSwap(bar.pane_id, paneId);
-    await setSplitRatio(bar.pane_id, 0.05);
+    const bar = await openToolPane({ entrypoint: "bar", target_pane_id: paneId, direction: "down", env });
+    if (caps().arrange) {
+      await paneSwap(bar.pane_id, paneId);
+      await setSplitRatio(bar.pane_id, 0.05);
+    }
     log({ event: "bar.opened", run: run.id, worker: name, pane: bar.pane_id });
     return bar.pane_id;
   } catch (err) {
-    logHerdrError("bar.open", err, { run: run.id, worker: name, pane: paneId });
+    logMuxError("bar.open", err, { run: run.id, worker: name, pane: paneId });
     return null;
   }
 }
@@ -230,7 +232,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
   if (!o.worktree && (o.base || o.branch)) throw new Error("--base and --branch need --worktree new");
   const baseCwd = o.cwd ?? o.run.orchestrator.cwd;
   const wt = o.worktree ? planWorktree({ spec: o.worktree, cwd: baseCwd, runId: o.run.id, worker: o.name, base: o.base, branch: o.branch }) : null;
-  const live = await listAgents().catch((err) => (logHerdrError("agent.list", err, { worker: o.name }), []));
+  const live = await listAgents().catch((err) => (logMuxError("agent.list", err, { worker: o.name }), []));
   if (live.some((a) => a.name === o.name)) throw new Error(`a live herdr agent is already named "${o.name}"`);
 
   const cwd = wt ? wt.path : baseCwd;
@@ -331,7 +333,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
               : result.status === "failed"
                 ? `exited with code ${result.exit_code ?? "unknown"}${result.signal ? ` (signal ${result.signal})` : ""}`
                 : `could not complete (${result.error ?? "unknown error"})`;
-            throw new HerdrError(code, `worktree setup ${evidence}; command log: ${result.log_path}`);
+            throw new MuxError(code, `worktree setup ${evidence}; command log: ${result.log_path}`);
           }
           await update((state) => assertStartAuthority(state, { runId: o.run.id, name: o.name, taskId: task.id, dispatchId }));
         }
@@ -343,22 +345,22 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
       if (!workspace) throw new Error("the run has no workspace; pass --target-pane");
       const t = await tabCreate({ workspace_id: workspace, label: `${o.name}`, cwd, env });
       if (!t.root_pane?.pane_id) {
-        if (t.tab?.tab_id) await tabClose(t.tab.tab_id).catch((err) => logHerdrError("tab.close", err, { tab: t.tab.tab_id }));
-        throw new HerdrError("bad_result", "herdr did not return the new tab's pane");
+        if (t.tab?.tab_id) await tabClose(t.tab.tab_id).catch((err) => logMuxError("tab.close", err, { tab: t.tab.tab_id }));
+        throw new MuxError("bad_result", "herdr did not return the new tab's pane");
       }
       pane = t.root_pane;
       paneCreated = true;
       tabId = t.tab?.tab_id ?? null;
       log({ event: "tab.created", run: o.run.id, worker: o.name, tab: tabId, pane: pane.pane_id });
       if (shellTab && shellTab !== tabId) {
-        await tabClose(shellTab).catch((err) => logHerdrError("worktree.shell_tab.close", err, { worker: o.name, tab: shellTab }));
+        await tabClose(shellTab).catch((err) => logMuxError("worktree.shell_tab.close", err, { worker: o.name, tab: shellTab }));
         log({ event: "worktree.shell_tab_closed", run: o.run.id, worker: o.name, tab: shellTab });
       }
     } else {
       const target = o.targetPane ?? o.run.orchestrator.pane_id;
       if (!target) throw new Error("the run has no orchestrator pane; pass --target-pane");
       pane = o.packLayout ? await placeInPack(o.run, { cwd, env }) : await paneSplit({ target_pane_id: target, direction: o.direction, cwd, env, ratio: o.ratio });
-      if (!pane?.pane_id) throw new HerdrError("bad_result", "herdr did not return the new pane");
+      if (!pane?.pane_id) throw new MuxError("bad_result", "herdr did not return the new pane");
       paneCreated = true;
       log({ event: "pane.split", run: o.run.id, worker: o.name, pane: pane.pane_id });
     }
@@ -440,7 +442,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
     await assertCurrentStart();
   } catch (err) {
     if (err instanceof StartRevokedError) throw err;
-    const e = err as HerdrError;
+    const e = err as MuxError;
     warning = `agent did not come up (${e.code ?? "error"}: ${e.message}); pane ${pane.pane_id} is left for inspection`;
     try {
       await update((state) => {
@@ -482,7 +484,7 @@ export async function startWorker(o: StartOptions): Promise<StartResult> {
         await cleanupRevokedStart();
         throw err;
       }
-      const e = err as HerdrError;
+      const e = err as MuxError;
       await assertCurrentStart();
       log({ event: "worker.prompt_failed", run: o.run.id, worker: o.name, error: e.message });
       promptWarning = `${o.name} started but did not receive its task (${e.code ?? "error"}: ${e.message}). Read it with \`pack-leader worker read ${o.name}\`, then \`pack-leader worker resend ${o.name}\`.`;
@@ -537,7 +539,7 @@ async function startRemoteWorker(o: StartOptions): Promise<StartResult> {
       const tabs = await tabCreate({ workspace_id: profile.workspace_id, label: o.name, cwd, env: callbackEnv });
       if (!tabs.root_pane?.pane_id) {
         if (tabs.tab?.tab_id) await tabClose(tabs.tab.tab_id).catch(() => {});
-        throw new HerdrError("bad_result", "remote herdr did not return the new tab's root pane");
+        throw new MuxError("bad_result", "remote herdr did not return the new tab's root pane");
       }
       return { pane_id: tabs.root_pane.pane_id, tab_id: tabs.tab?.tab_id ?? null };
     });
@@ -674,7 +676,7 @@ async function redispatchUnlocked(run: Run, name: string, taskId: string | undef
   });
   const waitMs = o.idleWaitMs ?? REDISPATCH_IDLE_WAIT_MS;
   const st = await withExecutionHost(known.execution_host ?? undefined, () => agentWait(known.pane_id, ["idle", "done"], waitMs));
-  if (st !== "idle" && st !== "done") throw new Error(`${name} is ${st === "timeout" ? "still busy" : st} after waiting ${Math.round(waitMs / 1000)}s; nothing was dispatched. Check it with \`pack-leader worker read ${name}\` and try again when it is idle`);
+  if (!atRest(st)) throw new Error(`${name} is ${st === "timeout" ? "still busy" : st} after waiting ${Math.round(waitMs / 1000)}s; nothing was dispatched. Check it with \`pack-leader worker read ${name}\` and try again when it is idle`);
   const r = await update((state) => {
     const w = state.workers[name];
     if (!w || w.run_id !== run.id) throw new Error(`no worker "${name}" in run ${run.id}`);
@@ -736,7 +738,7 @@ async function redispatchUnlocked(run: Run, name: string, taskId: string | undef
       });
       if (!restored.received && restored.revoked) throw startRevoked(run.id, r.dispatchId);
       if (!restored.received) {
-        const e = err as HerdrError;
+        const e = err as MuxError;
         log({ event: "worker.prompt_failed", run: run.id, worker: name, dispatch: r.dispatchId, error: e.message });
         log({ event: "worker.redispatch_rolled_back", run: run.id, worker: name, dispatch: r.dispatchId, task: r.task.id });
         const what = r.before ? `task ${r.task.id} is ${restored.status ?? r.before.status} again` : `task ${r.task.id} was not kept`;
@@ -953,7 +955,7 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
     let close_error: string | undefined;
     const shouldClosePane = w.owns_pane && !w.retained && !opts.keepPane;
     if (shouldClosePane) {
-      if (w.bar_pane_id) await withExecutionHost(w.execution_host ?? undefined, () => paneClose(w.bar_pane_id!)).catch((err) => logHerdrError("bar.close", err, { worker: name, pane: w.bar_pane_id }));
+      if (w.bar_pane_id) await withExecutionHost(w.execution_host ?? undefined, () => paneClose(w.bar_pane_id!)).catch((err) => logMuxError("bar.close", err, { worker: name, pane: w.bar_pane_id }));
       try {
         await withExecutionHost(w.execution_host ?? undefined, () => getPane(w.pane_id));
         if (w.owns_tab && w.tab_id) {
@@ -965,8 +967,8 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
           closed_pane = w.pane_id;
         }
       } catch (err) {
-        logHerdrError("release.close", err, { worker: name, pane: w.pane_id, tab: w.tab_id ?? null });
-        const code = (err as HerdrError).code;
+        logMuxError("release.close", err, { worker: name, pane: w.pane_id, tab: w.tab_id ?? null });
+        const code = (err as MuxError).code;
         if (code !== "pane_not_found" && code !== "tab_not_found") close_error = `${w.owns_tab && w.tab_id ? `tab ${w.tab_id}` : `pane ${w.pane_id}`} may still be open: ${(err as Error).message}`;
       }
     } else if (!w.adopted) {
@@ -1017,7 +1019,7 @@ export async function releaseWorker(run: Run, name: string, opts: { force?: bool
 }
 
 export async function materializeWorktree(wt: WorktreeInfo, label: string, viaHerdr: boolean): Promise<{ shellTab: string | null }> {
-  if (viaHerdr) {
+  if (viaHerdr && caps().workspaces) {
     try {
       const r = wt.created_by_pack
         ? await worktreeCreate({ cwd: wt.repo, path: wt.path, branch: wt.branch!, base: wt.base, label })
@@ -1033,7 +1035,7 @@ export async function materializeWorktree(wt: WorktreeInfo, label: string, viaHe
 }
 
 async function removeWorktree(wt: WorktreeInfo): Promise<void> {
-  if (wt.workspace_id) {
+  if (wt.workspace_id && caps().workspaces) {
     try {
       const ws = await workspaceGet(wt.workspace_id);
       if (ws?.worktree?.checkout_path === wt.path) {
@@ -1041,7 +1043,7 @@ async function removeWorktree(wt: WorktreeInfo): Promise<void> {
         return;
       }
     } catch (err) {
-      if ((err as HerdrError).code !== "workspace_not_found" && !isUnknownMethod(err)) throw err;
+      if ((err as MuxError).code !== "workspace_not_found" && !isUnknownMethod(err)) throw err;
     }
   }
   gitWorktreeRemove(wt);
@@ -1247,12 +1249,12 @@ async function rollbackStartClaim(o: StartOptions, taskId: string, dispatchId: s
 }
 
 async function closeStartPane(paneId: string, tabId: string | null, runId: string, worker: string, barPaneId?: string | null): Promise<void> {
-  if (!tabId && barPaneId) await paneClose(barPaneId).catch((err) => logHerdrError("start.revoke.bar.close", err, { run: runId, worker, pane: barPaneId }));
+  if (!tabId && barPaneId) await paneClose(barPaneId).catch((err) => logMuxError("start.revoke.bar.close", err, { run: runId, worker, pane: barPaneId }));
   try {
     if (tabId) await tabClose(tabId);
     else await paneClose(paneId);
   } catch (err) {
-    logHerdrError("start.revoke.close", err, { run: runId, worker, pane: paneId, tab: tabId });
+    logMuxError("start.revoke.close", err, { run: runId, worker, pane: paneId, tab: tabId });
   }
 }
 
@@ -1285,7 +1287,7 @@ export async function clearStartupDialog(paneId: string): Promise<boolean> {
   if (/Yes, I trust this folder/.test(screen)) {
     await agentSendKeys(paneId, ["down", "enter"]).catch(() => {});
     const st = await agentWait(paneId, ["idle", "done"], 30_000).catch(() => "timeout" as const);
-    if (st === "idle" || st === "done") return false;
+    if (atRest(st)) return false;
   }
   a = await getAgent(paneId).catch(() => null);
   return a?.agent_status === "blocked";
@@ -1370,7 +1372,7 @@ export async function startWhenShellReady(p: Parameters<typeof agentStart>[0], w
       await agentStart(p);
       return;
     } catch (err) {
-      const e = err as HerdrError;
+      const e = err as MuxError;
       if (e.code !== "agent_pane_busy" || Date.now() > deadline) throw err;
       await new Promise((r) => setTimeout(r, 500));
     }
@@ -1390,13 +1392,13 @@ export async function promptWithRetry(target: string, text: string, seqBefore?: 
           return;
         }
         if (receipt === "unknown") throw new PromptDeliveryUnknownError(target, err);
-      } else if ((err as HerdrError).code === "timeout" && seqBefore !== undefined && (await promptLanded(target, seqBefore))) {
+      } else if ((err as MuxError).code === "timeout" && seqBefore !== undefined && (await promptLanded(target, seqBefore))) {
         log({ event: "prompt.timeout_landed", target });
         return;
       }
       if (i >= tries) throw err;
       if (canRetry && !(await canRetry())) return;
-      if ((err as HerdrError).code === "agent_blocked") {
+      if ((err as MuxError).code === "agent_blocked") {
         if (!clearBlockedDialog || await clearStartupDialog(target)) throw err;
         continue;
       }

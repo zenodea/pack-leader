@@ -1,6 +1,6 @@
 import { mkdirSync, rmdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { getPane, layoutExport, logHerdrError, paneMove, paneSplit, type LayoutNode, type PaneInfo } from "./herdr.ts";
+import { caps, getPane, layoutExport, logMuxError, paneMove, paneSplit, type LayoutNode, type PaneInfo } from "../mux/index.ts";
 import { ensureDir, stateDir } from "../core/paths.ts";
 import { load, log, type Run } from "../core/state.ts";
 
@@ -88,7 +88,7 @@ async function openRightHalf(run: Run, leader: PaneInfo, spec: PaneSpec): Promis
     return await paneSplit({ target_pane_id: leader.pane_id, direction: "right", ratio: 0.5, ...spec });
   } finally {
     await paneMove(observer!, { type: "tab", tab_id: leader.tab_id, split: "down", target_pane_id: leader.pane_id, ratio: 0.5 }).catch((err) =>
-      logHerdrError("pack_layout.observer_back", err, { run: run.id, pane: observer }),
+      logMuxError("pack_layout.observer_back", err, { run: run.id, pane: observer }),
     );
   }
 }
@@ -99,6 +99,11 @@ export async function placeInPack(run: Run, spec: PaneSpec): Promise<PaneInfo> {
   return withLayoutLock(run.id, async () => {
     const fresh = load().runs[run.id] ?? run;
     const leader = await getPane(leaderId);
+    if (!caps().layoutTree) {
+      const pane = await paneSplit({ target_pane_id: leaderId, direction: "right", ratio: 0.5, ...spec });
+      log({ event: "pack_layout.placed", run: run.id, pane: pane.pane_id, beside: leaderId, direction: "right" });
+      return pane;
+    }
     const root = await layoutExport(leader.tab_id);
     const split = nextSplit(root, areaPanes(root, fresh));
     const pane = split ? await paneSplit({ target_pane_id: split.target, direction: split.direction, ratio: 0.5, ...spec }) : await openRightHalf(fresh, leader, spec);

@@ -3,7 +3,7 @@ import { closeSync, existsSync, fstatSync, openSync, readdirSync, readSync, stat
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { formatTokens, loadConfig, settingsOf } from "../core/config.ts";
-import { agentPrompt, agentWait, getPane, logHerdrError, notify } from "../herdr/herdr.ts";
+import { agentPrompt, agentWait, getPane, logMuxError, notify } from "../mux/index.ts";
 import { claudeSessionDir } from "./observer.ts";
 import { pluginRoot } from "../core/paths.ts";
 import { load, log, now, update, type Run, type RunHandoff } from "../core/state.ts";
@@ -150,7 +150,7 @@ export async function handoffGate(run: Run, home = homedir()): Promise<Record<st
   try {
     due = await handoffDue(fresh, home);
   } catch (err) {
-    logHerdrError("handoff.due", err, { run: run.id });
+    logMuxError("handoff.due", err, { run: run.id });
   }
   if (!due) return null;
   const asked = fresh.handoff?.status === "requested" ? fresh.handoff.asked : 0;

@@ -1,6 +1,6 @@
 import { str, has, num, type Args } from "../args.ts";
 import { fg, bold, dim } from "../../ui/ansi.ts";
-import { HerdrError, getPane, renamePane, notify, tabGet, tabRename } from "../../herdr/herdr.ts";
+import { MuxError, getPane, renamePane, notify, tabGet, tabRename } from "../../mux/index.ts";
 import { herdrWarning, sync } from "../../messaging/inbox.ts";
 import { startObserver } from "../../agents/observer.ts";
 import { activeRuns, load, log, maxRunDepth, nextId, now, ready, runDispatches, runMessages, runTasks, runWorkers, taskGateBlockers, type Run, type State, unacked, update } from "../../core/state.ts";
@@ -152,7 +152,7 @@ export async function handleRun(command: string, args: Args, fromAction: boolean
           out({ run: id, orchestrator: before.orchestrator, unchanged: true });
           return;
         }
-        const oldOpen = old ? await getPane(old).then(() => true, (err) => ((err as HerdrError).code === "pane_not_found" ? false : true)) : false;
+        const oldOpen = old ? await getPane(old).then(() => true, (err) => ((err as MuxError).code === "pane_not_found" ? false : true)) : false;
         if (oldOpen && !has(args, "takeover")) throw new Error(`run ${id} is led from pane ${old}, which is still open; pass --takeover only if that coordinator is gone or hands the run over`);
         const run = await update((state) => {
           const r = state.runs[id];

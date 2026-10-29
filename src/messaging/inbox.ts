@@ -1,7 +1,7 @@
 import { watch, type FSWatcher } from "node:fs";
 import { basename, dirname } from "node:path";
 import { hostname } from "node:os";
-import { agentPrompt, getAgent, type HerdrError, isRemotePromptReceiptError, listAgents, listPanes, logHerdrError, observePromptReceipt, promptLanded, type AgentStatus, subscribe } from "../herdr/herdr.ts";
+import { agentPrompt, atRest, getAgent, type MuxError, isRemotePromptReceiptError, listAgents, listPanes, logMuxError, observePromptReceipt, promptLanded, type AgentStatus, subscribe } from "../mux/index.ts";
 import { stateFile } from "../core/paths.ts";
 import { DEFAULT_SETTINGS, loadConfig, settingsOf } from "../core/config.ts";
 import { activeRuns, log, nextId, now, runTasks, runWorkers, type Message, type Run, type State, type Worker, unacked, update, load, childRuns, processAlive } from "../core/state.ts";
@@ -49,11 +49,11 @@ export async function nudgeOrchestrator(run: Run, text: string): Promise<boolean
   if (load().runs[run.id]?.handoff?.status === "pending") return false;
   try {
     const a = await getAgent(run.orchestrator.pane_id);
-    if (a.agent_status !== "idle" && a.agent_status !== "done") return false;
+    if (!atRest(a.agent_status)) return false;
     await agentPrompt(run.orchestrator.pane_id, text);
     return true;
   } catch (err) {
-    logHerdrError("nudge", err, { run: run.id });
+    logMuxError("nudge", err, { run: run.id });
     return false;
   }
 }
@@ -375,7 +375,7 @@ export async function send(run: Run, worker: string, body: string, force: boolea
   let seq: number | undefined;
   try {
     const a = await withExecutionHost(executionHost, () => getAgent(target));
-    ready = !waiting && (force || a.agent_status === "idle" || a.agent_status === "done");
+    ready = !waiting && (force || atRest(a.agent_status));
     if (Number.isSafeInteger(a.state_change_seq) && (a.state_change_seq as number) >= 0) seq = a.state_change_seq;
   } catch {}
   const delivered = ready ? await deliver(msg.id, worker, body, from, seq) : false;
@@ -429,7 +429,7 @@ export async function expandAddress(state: State, run: Run, address: string): Pr
         throw new Error(`@idle needs remote herdr status for host ${w.execution_host.name}: ${err?.message ?? err}`);
       }
     }
-    names = ws.filter((w) => statusByWorker.get(w.name) === "idle" || statusByWorker.get(w.name) === "done").map((w) => w.name);
+    names = ws.filter((w) => atRest(statusByWorker.get(w.name))).map((w) => w.name);
     why = `no worker in run ${run.id} is idle or done right now (${ws.map((w) => `${w.name}: ${statusByWorker.get(w.name) ?? "no agent"}`).join(", ")})`;
   } else {
     names = ws.filter((w) => w.kind === group).map((w) => w.name);
@@ -628,7 +628,7 @@ async function deliver(id: string, worker: string, body: string, from = "orchest
             execution_host: executionHost!,
             ...(seqBefore !== undefined ? { seq_before: seqBefore } : {}),
             observed_at: now(),
-            reason: `${(err as HerdrError).code ?? "remote_error"}: ${(err as Error).message}`,
+            reason: `${(err as MuxError).code ?? "remote_error"}: ${(err as Error).message}`,
           };
           delete m.delivery_claim;
         });
@@ -638,7 +638,7 @@ async function deliver(id: string, worker: string, body: string, from = "orchest
       await clearClaim();
       return false;
     }
-    if (!executionHost && (err as HerdrError).code === "timeout" && seqBefore !== undefined && (await promptLanded(target, seqBefore))) {
+    if (!executionHost && (err as MuxError).code === "timeout" && seqBefore !== undefined && (await promptLanded(target, seqBefore))) {
       log({ event: "followup.timeout_landed", worker, id });
       return await finalize();
     }
@@ -772,7 +772,7 @@ export async function sync(o: { skipLocal?: boolean } = {}): Promise<Message[]> 
         w.last_status = status;
         w.last_seq = seq;
         const turned = !w.awaiting_prompt && (w.worked || (w.seq_at_dispatch !== undefined && seq >= w.seq_at_dispatch + 2));
-        const settled = status === "blocked" || status === "exited" || ((status === "idle" || status === "done") && turned);
+        const settled = status === "blocked" || status === "exited" || (atRest(status) && turned);
         if (settled && (owes || status === "blocked")) {
           const recent = state.messages.find((m) => m.type === "attention" && m.from === w.name && m.run_id === w.run_id && m.dispatch_id === w.dispatch_id && m.status === status && !m.acked);
           if (!recent) {
@@ -807,7 +807,7 @@ export async function sync(o: { skipLocal?: boolean } = {}): Promise<Message[]> 
         out.push(message(state, { run_id: w.run_id, type: "attention", from: w.name, to: "orchestrator", task_id: w.task_id, dispatch_id: w.dispatch_id, body, status: "stalled" }));
       }
 
-      if (a && (status === "idle" || status === "done") && !w.awaiting_prompt) {
+      if (a && atRest(status) && !w.awaiting_prompt) {
         let first = true;
         for (const m of state.messages) {
           if (m.to !== w.name || m.type !== "followup" || m.delivered || m.acked || !meantFor(state, w, m)) continue;
@@ -823,7 +823,7 @@ export async function sync(o: { skipLocal?: boolean } = {}): Promise<Message[]> 
     for (const r of activeRuns(state)) {
       const pane = r.orchestrator.pane_id;
       const o = pane && localPair ? localByPane.get(pane) : undefined;
-      if (!pane || limit <= 0 || !o || (o.agent_status !== "idle" && o.agent_status !== "done")) continue;
+      if (!pane || limit <= 0 || !o || !atRest(o.agent_status)) continue;
       const stale = state.messages.filter((m) => m.run_id === r.id && m.to === "orchestrator" && !m.acked && RENUDGE_TYPES.includes(m.type) && !m.nudged_at && Date.now() - Date.parse(m.ts) > limit);
       if (!stale.length) continue;
       for (const m of stale) m.nudged_at = now();
@@ -839,7 +839,7 @@ export async function sync(o: { skipLocal?: boolean } = {}): Promise<Message[]> 
       await agentPrompt(n.pane, n.text);
       log({ event: "orchestrator.renudged", run: n.run });
     } catch (err) {
-      logHerdrError("renudge", err, { run: n.run });
+      logMuxError("renudge", err, { run: n.run });
     }
   }
   for (const m of created) log({ event: "attention", run: m.run_id, worker: m.from, status: m.status });
@@ -908,7 +908,7 @@ export async function check(run: Run, o: { wait: boolean; timeoutMs: number; typ
   let poke: (() => void) | null = null;
   const link = { up: null as boolean | null };
   const stop = subscribe(
-    [{ type: "pane.updated" }, { type: "pane.closed" }, { type: "pane.exited" }, { type: "tab.closed" }],
+    ["pane.updated", "pane.closed", "pane.exited", "tab.closed"],
     () => poke?.(),
     (up) => {
       if (link.up !== up) poke?.();

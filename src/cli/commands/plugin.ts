@@ -1,5 +1,5 @@
 import { str, has, num, type Args } from "../args.ts";
-import { getPane, listAgents, notify, paneFocus } from "../../herdr/herdr.ts";
+import { getPane, listAgents, notify, paneFocus } from "../../mux/index.ts";
 import { sync } from "../../messaging/inbox.ts";
 import { closeObserver, digest, OBSERVER_TURNS, startObserver, transcriptPath, transcriptTail } from "../../agents/observer.ts";
 import { readFileSync } from "node:fs";
@@ -78,7 +78,7 @@ export async function handlePlugin(command: string, args: Args, fromAction: bool
           tail = transcriptTail(readFileSync(file, "utf8"), turns);
         } catch {}
       }
-      let live: Map<string, { status: import("../../herdr/herdr.ts").AgentStatus }> | null = null;
+      let live: Map<string, { status: import("../../mux/index.ts").AgentStatus }> | null = null;
       try {
         live = new Map((await listAgents()).map((a) => [a.pane_id, { status: a.agent_status }]));
       } catch {}

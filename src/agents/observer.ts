@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readdirSync, readSync, statSync, write
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultsFor, loadConfig } from "../core/config.ts";
-import { agentWait, getPane, listAgents, logHerdrError, paneClose, paneSplit, renamePane, type AgentStatus } from "../herdr/herdr.ts";
+import { agentWait, getPane, listAgents, logMuxError, paneClose, paneSplit, renamePane, type AgentStatus } from "../mux/index.ts";
 import { lastMessageFor } from "../ui/sidebar.ts";
 import { log, now, type Run, type State, runTasks, runWorkers, unacked, update } from "../core/state.ts";
 import { ensureDir, stateDir } from "../core/paths.ts";
@@ -75,7 +75,7 @@ export async function startObserver(run: Run, o: { timeoutMs?: number } = {}): P
     }
     await promptWithRetry(agent, pinned.briefInPrompt ? `${brief}\n\n${observerKickoff}` : observerKickoff);
   } catch (err) {
-    logHerdrError("observer.start", err, { run: run.id, pane: pane.pane_id });
+    logMuxError("observer.start", err, { run: run.id, pane: pane.pane_id });
     return { pane_id: pane.pane_id, agent, kind, model: d.model ?? null, warning: `observer agent did not come up: ${(err as Error).message}; the pane is left open` };
   }
   return { pane_id: pane.pane_id, agent, kind, model: d.model ?? null };
@@ -87,7 +87,7 @@ export async function closeObserver(run: Run): Promise<string | null> {
   try {
     await paneClose(pane);
   } catch (err) {
-    logHerdrError("observer.close", err, { run: run.id, pane });
+    logMuxError("observer.close", err, { run: run.id, pane });
   }
   await update((s) => void (s.runs[run.id] && (s.runs[run.id]!.observer = null)));
   return pane;

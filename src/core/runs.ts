@@ -1,5 +1,5 @@
 import { existsSync, rmSync } from "node:fs";
-import { getPane, renamePane, logHerdrError, paneClose, tabRename } from "../herdr/herdr.ts";
+import { getPane, renamePane, logMuxError, paneClose, tabRename } from "../mux/index.ts";
 import { closeObserver } from "../agents/observer.ts";
 import { activeRuns, load, log, now, runWorkers, START_CLAIM_MS, type Run, type State, update, withRunStartFence } from "./state.ts";
 import { archiveDir, settleDispatch, startClaimIsFresh } from "./dispatch.ts";
@@ -180,7 +180,7 @@ export async function closeRun(runId: string, o: { release?: boolean; force?: bo
       await paneClose(sidebar);
       closed_sidebar = sidebar;
     } catch (err) {
-      logHerdrError("sidebar.close", err, { run: runId, pane: sidebar });
+      logMuxError("sidebar.close", err, { run: runId, pane: sidebar });
     }
   }
   const closed_observer = await closeObserver(run);

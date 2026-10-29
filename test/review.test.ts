@@ -18,7 +18,8 @@ delete process.env.PACK_WORKTREE_DIR;
 
 const { emptyState, load, save, update } = await import("../src/core/state.ts");
 const { ack, ask, ASK_TICK_MS, check, done, inbox, markHerdrUnreachable, reply, send, sendTo, sync } = await import("../src/messaging/inbox.ts");
-const { getAgent, getPane, herdr, labelPane, observePromptReceipt, promptLanded, subscribeBackoff } = await import("../src/herdr/herdr.ts");
+const { getAgent, getPane, herdr, labelPane, subscribeBackoff } = await import("../src/herdr/herdr.ts");
+const { observePromptReceipt, promptLanded } = await import("../src/mux/index.ts");
 const { baseline, preamble, promptWithRetry, redispatch, releaseWorker, startWorker } = await import("../src/agents/workers.ts");
 const { closeRun, pruneRuns } = await import("../src/core/runs.ts");
 

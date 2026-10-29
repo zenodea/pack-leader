@@ -1,5 +1,5 @@
 import { str, has, type Args } from "../args.ts";
-import { notify } from "../../herdr/herdr.ts";
+import { notify } from "../../mux/index.ts";
 import { readFileSync } from "node:fs";
 import { DEFAULT_KIND } from "../../agents/workers.ts";
 import { configFile, loadConfig, parseTokens, PLACEMENTS, saveConfig, settingsOf, WORKTREE_MODES, type Config, type Placement, type WorktreeMode } from "../../core/config.ts";

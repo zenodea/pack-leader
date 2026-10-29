@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LayoutNode } from "../src/herdr/herdr.ts";
+import type { LayoutNode } from "../src/mux/index.ts";
 import type { State } from "../src/core/state.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pack-leader-layout-"));
@@ -13,7 +13,7 @@ process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
 process.env.HERDR_SOCKET_PATH = sock;
 
 const { emptyState, save } = await import("../src/core/state.ts");
-const { areaPanes, nextSplit, placeInPack } = await import("../src/herdr/pack-layout.ts");
+const { areaPanes, nextSplit, placeInPack } = await import("../src/agents/pack-layout.ts");
 
 type Handler = (method: string, params: any) => Promise<any> | any;
 let handler: Handler = () => {

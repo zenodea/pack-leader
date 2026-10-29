@@ -1,5 +1,5 @@
 import { str, has, num, type Args } from "../args.ts";
-import { agentFocus, agentRead } from "../../herdr/herdr.ts";
+import { agentFocus, agentRead } from "../../mux/index.ts";
 import { resolve } from "node:path";
 import { herdrWarning, sync } from "../../messaging/inbox.ts";
 import { claudeSessionDir, sessionPath, transcriptTail } from "../../agents/observer.ts";

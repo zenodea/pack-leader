@@ -1,5 +1,5 @@
 import { str, type Args } from "./args.ts";
-import { getPane, paneFocus } from "../herdr/herdr.ts";
+import { getPane, paneFocus } from "../mux/index.ts";
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";

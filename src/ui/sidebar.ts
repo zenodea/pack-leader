@@ -2,7 +2,7 @@ import { watch, type FSWatcher } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 import { PassThrough } from "node:stream";
 import { bold, closeWithItalic, dim, fg, fgRgb, italic, pad, screen, truncate, width, wrap as wrapAll } from "./ansi.ts";
-import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "../herdr/herdr.ts";
+import { agentFocus, agentRead, listAgents, paneClose, paneFocus, type AgentStatus, subscribe } from "../mux/index.ts";
 import { ensureDir, stateDir } from "../core/paths.ts";
 import { activeRuns, load, runTasks, runWorkers, type Message, type Run, type State, type Task, type Worker } from "../core/state.ts";
 import { formatOptions, sync } from "../messaging/inbox.ts";
@@ -334,11 +334,10 @@ export async function runSidebar(): Promise<void> {
     });
   } catch {}
   const stop = subscribe(
-    [{ type: "pane.updated" }, { type: "pane.closed" }, { type: "pane.exited" }, { type: "pane.agent_detected" }],
+    ["pane.updated", "pane.closed", "pane.exited", "pane.agent_detected"],
     (e) => {
-      const d = e.data ?? {};
-      if (e.event === "pane_updated" && d.pane) live.set(d.pane.pane_id, { status: d.pane.agent_status, title: d.pane.terminal_title_stripped ?? null, agent: d.pane.agent ?? null });
-      else if ((e.event === "pane_closed" || e.event === "pane_exited") && d.pane_id) live.delete(d.pane_id);
+      if (e.type === "pane.updated") live.set(e.pane.pane_id, { status: e.pane.agent_status, title: e.pane.title, agent: e.pane.agent });
+      else if (e.type === "pane.closed" || e.type === "pane.exited") live.delete(e.pane_id);
       else void refreshLive().then(schedule);
       schedule();
     },

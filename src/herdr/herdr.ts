@@ -3,9 +3,9 @@ import { StringDecoder } from "node:string_decoder";
 import { herdrSocketPath } from "../core/paths.ts";
 import { log } from "../core/state.ts";
 import { currentExecutionHost, remoteHerdr } from "./remote.ts";
-import { CodedError } from "../core/errors.ts";
+import { MuxError, type AgentInfo, type AgentStatus, type LayoutNode, type PaneDestination, type PaneInfo, type TabInfo, type WorkspaceInfo, type WorktreeOpened } from "../mux/types.ts";
 
-export class HerdrError extends CodedError {}
+export class HerdrError extends MuxError {}
 
 export function lineReader(onLine: (line: string) => void): (chunk: Buffer | string) => void {
   const decoder = new StringDecoder("utf8");
@@ -60,35 +60,6 @@ export function herdr<T = any>(method: string, params: Record<string, unknown> =
   });
 }
 
-export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
-
-export type AgentInfo = {
-  pane_id: string;
-  workspace_id: string;
-  tab_id: string;
-  agent: string | null;
-  name?: string | null;
-  agent_status: AgentStatus;
-  state_change_seq?: number;
-  completion_seq?: number | null;
-  cwd?: string | null;
-  foreground_cwd?: string | null;
-  terminal_title_stripped?: string | null;
-  title?: string | null;
-  focused: boolean;
-};
-
-export type PaneInfo = {
-  pane_id: string;
-  workspace_id: string;
-  tab_id: string;
-  agent?: string | null;
-  agent_status: AgentStatus;
-  cwd?: string | null;
-  label?: string | null;
-  focused: boolean;
-};
-
 function listIn<T>(res: any, key: string, method: string): T[] {
   const v = res?.[key];
   if (!Array.isArray(v)) throw new HerdrError("bad_result", `herdr ${method} answered without ${key}`);
@@ -116,9 +87,7 @@ export async function paneSplit(p: { target_pane_id: string; direction: "right" 
   return objectIn<PaneInfo>(await herdr("pane.split", { ...p, focus: false }), "pane", "pane.split");
 }
 
-export type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; direction: "right" | "down"; ratio: number; first: LayoutNode; second: LayoutNode };
 export const layoutExport = async (tab_id: string): Promise<LayoutNode> => objectIn<{ root: LayoutNode }>(await herdr("layout.export", { tab_id }), "layout", "layout.export").root;
-export type PaneDestination = { type: "tab"; tab_id: string; split: "right" | "down"; target_pane_id?: string | null; ratio?: number } | { type: "new_tab"; workspace_id?: string | null; label?: string | null };
 export const paneMove = (pane_id: string, destination: PaneDestination) => herdr("pane.move", { pane_id, destination, focus: false });
 
 export async function agentStart(p: { name: string; kind: string; pane_id: string; args?: string[]; timeout_ms?: number }): Promise<any> {
@@ -133,8 +102,6 @@ export async function agentRead(target: string, lines = 60): Promise<string> {
   const res = await herdr("agent.read", { target, source: "recent_unwrapped", lines, strip_ansi: true });
   return typeof res?.read?.text === "string" ? res.read.text : typeof res?.text === "string" ? res.text : "";
 }
-
-export type TabInfo = { tab_id: string; workspace_id: string; label: string; focused: boolean };
 
 export async function tabCreate(p: { workspace_id: string; label: string; cwd?: string; env?: Record<string, string> }): Promise<{ tab: TabInfo; root_pane: PaneInfo }> {
   const res = await herdr("tab.create", { ...p, focus: false });
@@ -151,9 +118,8 @@ export async function pluginPaneOpen(p: { entrypoint: string; target_pane_id: st
 export const paneSwap = (source_pane_id: string, target_pane_id: string) => herdr("pane.swap", { source_pane_id, target_pane_id });
 export const setSplitRatio = (pane_id: string, ratio: number) => herdr("layout.set_split_ratio", { pane_id, path: [], ratio });
 
-export const workspaceGet = async (workspace_id: string): Promise<{ workspace_id: string; label?: string; worktree?: { checkout_path?: string } | null }> => (await herdr("workspace.get", { workspace_id })).workspace;
+export const workspaceGet = async (workspace_id: string): Promise<WorkspaceInfo> => (await herdr("workspace.get", { workspace_id })).workspace;
 
-export type WorktreeOpened = { workspace: { workspace_id: string }; tab: TabInfo; root_pane: PaneInfo; already_open?: boolean };
 export const worktreeCreate = (p: { cwd: string; path: string; branch: string; base: string; label: string }): Promise<WorktreeOpened> => herdr("worktree.create", { ...p, focus: false }, { timeoutMs: 60_000 });
 export const worktreeOpen = (p: { cwd: string; path: string; label: string }): Promise<WorktreeOpened> => herdr("worktree.open", { ...p, focus: false });
 export const worktreeRemove = (workspace_id: string) => herdr("worktree.remove", { workspace_id, force: false }, { timeoutMs: 60_000 });
@@ -248,45 +214,4 @@ export function subscribe(subs: Subscription[], onEvent: (e: EventEnvelope) => v
     if (retry) clearTimeout(retry);
     conn?.destroy();
   };
-}
-
-export type PromptReceiptObservation = "received" | "not_received" | "unknown";
-
-const AMBIGUOUS_REMOTE_PROMPT_ERRORS = new Set([
-  "ssh_failed", "ssh_timeout", "ssh_unavailable", "ssh_output_limit", "remote_bad_reply",
-  "bad_reply", "herdr_reply_too_large", "unreachable", "disconnected", "timeout",
-]);
-
-export function isRemotePromptReceiptError(err: unknown, remote = Boolean(currentExecutionHost())): boolean {
-  return remote && AMBIGUOUS_REMOTE_PROMPT_ERRORS.has(String((err as any)?.code ?? ""));
-}
-
-export class PromptDeliveryUnknownError extends HerdrError {
-  constructor(target: string, cause: unknown) {
-    const detail = cause instanceof Error ? `${(cause as Error & { code?: string }).code ?? "error"}: ${cause.message}` : String(cause);
-    super("remote_delivery_unknown", `delivery of the remote prompt to pane ${target} is unknown (${detail}); do not resend automatically. Inspect the worker on its snapshotted execution host and confirm its task/dispatch state before using \`pack-leader worker prompt\`; the current attempt remains authoritative.`);
-    this.name = "PromptDeliveryUnknownError";
-  }
-}
-
-export async function observePromptReceipt(target: string, seqBefore: number | undefined): Promise<PromptReceiptObservation> {
-  try {
-    const a = await getAgent(target);
-    const seq = a?.state_change_seq;
-    if (!Number.isSafeInteger(seq) || (seq as number) < 0 || !["idle", "working", "blocked", "done", "unknown"].includes(a.agent_status)) return "unknown";
-    if (a.agent_status === "working" || (seqBefore !== undefined && (seq as number) > seqBefore)) return "received";
-    if (seqBefore !== undefined && seq === seqBefore) return "not_received";
-    return "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-
-export async function promptLanded(target: string, seqBefore: number): Promise<boolean> {
-  try {
-    const a = await getAgent(target);
-    return (a.state_change_seq ?? 0) > seqBefore || a.agent_status === "working";
-  } catch {
-    return false;
-  }
 }
