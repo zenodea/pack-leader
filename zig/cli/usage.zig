@@ -24,6 +24,11 @@ const TEXT =
     \\                                                delete closed runs, their records and screen archives (keeps 5), and
     \\                                                remove released checkouts (never forced; branches stay). run close does this too
     \\  lodestar status [--json] [--all]                active runs and a count of closed ones; --all lists those too
+    \\  lodestar usage [--quiet]                        spend and plan limits per agent (Claude Code, Codex, pi) over the last
+    \\                                                week, from their session logs; the sidebar shows it under the pack.
+    \\                                                Claude's plan limits need its status line to pass through Lodestar:
+    \\                                                "statusLine": {{"type": "command", "command": "lodestar __usage-statusline
+    \\                                                -- YOUR_OLD_COMMAND"}}; extra prices: usage-prices.json in the config dir
     \\  lodestar COMMAND ... [--run ID]             any orchestrator command: that run, not the pane's own (or $LODESTAR_RUN_ID)
     \\ Tasks
     \\  lodestar task create --spec "..." [--title T] [--depends-on a,b] [--parent ID]

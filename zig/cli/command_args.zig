@@ -134,6 +134,7 @@ const commands = [_]Cmd{
     .{ .name = "observer", .flags = withRun(schema(&.{"close"}, &.{}, &.{})) },
     .{ .name = "sidebar-open", .flags = schema(&.{ "left", "no-focus" }, &.{}, &.{}) },
     .{ .name = "event", .flags = empty },
+    .{ .name = "usage", .flags = schema(&.{"quiet"}, &.{}, &.{}) },
 };
 
 const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "observer", "review", "stall-minutes", "handoff", "handoff-at" }, &.{});

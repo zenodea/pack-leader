@@ -13,6 +13,9 @@ const ansi = @import("ansi.zig");
 const term = @import("term.zig");
 const theme_mod = @import("theme.zig");
 const sm = @import("sidebar_messages.zig");
+const usage_box = @import("usage_box.zig");
+const usage_scan = @import("../usage/scan.zig");
+const proc = @import("../core/proc.zig");
 
 const Obj = json.Obj;
 const State = state.State;
@@ -378,6 +381,9 @@ const Sidebar = struct {
     keys: term.KeyReader = .{},
     state_mtime: i64 = 0,
     state_size: u64 = 0,
+    usage: ?*json.Obj = null,
+    usage_arena: Arena,
+    usage_mtime: i64 = 0,
 
     fn keepPanel(self: *Sidebar) void {
         if (self.panel) |*p| {
@@ -562,6 +568,34 @@ const Sidebar = struct {
         }
     }
 
+    /// Picks up the summary a background `lodestar usage` wrote; returns whether it changed.
+    fn loadUsage(self: *Sidebar) bool {
+        const st = fs.stat(usage_scan.summaryFile()) catch return false;
+        if (st.mtime_ms == self.usage_mtime) return false;
+        var next = newArena();
+        const prev = rt.a;
+        rt.a = next.allocator();
+        defer rt.a = prev;
+        const text = fs.readFileOpt(usage_scan.summaryFile()) orelse {
+            next.deinit();
+            return false;
+        };
+        const parsed = (json.parse(text) catch null) orelse {
+            next.deinit();
+            return false;
+        };
+        self.usage_arena.deinit();
+        self.usage_arena = next;
+        self.usage = parsed.asObj();
+        self.usage_mtime = st.mtime_ms;
+        return true;
+    }
+
+    /// Reading the agents' logs takes seconds the first time, so it runs in its own process.
+    fn scanUsage(_: *Sidebar) void {
+        proc.spawnDetached(&.{ paths.lodestar_bin, "usage", "--quiet" }, .{}) catch {};
+    }
+
     fn sync(self: *Sidebar) void {
         const created = inbox.sync(.{}) catch return;
         if (created.len > 0) self.reload();
@@ -680,6 +714,10 @@ const Sidebar = struct {
         appendAll(&head, separator);
 
         var tail: std.ArrayListUnmanaged([]const u8) = .empty;
+        if (self.panel == null) {
+            tail.append(rt.a, "") catch {};
+            appendAll(&tail, usage_box.lines(self.usage, cols, rt.nowMs(), rows_avail < 24));
+        }
         if (self.panel == null) if (self.preview) |pv| if (self.preview_for) |pf| {
             tail.appendSlice(rt.a, &.{ "", dim(rt.concat(&.{ "── ", pf, " ──" })) }) catch {};
             for (pv) |l| tail.append(rt.a, truncate(l, cols)) catch {};
@@ -860,6 +898,7 @@ const TICK_MS: i64 = 5000;
 const CLOCK_MS: i64 = 1000;
 const STATE_POLL_MS: i64 = 150;
 const SUB_RECYCLE_MS: i64 = 60_000;
+const USAGE_SCAN_MS: i64 = 60_000;
 
 pub fn runSidebar() !void {
     const tty = term.isTty(0);
@@ -874,6 +913,7 @@ pub fn runSidebar() !void {
         .preview_arena = newArena(),
         .msg_arena = newArena(),
         .sub_arena = newArena(),
+        .usage_arena = newArena(),
         .theme = theme_mod.loadTheme(),
         .pane = own_pane,
         .workspace = shared.workspaceOf(own_pane),
@@ -896,6 +936,8 @@ pub fn runSidebar() !void {
     rt.a = sb.frame.allocator();
     sb.refreshLive();
     sb.serviceSubscription();
+    _ = sb.loadUsage();
+    sb.scanUsage();
     sb.draw();
     _ = sb.frame.reset(.retain_capacity);
     term.installQuitSignals();
@@ -905,6 +947,7 @@ pub fn runSidebar() !void {
     var next_tick = rt.monoMs() + TICK_MS;
     var next_clock = rt.monoMs() + CLOCK_MS;
     var next_poll = rt.monoMs() + STATE_POLL_MS;
+    var next_usage = rt.monoMs() + USAGE_SCAN_MS;
     while (true) {
         rt.a = sb.frame.allocator();
         defer _ = sb.frame.reset(.retain_capacity);
@@ -956,7 +999,12 @@ pub fn runSidebar() !void {
         }
         if (t >= next_clock) {
             next_clock = t + CLOCK_MS;
+            _ = sb.loadUsage();
             sb.schedule();
+        }
+        if (t >= next_usage) {
+            next_usage = t + USAGE_SCAN_MS;
+            sb.scanUsage();
         }
         if (sb.draw_due) |d| if (rt.monoMs() >= d) {
             sb.draw_due = null;

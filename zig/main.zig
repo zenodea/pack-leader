@@ -20,6 +20,7 @@ const messaging_cmd = @import("cli/commands/messaging.zig");
 const config_cmd = @import("cli/commands/config.zig");
 const plugin_cmd = @import("cli/commands/plugin.zig");
 const host_cmd = @import("cli/commands/host.zig");
+const usage_cmd = @import("cli/commands/usage.zig");
 
 const Route = struct { name: []const u8, handler: Handler };
 
@@ -53,6 +54,7 @@ const commands = [_]Route{
     .{ .name = "observe", .handler = plugin_cmd.handle },
     .{ .name = "observer", .handler = plugin_cmd.handle },
     .{ .name = "host", .handler = host_cmd.handle },
+    .{ .name = "usage", .handler = usage_cmd.handle },
 };
 
 pub fn cliErrorPayload(err: anyerror) *json.Obj {
@@ -90,6 +92,7 @@ fn mainInner(argv: []const []const u8) !void {
         @import("mux/agent_status.zig").runHookCommand(rest);
         return;
     }
+    if (rt.eql(command, "__usage-statusline")) return usage_cmd.runStatusLine(rest);
     const a = args_mod.parseArgs(rest);
     try command_args.validateCommandArgs(command, &a);
     const from_action = rt.getenvNonEmpty("HERDR_PLUGIN_ID") != null and rt.getenvNonEmpty("LODESTAR_ROLE") == null;
