@@ -2,8 +2,8 @@
 //! rewritten to herdr's shape so the rest of Lodestar can parse them: `session:U` is `sU`, `window:V` is `wV`,
 //! block `block:B` in session `session:U` is `sU:bB`. Agent status comes from agent hooks (see agent_status.zig).
 //!
-//! Written from Rex's documentation without a Rex install to test against. Every `UNVERIFIED` marks an API name,
-//! argument or JSON shape to check against `rex api list --json` / `rex api describe <method>`.
+//! Checked against Rex 0.1.0 (server 0.0.1793299046) with `rex api list --json` and a live session. The one
+//! `UNVERIFIED` left is the bar's height, which depends on the attached client's size.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -11,6 +11,7 @@ const rt = @import("../rt.zig");
 const json = @import("../core/json.zig");
 const proc = @import("../core/proc.zig");
 const paths = @import("../core/paths.zig");
+const fs = @import("../core/fs.zig");
 const remote = @import("../herdr/remote.zig");
 const types = @import("types.zig");
 const agent_status = @import("agent_status.zig");
@@ -22,10 +23,24 @@ const MuxEvent = types.MuxEvent;
 const SHELLS = [_][]const u8{ "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "login" };
 const AGENTS = [_][]const u8{ "claude", "codex", "pi" };
 
+/// Rex puts `rex` on PATH only in its own terminals (as REX_BIN_DIR). Elsewhere, use the copy the macOS app
+/// installs, then PATH.
+fn rexBin() []const u8 {
+    if (rt.getenvNonEmpty("REX_BIN_DIR")) |d| {
+        const p = fs.join(&.{ d, "rex" });
+        if (fs.isFile(p)) return p;
+    }
+    if (builtin.os.tag == .macos) {
+        const p = fs.join(&.{ paths.home, "Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex" });
+        if (fs.isFile(p)) return p;
+    }
+    return "rex";
+}
+
 /// `rex -S HOST`: LODESTAR_REX_SERVER picks a server other than the one REX_SERVER names.
 fn rexArgv(args: []const []const u8) []const []const u8 {
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    argv.append(rt.a, "rex") catch @panic("out of memory");
+    argv.append(rt.a, rexBin()) catch @panic("out of memory");
     if (rt.getenvNonEmpty("LODESTAR_REX_SERVER")) |s| argv.appendSlice(rt.a, &.{ "-S", s }) catch @panic("out of memory");
     argv.appendSlice(rt.a, args) catch @panic("out of memory");
     return argv.items;
@@ -149,8 +164,8 @@ fn pwdPath(p: []const u8) []const u8 {
     return if (std.mem.indexOfScalar(u8, rest, '/')) |i| rest[i..] else "/";
 }
 
-/// UNVERIFIED: field names guessed. The foreground process as `terminal.process_changed` describes it
-/// (`foreground` with `name`, `cwd`, `pid`), or a flat name.
+/// The foreground process, as the `process` block method and `process_changed` give it (`foreground` with
+/// `name`, `cwd`, `pid`), or a flat name.
 fn foregroundName(o: *const Obj) ?[]const u8 {
     for ([_][]const u8{ "foreground", "process", "foreground_process" }) |k| {
         if (o.obj(k)) |f| if (f.strNonEmpty("name")) |n| return n;
@@ -215,9 +230,8 @@ fn walkView(w: *Walk, v: Value, window: ?*const Obj) void {
     }
 }
 
-/// UNVERIFIED: shape guessed from docs. `session.view` "returns the session's windows, layouts, and blocks" and
-/// the docs only show `.windows` being an array. Any object with a `block:` `block_id` counts as a block; it
-/// belongs to the nearest enclosing object that has a `window_id`.
+/// `session.view` is `windows[].layers[]` with a `layout` tree and a `blocks` list. Any object with a `block:`
+/// `block_id` counts as a block; it belongs to the nearest enclosing object that has a `window_id`.
 pub fn viewBlocks(session: []const u8, view: *Obj) []Raw {
     var w: Walk = .{ .session = session, .active_window = firstStr(view, &.{ "active_window_id", "focused_window_id" }) };
     walkView(&w, view.val(), null);
@@ -228,12 +242,15 @@ fn sessionView(session: []const u8) ![]Raw {
     return viewBlocks(session, try call(session, "session.view", json.newObj()));
 }
 
-/// UNVERIFIED: `rex block inspect --json` exists ("show details of the terminal"), its output shape does not
-/// appear in the docs. Fills the foreground process, cwd and title when the view lacked them.
+/// The view has no process, cwd or title; the terminal block's `process` method gives
+/// `foreground: {name, cwd, ...}` and `title` gives `{title}`.
 fn inspect(r: *Raw) void {
-    if (r.command.len > 0 and r.cwd.len > 0) return;
-    const o = runJson(&.{ "block", "inspect", "--json", "-s", r.session, "-b", r.block }, null) catch return;
-    absorb(r, o.obj("block") orelse o);
+    if (r.command.len == 0 or r.cwd.len == 0) {
+        if (runJson(&.{ "block", "call", "-s", r.session, "-b", r.block, "process" }, null)) |o| absorb(r, o) else |_| {}
+    }
+    if (r.title.len == 0) {
+        if (runJson(&.{ "block", "call", "-s", r.session, "-b", r.block, "title" }, null)) |o| absorb(r, o) else |_| {}
+    }
 }
 
 fn sessionIds() ![]const []const u8 {
@@ -453,8 +470,7 @@ fn paneClose(pane_id: []const u8) anyerror!Value {
 
 fn paneFocus(pane_id: []const u8) anyerror!Value {
     try refuseRemote();
-    // UNVERIFIED: `session.focus_block` is listed in the Lua reference; its arguments are guessed. Focus is
-    // best effort: the app may not be attached to this session.
+    // Focus is best effort: the app may not be attached to this session.
     _ = call(sessionFor(pane_id), "session.focus_block", json.object(.{.{ "block_id", blockTarget(pane_id) }})) catch {};
     return json.newObj().val();
 }
@@ -479,7 +495,8 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
     try refuseRemote();
     const entrypoint = p.str("entrypoint") orelse "sidebar";
     const target = p.str("target_pane_id") orelse return rt.fail("bad_request", "plugin pane needs target_pane_id", .{});
-    // UNVERIFIED: --ratio is a percentage, so the bar's two rows are approximated.
+    // UNVERIFIED: --ratio is a percentage, so the bar's two rows are approximated; how many rows 5% gives
+    // depends on the window's height in the attached client.
     if (rt.eql(entrypoint, "bar")) return paneRecord(try split(target, "above", "5", null, p.obj("env"), toolCommand(entrypoint)));
     const down = rt.eqlOpt(p.str("direction"), "down");
     const side = if (p.truthy("before")) (if (down) "above" else "left") else (if (down) "below" else "right");
@@ -521,7 +538,6 @@ fn tabClose(tab_id: []const u8) anyerror!Value {
     try refuseRemote();
     const window = windowTarget(tab_id);
     const session = (try sessionOfWindow(window)) orelse return rt.fail("tab_not_found", "tab {s} not found", .{tab_id});
-    // UNVERIFIED: `session.close_window` is listed in the Lua reference; its arguments are guessed.
     _ = try call(session, "session.close_window", json.object(.{.{ "window_id", window }}));
     return json.newObj().val();
 }
@@ -584,7 +600,7 @@ fn agentStart(p: *Obj) anyerror!Value {
 }
 
 /// Bracketed paste, so a multi-line prompt arrives as one input instead of a line per Enter (what tmux's
-/// `paste-buffer -p` does). UNVERIFIED: that `rex send` passes these bytes through to the program.
+/// `paste-buffer -p` does). `rex send` passes the bytes through unchanged.
 pub fn pasted(text: []const u8) []const u8 {
     return rt.concat(&.{ "\x1b[200~", text, "\x1b[201~" });
 }
