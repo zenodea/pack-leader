@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "docs/model-routing.md"
+      - "docs/CHANGELOG.md"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -26,6 +28,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Copy shared docs into the site
+        run: |
+          cp docs/model-routing.md site/docs/pages/model-routing.md
+          cp docs/CHANGELOG.md site/docs/pages/changelog.md
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

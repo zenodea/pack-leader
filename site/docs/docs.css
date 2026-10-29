@@ -1,0 +1,151 @@
+:root {
+  color-scheme: dark;
+  --bg: #05070d;
+  --panel: #0a0e17;
+  --ink: #e9edf5;
+  --muted: #a1aabd;
+  --faint: #6a7388;
+  --line: rgba(255, 255, 255, .08);
+  --leader: #ff9648;
+  --focus: #7cc4ff;
+  --link: #ffb27a;
+  --code-bg: #0d121d;
+  --sans: "Inter Tight", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+/* No elastic bounce past the top or bottom: the page would move while the dots, which are fixed, stay. */
+html { scroll-padding-top: 84px; overscroll-behavior: none; }
+body { overscroll-behavior: none; }
+body { margin: 0; background: var(--bg); color: var(--ink); }
+a { color: inherit; }
+button { font: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+/* Mounted into the landing page: fades in over the dots that drew its lines */
+#docs-root { position: relative; transition: opacity .55s ease; }
+#docs-root.ghost { opacity: 0; pointer-events: none; }
+
+/* Top bar */
+.bar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 20px; height: 64px; padding: 0 24px; background: rgba(5, 7, 13, .88); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+/* The dividers are the agents themselves: dots drawn by ../script.js on a canvas above the page,
+   on a 6px grid along the bar, the page list, the contents, the search box and each section. */
+#field { position: fixed; inset: 0; z-index: 50; width: 100%; height: 100%; pointer-events: none; }
+.js .logo-dot { visibility: hidden; }
+.logo { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; letter-spacing: -.02em; text-decoration: none; white-space: nowrap; }
+.logo-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--leader); box-shadow: 0 0 12px 2px rgba(255, 150, 72, .55); }
+.logo-tag { padding: 2px 7px; border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--muted); }
+.menu { display: none; flex-direction: column; justify-content: center; gap: 4px; width: 36px; height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: transparent; }
+.menu span { display: block; height: 1.5px; background: var(--ink); }
+.bar-links { display: flex; gap: 22px; margin-left: auto; font-size: 14.5px; }
+.bar-links a { text-decoration: none; color: var(--muted); }
+.bar-links a:hover { color: var(--ink); }
+
+.search { position: relative; flex: 0 1 380px; margin-left: 28px; }
+.search input { width: 100%; height: 36px; padding: 0 36px 0 14px; border: 0; border-radius: 0; background: var(--panel); color: var(--ink); font: inherit; font-size: 14.5px; }
+.search input::placeholder { color: var(--faint); }
+.search input:focus { outline: none; background: #0e1320; }
+.search-key { position: absolute; right: 9px; top: 8px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; font-family: var(--mono); font-size: 11px; color: var(--faint); pointer-events: none; }
+.results { position: absolute; top: 44px; left: 0; right: 0; max-height: 70vh; overflow-y: auto; margin: 0; padding: 6px; list-style: none; border: 1px solid var(--line); border-radius: 12px; background: #0b0f19; box-shadow: 0 20px 50px rgba(0, 0, 0, .6); }
+.results a { display: block; padding: 9px 11px; border-radius: 8px; text-decoration: none; }
+.results a:hover, .results a.on { background: rgba(255, 150, 72, .1); }
+.results .r-where { display: block; font-size: 12px; color: var(--faint); }
+.results .r-title { display: block; font-weight: 600; font-size: 14.5px; }
+.results .r-snip { display: block; margin-top: 2px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.results mark { background: none; color: var(--leader); }
+.results .r-none { padding: 10px 12px; color: var(--muted); font-size: 14px; }
+
+/* Three columns */
+.layout { display: grid; grid-template-columns: 260px minmax(0, 1fr) 220px; max-width: 1440px; margin: 0 auto; }
+.side { position: sticky; top: 64px; height: calc(100vh - 64px); overflow-y: auto; padding: 28px 18px 40px 24px; }
+.side h2 { margin: 22px 0 8px 10px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.side h2:first-child { margin-top: 0; }
+.side ul { margin: 0; padding: 0; list-style: none; }
+.side a { display: block; padding: 6px 10px; border-radius: 7px; font-size: 14.5px; color: var(--muted); text-decoration: none; }
+.side a:hover { color: var(--ink); background: rgba(255, 255, 255, .04); }
+.side a[aria-current="page"] { color: var(--ink); background: rgba(124, 196, 255, .1); box-shadow: inset 2px 0 0 var(--focus); }
+/* With the dots running, a ball of workers marks the current page instead. */
+.js .side a[aria-current="page"] { background: none; box-shadow: none; }
+
+.page { min-width: 0; padding: 44px 56px 80px; }
+.toc { position: sticky; top: 64px; height: calc(100vh - 64px); overflow-y: auto; padding: 44px 24px 40px 8px; font-size: 13.5px; }
+.toc p { margin: 0 0 10px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.toc ul { margin: 0; padding: 0; list-style: none; }
+.toc a { display: block; padding: 4px 0 4px 12px; border-left: 2px solid transparent; color: var(--faint); text-decoration: none; line-height: 1.4; }
+.toc a.sub { padding-left: 24px; font-size: 13px; }
+.toc a:hover { color: var(--ink); }
+.toc a.on { color: var(--ink); border-left-color: var(--focus); }
+.js .toc a.on { border-left-color: transparent; }
+
+/* The page itself */
+.doc { max-width: 780px; font-size: 16.5px; line-height: 1.7; color: #cdd3df; }
+.doc > :first-child { margin-top: 0; }
+.doc h1 { margin: 0 0 18px; font-size: clamp(32px, 4vw, 44px); line-height: 1.08; letter-spacing: -.03em; color: #fff; }
+.doc h1 + p { font-size: 18.5px; color: var(--muted); }
+.doc h2 { margin: 52px 0 14px; padding-top: 22px; font-size: 26px; line-height: 1.2; letter-spacing: -.02em; color: #fff; }
+.doc h3 { margin: 34px 0 10px; font-size: 19px; letter-spacing: -.01em; color: #fff; }
+.doc h4 { margin: 24px 0 8px; font-size: 16px; color: #fff; }
+.doc h2, .doc h3 { position: relative; }
+.doc .anchor { position: absolute; left: -22px; padding-right: 6px; color: var(--faint); text-decoration: none; opacity: 0; font-weight: 400; }
+.doc h2:hover .anchor, .doc h3:hover .anchor, .doc .anchor:focus { opacity: 1; }
+.doc p, .doc ul, .doc ol { margin: 0 0 16px; }
+.doc li { margin: 4px 0; }
+.doc li::marker { color: var(--faint); }
+.doc a { color: var(--link); text-decoration: underline; text-decoration-color: rgba(255, 178, 122, .35); text-underline-offset: 3px; }
+.doc a:hover { text-decoration-color: var(--link); }
+.doc strong { color: #fff; font-weight: 600; }
+.doc hr { height: 3px; border: 0; margin: 40px 0; }
+.doc :not(pre) > code { padding: 2px 6px; border-radius: 5px; background: rgba(255, 255, 255, .07); font-family: var(--mono); font-size: .84em; color: #e8ecf4; white-space: break-spaces; }
+.doc h3 code { font-size: .92em; }
+.doc pre { position: relative; margin: 0 0 20px; padding: 16px 18px; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--code-bg); font-size: 13.5px; line-height: 1.65; }
+.doc pre code { font-family: var(--mono); color: #dbe1ec; }
+.doc pre .c { color: #6c7790; }
+.doc pre .s { color: #a8e3b4; }
+.doc pre .f { color: #9cc8ff; }
+.doc pre .k { color: var(--leader); }
+.doc pre .copy { position: absolute; top: 8px; right: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: #141a27; color: var(--muted); font-size: 12px; opacity: 0; transition: opacity .15s; }
+.doc pre:hover .copy, .doc pre .copy:focus { opacity: 1; }
+.doc pre .copy.done { color: var(--leader); }
+.doc table { display: block; width: 100%; overflow-x: auto; margin: 0 0 22px; border-collapse: collapse; font-size: 14.5px; line-height: 1.55; }
+.doc th, .doc td { padding: 9px 14px 9px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.doc th { font-size: 12.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+.doc td:first-child { white-space: nowrap; }
+.doc blockquote { margin: 0 0 20px; padding: 12px 18px; border: 1px solid rgba(255, 150, 72, .22); border-left: 3px solid var(--leader); border-radius: 8px; background: rgba(255, 150, 72, .05); color: #e2d6cc; }
+.doc blockquote p:last-child { margin-bottom: 0; }
+.doc .missing { color: var(--muted); }
+
+.pager { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 780px; margin-top: 56px; }
+.pager a { display: block; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; text-decoration: none; }
+.pager a:hover { border-color: rgba(255, 150, 72, .45); }
+.pager span { display: block; font-size: 12.5px; color: var(--faint); }
+.pager strong { font-weight: 600; }
+.pager .next { grid-column: 2; text-align: right; }
+.edit { max-width: 780px; margin: 22px 0 0; font-size: 13.5px; color: var(--faint); }
+.edit a { color: var(--muted); }
+
+.scrim { position: fixed; inset: 64px 0 0; z-index: 14; background: rgba(0, 0, 0, .55); }
+
+@media (max-width: 1180px) {
+  .layout { grid-template-columns: 240px minmax(0, 1fr); }
+  .toc { display: none; }
+  .page { padding: 40px 40px 72px; }
+}
+@media (max-width: 860px) {
+  .bar { gap: 12px; padding: 0 16px; }
+  .menu { display: flex; }
+  .search { margin-left: auto; flex: 1 1 auto; }
+  .search-key, .bar-links { display: none; }
+  .logo-tag { display: none; }
+  .layout { display: block; }
+  .side { position: fixed; top: 64px; left: 0; bottom: 0; z-index: 15; width: min(300px, 84vw); height: auto; background: var(--bg); transform: translateX(-102%); transition: transform .2s; }
+  .side.open { transform: none; }
+  .page { padding: 30px 16px 64px; }
+  .doc .anchor { display: none; }
+  .pager { grid-template-columns: 1fr; }
+  .pager .next { grid-column: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .side, .doc pre .copy { transition: none; }
+}

@@ -3,145 +3,151 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f5f6f0">
-  <meta name="description" content="Give your coding agent a team. Pack Leader coordinates Claude Code, Codex and pi workers inside herdr, with isolated worktrees, live status and a record of every handoff.">
-  <meta property="og:title" content="Pack Leader">
-  <meta property="og:description" content="A herdr plugin that lets one coding agent coordinate Claude Code, Codex and pi workers in parallel.">
+  <meta name="theme-color" content="#05070d">
+  <meta name="description" content="Lodestar lets one coding agent run a team of others: Claude Code, Codex and pi workers in their own panes and Git worktrees, in herdr or tmux.">
+  <meta property="og:title" content="Lodestar">
+  <meta property="og:description" content="One coding agent hands out the tasks, answers the questions and writes down what each worker did.">
   <meta property="og:type" content="website">
-  <meta property="og:image" content="assets/leader-tab.webp?v=5">
-  <title>Pack Leader</title>
+  <meta property="og:image" content="assets/og.png">
+  <title>Lodestar</title>
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon.png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=5">
-  <script src="script.js?v=3" defer></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="styles.css?v=11">
+  <script src="script.js?v=23" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
-  <div class="page">
-    <header class="header">
-      <a class="brand" href="./" aria-label="Pack Leader home">
-        <span>Pack Leader</span>
-      </a>
-      <nav aria-label="Main navigation">
-        <a href="#tour">Tour</a>
-        <a href="https://github.com/zenodea/pack-leader/blob/main/docs/guide.md">Guide</a>
-        <a href="https://github.com/zenodea/pack-leader">GitHub <span aria-hidden="true">↗</span></a>
-        <a class="nav-install" href="#install">Install <span aria-hidden="true">↓</span></a>
-      </nav>
-    </header>
+  <canvas id="field" aria-hidden="true"></canvas>
 
-    <main id="main">
-      <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-copy">
-          <div>
-            <h1 id="hero-title" class="visually-hidden">Pack Leader</h1>
-            <p class="intro">A herdr plugin that lets one coding agent run a team of Claude Code, Codex or pi workers. Each worker gets a task, a tab and a Git worktree. A sidebar shows what each one is doing.</p>
-            <div class="hero-actions">
-              <a class="button primary" href="#install">Install <span aria-hidden="true">↓</span></a>
-              <a class="text-link" href="https://github.com/zenodea/pack-leader/blob/main/docs/guide.md">Read the guide <span aria-hidden="true">↗</span></a>
-            </div>
-            <p class="compatibility">Claude Code <span aria-hidden="true">/</span> Codex <span aria-hidden="true">/</span> pi</p>
-            <p class="platform-note">An independent plugin for <a href="https://herdr.dev/">herdr</a>. Open source. Runs in your terminal.</p>
+  <header class="top">
+    <a class="brand" href="./"><span class="brand-dot" aria-hidden="true"></span>lodestar</a>
+    <nav aria-label="Main">
+      <a href="docs/">Docs</a>
+      <a href="docs/?p=commands">Commands</a>
+      <a href="https://github.com/zenodea/lodestar">GitHub</a>
+      <a class="pill pill-light" href="#install">Install <span aria-hidden="true">↓</span></a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" data-scene="title" aria-labelledby="title">
+      <h1 id="title">Lodestar</h1>
+      <div class="wordmark-slot" aria-hidden="true"></div>
+      <p class="lede">Lodestar lets one coding agent run a team of others. It hands out tasks, answers their questions and writes down what each one did.</p>
+      <p class="platforms">Claude Code, Codex and pi <span aria-hidden="true">·</span> herdr or tmux, Rex next</p>
+      <div class="actions">
+        <a class="pill pill-light" href="#install">Install <span aria-hidden="true">↓</span></a>
+        <a class="pill pill-ghost" href="https://github.com/zenodea/lodestar">View on GitHub <span aria-hidden="true">↗</span></a>
+      </div>
+      <p class="legend"><span class="swatch swatch-agent" aria-hidden="true"></span>Each dot is an agent. <span class="swatch swatch-leader" aria-hidden="true"></span>The orange one is in charge: the lodestar, the star the others steer by.</p>
+    </section>
+
+    <section class="step" id="delegate" data-scene="delegate" aria-labelledby="s1">
+      <div class="wrap">
+        <div class="step-text">
+          <p class="kicker">01 · Delegate</p>
+          <h2 id="s1">You ask once.</h2>
+          <p>Tell your agent what you want, the way you'd tell a colleague: CSV import, parser and validator as separate jobs, tests for both. It splits that into tasks and starts a worker for each, with a written spec so nobody has to guess.</p>
+          <pre><code>lodestar worker start parser --worktree new \
+  --spec "Parse CSV input. Add tests. Report back."</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="step" id="panes" data-scene="panes" aria-labelledby="s2">
+      <div class="wrap">
+        <div class="step-text">
+          <p class="kicker">02 · Panes</p>
+          <h2 id="s2">Every worker gets a pane of its own.</h2>
+          <p>Workers run in their own tabs or splits, and with <code>--worktree new</code> each one gets its own Git checkout on its own branch. Two agents never edit the same file.</p>
+          <p>Lodestar drives herdr or tmux, whichever you're inside. Rex is next.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="step" id="supervise" data-scene="ask" aria-labelledby="s3">
+      <div class="wrap">
+        <div class="step-text">
+          <p class="kicker">03 · Supervise</p>
+          <h2 id="s3">Stuck workers ask instead of guessing.</h2>
+          <p>A worker that can't go on asks the leader, with options if it has some, and waits. The others leave notes, escalate, or check in so the leader knows they're alive. One <code>check</code> hands the leader everything that's waiting.</p>
+          <p>A task is finished when its worker says <code>done</code>. A quiet pane doesn't count.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="step" id="record" data-scene="record" aria-labelledby="s4">
+      <div class="wrap">
+        <div class="step-text">
+          <p class="kicker">04 · Record</p>
+          <h2 id="s4">It all gets written down.</h2>
+          <p>Tasks, specs, every attempt, the exact instructions each worker got, every report. It lives in a state file outside every agent's context window, so closing a tab or clearing a session loses nothing.</p>
+          <p>When the leader's own context fills up, it writes itself a note, gets a fresh session and carries on from the note.</p>
+          <pre><code>lodestar dispatch show d4 --preamble</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="step" id="review" data-scene="review" aria-labelledby="s5">
+      <div class="wrap">
+        <div class="step-text">
+          <p class="kicker">05 · Merge</p>
+          <h2 id="s5">Then it puts it all back together.</h2>
+          <p>Each worker commits to its own branch. Once the reports are in, the leader reads them, checks the work and merges the branches into main. A branch outlives its worker, so nothing is lost if a pane closes first.</p>
+          <p>Rather merge yourself? Say so, and the leader leaves the branches for you.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="step" id="advisor" data-scene="advisor" aria-labelledby="s6">
+      <div class="wrap">
+        <div class="step-text">
+          <p class="kicker">06 · Advisor</p>
+          <h2 id="s6">Talk to it without interrupting it.</h2>
+          <p>Next to the leader sits a second agent whose only job is answering you. Ask what a worker is doing, why something's blocked, how close it is. The Advisor reads the run and the leader's recent turns, so the leader never has to stop and explain itself.</p>
+          <p>Want to change course? Tell the Advisor to pass it on. It lands in the leader's inbox and gets picked up on the next check, not in the middle of whatever the leader is doing.</p>
+          <pre><code>lodestar say "Leave the docs task for last."</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="install" id="install" data-scene="rest" aria-labelledby="install-title">
+      <div class="wrap">
+        <div class="install-text">
+          <p class="kicker">Install</p>
+          <h2 id="install-title">Start a run.</h2>
+          <p class="sub">On herdr, it's a plugin:</p>
+          <div class="code">
+            <pre><code id="install-herdr">herdr plugin install zenodea/lodestar
+herdr plugin action invoke install-skill --plugin lodestar</code></pre>
+            <button class="copy" type="button" data-copy="install-herdr" hidden>Copy</button>
           </div>
-          <img class="hero-mascot" src="assets/wolf.png" width="320" height="320" alt="A wolf in sheep’s clothing, holding its disguise in place.">
-        </div>
-        <figure class="hero-shot">
-          <a href="assets/leader-tab.webp?v=5" target="_blank" rel="noopener" aria-label="Open the full-size screenshot of a Pack Leader run in herdr">
-            <img class="shot" src="assets/leader-tab.webp?v=5" width="1417" height="917" fetchpriority="high" alt="A herdr window with three panes. Pack Leader, the orchestrator’s Claude Code session, starts three workers in worktrees, waits for reports, and answers a worker’s question. Observer, a second agent under it, summarises the run and answers “why is tests blocked?”. Pack, the sidebar on the right, shows the goal, one unread message and three boxes: parser done, validator working, and tests blocked, asking whether to reject the import or skip rows. The tab bar lists leader, parser, validator and tests.">
-          </a>
-          <figcaption>The leader tab of a run: <strong>Pack Leader</strong> coordinates, the <strong>Observer</strong> answers you, the <strong>Pack</strong> sidebar shows every worker. Real herdr session, staged demo data.</figcaption>
-        </figure>
-      </section>
+          <p class="sub">On tmux, build it from the repo and install the skill. <a href="docs/?p=install#on-tmux">The install page has the steps</a>, and <a href="docs/?p=tmux">what tmux can't do</a> that herdr can.</p>
+          <p class="needs">Needs Zig 0.17 to build, an agent CLI you're logged into, and Linux or macOS.</p>
 
-      <section class="features" aria-label="Why Pack Leader">
-        <article>
-          <h2>Delegate</h2>
-          <p>Mix agents, give each a clear task, and use separate Git worktrees. One coordinator keeps the pack moving.</p>
-        </article>
-        <article>
-          <h2>Supervise</h2>
-          <p>Live status, worker questions and approval gates make blockers visible. Send a followup without hunting through tabs.</p>
-        </article>
-        <article>
-          <h2>Review</h2>
-          <p>Specs, attempts and reports outlive an agent's context window. Inspect the handoffs, then decide what to merge.</p>
-        </article>
-      </section>
-
-      <section class="tour" id="tour" aria-labelledby="tour-title">
-        <div class="tour-heading">
-          <h2 id="tour-title">A run in herdr</h2>
-        </div>
-
-        <div class="tour-pair">
-        <article class="tour-pack" aria-labelledby="tour-pack">
-          <div class="tour-text">
-            <h3 id="tour-pack">The Pack sidebar</h3>
-            <p>Agent, runtime and state. The task. The last thing the worker said: a heartbeat, a note, a report, or an open question with its choices.</p>
-            <p>A worker can ask for a decision and wait. The coordinator answers in the usual case; you can step in when you want to. Click a box to select it, click again to open the worker's tab.</p>
-            <a class="text-link" href="https://github.com/zenodea/pack-leader/blob/main/docs/guide.md#commands">See the commands <span aria-hidden="true">↗</span></a>
+          <p class="sub then">Then tell your agent something like:</p>
+          <div class="code code-prompt">
+            <p id="first-prompt">Implement CSV import. Give parsing and validation to separate workers in isolated worktrees. Have them write tests, review their reports, then integrate.</p>
+            <button class="copy" type="button" data-copy="first-prompt" hidden>Copy</button>
           </div>
-          <figure class="tour-pack-shot">
-            <img class="shot" src="assets/pack-pane.webp?v=5" width="350" height="590" loading="lazy" alt="The Pack sidebar. Goal: Ship CSV import. Unread: 1. Three boxes: parser (claude), runtime 4m30s, done, succeeded: Parse CSV input. validator (codex), working, Validate imported rows, checking edge cases. tests (pi), BLOCKED, Cover invalid input, asks: Reject invalid rows, or skip them? with the choices Reject import and Skip rows. The tests box is selected.">
-            <figcaption>The sidebar, cropped from the screen above.</figcaption>
-          </figure>
-        </article>
-        <article class="tour-observer" aria-labelledby="tour-observer">
-          <div class="tour-text">
-            <h3 id="tour-observer">The Observer</h3>
-            <p>A second agent under the leader reads the run state and the leader's last turns, then answers you in plain words. It never acts on the run.</p>
-            <p>Want the leader to know something? Say “pass on: …” and it arrives as a message the leader picks up on its next check.</p>
-          </div>
-          <figure>
-            <img class="shot" src="assets/observer-pane.webp?v=5" width="820" height="330" loading="lazy" alt="The Observer pane. It ran pack-leader observe and reports: parser done, validator working through edge cases, tests blocked on a question. You ask “why is tests blocked?” and it answers that the spec left invalid-row handling open, so the worker asked instead of guessing, and the leader just answered Reject import.">
-            <figcaption>The observer, cropped from the screen above.</figcaption>
-          </figure>
-        </article>
-        </div>
+          <p class="copy-status" role="status" aria-live="polite"></p>
 
-        <article class="tour-item tour-item-wide" aria-labelledby="tour-worker">
-          <div class="tour-text">
-            <h3 id="tour-worker">A worker's tab</h3>
-            <p>Each worker starts in a tab of its own, in its own Git worktree, with a dispatch preamble that spells out the task and how to report. It talks to the leader only through the <code>pack-leader</code> CLI: a report, a question, a note.</p>
-            <p>The bar on top names the run's goal, the worker's branch and its task. Click it to go back to the leader.</p>
-          </div>
-          <figure>
-            <a href="assets/worker-tab.webp?v=5" target="_blank" rel="noopener" aria-label="Open the full-size screenshot of a worker tab">
-              <img class="shot" src="assets/worker-tab.webp?v=5" width="1417" height="917" loading="lazy" alt="The parser worker’s tab in herdr. Its Claude Code session starts with the dispatch preamble naming the worker, run, task and rules, then reads the code, writes src/csv/parse.ts and its tests, runs them (14 passed), commits, and reports with pack-leader done --outcome succeeded. The tab bar shows the parser tab selected next to leader, validator and tests.">
-            </a>
-            <figcaption>The parser worker, after reporting back. Real herdr session, staged demo data.</figcaption>
-          </figure>
-        </article>
-      </section>
+          <ul class="more">
+            <li><a href="docs/">The docs</a></li>
+            <li><a href="docs/?p=commands">Every command</a></li>
+            <li><a href="docs/?p=changelog">Changelog</a></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
 
-      <section class="install" id="install" aria-labelledby="install-title">
-        <div class="install-heading">
-          <div>
-            <h2 id="install-title">Install</h2>
-          </div>
-          <img class="mascot-icon" src="assets/wolf.png" width="72" height="72" alt="" loading="lazy">
-        </div>
-        <p class="requirements"><a href="https://herdr.dev/docs/install/">herdr 0.9+</a> · Zig 0.17 · An authenticated agent CLI · Linux or macOS</p>
-        <div class="code-block">
-          <pre tabindex="0" aria-label="Install Pack Leader"><code id="install-commands">herdr plugin install zenodea/pack-leader
-herdr plugin action invoke install-skill --plugin pack-leader</code></pre>
-          <button class="copy-button" type="button" data-copy="install-commands" hidden>Copy</button>
-        </div>
-        <p class="copy-status" role="status" aria-live="polite"></p>
-        <div class="first-prompt">
-          <span class="prompt-label">Example prompt</span>
-          <blockquote>“Implement CSV import. Give parsing and validation to separate workers in isolated worktrees. Write tests, report back, then review the changes.”</blockquote>
-        </div>
-        <p class="install-note">Pack Leader does not merge anything. The coordinator and you review the workers' changes.</p>
-      </section>
-      <p class="more">Also supported: task dependencies, session adoption, setup hooks and SSH workers. <a href="https://github.com/zenodea/pack-leader#what-you-can-do">Full feature list <span aria-hidden="true">↗</span></a></p>
-    </main>
-
-    <footer>
-      <a class="brand footer-brand" href="./"><span>Pack Leader</span></a>
-      <p>Independent of the herdr project. <a href="https://github.com/zenodea/pack-leader/blob/main/LICENSE">Code: MIT.</a></p>
-      <a href="https://github.com/zenodea/pack-leader">Source <span aria-hidden="true">↗</span></a>
-    </footer>
-  </div>
+  <footer class="foot">
+    <p>MIT licensed. Independent of herdr, tmux and Rex.</p>
+    <a href="https://github.com/zenodea/lodestar">Source <span aria-hidden="true">↗</span></a>
+  </footer>
 </body>
 </html>
