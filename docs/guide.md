@@ -685,8 +685,8 @@ What the less obvious flags do:
   contact the host; `host show/list/remove` manage profiles.
 - Remote prerequisites: both machines need OpenSSH public-key/agent access in
   **both directions** (leader → execution host and execution host → leader),
-  pre-approved host keys, `BatchMode`-compatible authentication, Node and Pack
-  Leader/herdr installed on the execution host, and an already-open remote herdr
+  pre-approved host keys, `BatchMode`-compatible authentication, Pack
+  Leader (built with Zig 0.17) and herdr installed on the execution host, and an already-open remote herdr
   workspace. The remote CLI helper only relays allowlisted herdr RPCs over SSH;
   worker callbacks are limited to done/ask/note/heartbeat/send/inbox and write
   the leader's authoritative local state. The relay pins the leader's resolved

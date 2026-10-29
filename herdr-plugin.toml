@@ -10,8 +10,8 @@ description = "An orchestrator agent, its pack of workers, and a sidebar that sh
 platforms = ["linux", "macos"]
 
 # Paths in action and event commands: herdr runs them with the plugin root as cwd, so
-# `src/cli.ts` is relative to this file (installed or `herdr plugin link`ed alike). The
-# pane entry below goes through `sh -c` with "$HERDR_PLUGIN_ROOT/src/cli.ts" so it does
+# `bin/pack-leader` is relative to this file (installed or `herdr plugin link`ed alike). The
+# pane entry below goes through `sh -c` with "$HERDR_PLUGIN_ROOT/bin/pack-leader" so it does
 # not depend on the cwd herdr gives a pane. Keep new actions and events on the relative
 # form; if herdr ever runs them elsewhere, switch them to the pane entry's form.
 
@@ -19,32 +19,32 @@ platforms = ["linux", "macos"]
 [[actions]]
 id = "sidebar"
 title = "Pack Leader: show the pack"
-command = ["node", "src/cli.ts", "sidebar-open"]
+command = ["bin/pack-leader", "sidebar-open"]
 
 # prefix+<your key>: back to the orchestrator of the run the focused pane belongs to
 # (a worker's pane, the sidebar, or the orchestrator itself).
 [[actions]]
 id = "focus-leader"
 title = "Pack Leader: back to the leader"
-command = ["node", "src/cli.ts", "leader"]
+command = ["bin/pack-leader", "leader"]
 
 # Installs the `pack-leader` skill into Claude Code and puts `pack-leader` on PATH.
 [[actions]]
 id = "install-skill"
 title = "Pack Leader: install the skill"
-command = ["node", "src/cli.ts", "skill", "--install"]
+command = ["bin/pack-leader", "skill", "--install"]
 
 # Closes the run bound to the focused pane and releases its workers' panes.
 [[actions]]
 id = "close-run"
 title = "Pack Leader: close this pane's run"
-command = ["node", "src/cli.ts", "run", "close", "--release"]
+command = ["bin/pack-leader", "run", "close", "--release"]
 
 [[panes]]
 id = "sidebar"
 title = "Pack"
 placement = "split"
-command = ["sh", "-c", "exec node --no-warnings \"$HERDR_PLUGIN_ROOT/src/cli.ts\" sidebar"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/pack-leader\" sidebar"]
 
 # The two-row bar above a worker's pane: a click (or Enter) there goes back to the orchestrator.
 [[panes]]
@@ -56,13 +56,13 @@ command = ["sh", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/bin/leader-bar\""]
 # A worker's pane going away settles its dispatch as exited.
 [[events]]
 on = "pane.closed"
-command = ["node", "src/cli.ts", "event", "pane.closed"]
+command = ["bin/pack-leader", "event", "pane.closed"]
 
 [[events]]
 on = "pane.exited"
-command = ["node", "src/cli.ts", "event", "pane.exited"]
+command = ["bin/pack-leader", "event", "pane.exited"]
 
 # A hidden-tab worker's tab closing goes the same way (herdr sends tab.closed, not always pane.closed).
 [[events]]
 on = "tab.closed"
-command = ["node", "src/cli.ts", "event", "tab.closed"]
+command = ["bin/pack-leader", "event", "tab.closed"]

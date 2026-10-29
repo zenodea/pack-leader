@@ -18,8 +18,8 @@ Inspect assignments, current attempts and reports—even after a worker's tab cl
 
 ## Install
 
-Requires **herdr 0.9+**, **Node.js 22.18+**, and an installed, authenticated
-agent CLI. Supported platforms: Linux and macOS.
+Requires **herdr 0.9+**, **Zig 0.17** (to build the binary), and an installed,
+authenticated agent CLI. Supported platforms: Linux and macOS.
 
 ```bash
 herdr plugin install zenodea/pack-leader
@@ -27,7 +27,8 @@ herdr plugin action invoke install-skill --plugin pack-leader
 ```
 
 This installs the skill for configured Claude Code, Codex and pi environments,
-and links `pack-leader` into `~/.local/bin`. Keep that directory on your `PATH`;
+and links `pack-leader` into `~/.local/bin`. The first run builds the native
+binary (`zig build -Drelease`); later runs rebuild only when a source file changes. Keep that directory on your `PATH`;
 run orchestration commands inside herdr.
 
 ## Usage
@@ -174,7 +175,7 @@ New Claude Code workers receive this rule by default.
 
 ## Remote workers
 
-Both machines need Pack Leader, herdr and Node, plus an existing remote herdr
+Both machines need Pack Leader (with Zig to build it) and herdr, plus an existing remote herdr
 workspace and working directory. Configure non-interactive SSH **in both
 directions** with trusted host keys: the leader launches workers; workers call
 back with reports and questions.
@@ -217,12 +218,13 @@ For lifecycle rules, recovery procedures and every option, use
 ## Develop
 
 ```bash
-npm ci
-npm test              # typecheck + tests; no live herdr or SSH required
+zig build -Drelease   # builds zig-out/bin/pack-leader
+zig build test        # unit tests; no live herdr or SSH required
 herdr plugin link .   # use this checkout as the installed plugin
 ```
 
-Node runs the TypeScript directly; there is no build step.
+Pack Leader is a single native binary written in Zig 0.17. Sources live in `zig/`;
+`bin/pack-leader` rebuilds the binary whenever a source file is newer than it.
 
 ## License and credits
 
