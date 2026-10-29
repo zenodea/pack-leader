@@ -336,6 +336,10 @@ pub fn toValue(x: anytype) ?Value {
     const T = @TypeOf(x);
     if (T == Value) return x;
     if (T == ?Value) return x;
+    if (T == std.meta.Tag(Value)) {
+        if (x == .null) return .null;
+        @panic("json.object: pass a json.Value, not a bare tag");
+    }
     if (T == *Obj or T == *const Obj) return .{ .obj = @constCast(x) };
     if (T == *Arr) return .{ .arr = x };
     if (T == bool) return .{ .bool = x };
@@ -509,4 +513,5 @@ test "round trip keeps order and JS formatting" {
     try std.testing.expectEqualStrings("{\n  \"z\": 1,\n  \"a\": [\n    true,\n    null,\n    \"x\\u001b\"\n  ],\n  \"e\": {},\n  \"f\": 1.5\n}", stringify(v, true));
     const o = object(.{ .{ "a", "x" }, .{ "n", @as(?[]const u8, null) }, .{ "k", 3 } });
     try std.testing.expectEqualStrings("{\"a\":\"x\",\"k\":3}", stringify(o.val(), false));
+    try std.testing.expectEqualStrings("{\"n\":null}", stringify(object(.{.{ "n", Value.null }}).val(), false));
 }
