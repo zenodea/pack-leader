@@ -107,7 +107,7 @@ fn protectPane(s: State, pane_id: []const u8, except_dispatch: ?[]const u8) !voi
         if (d.truthy("execution_host") or rt.eqlOpt(d.str("id"), except_dispatch) or !rt.eqlOpt(d.str("pane_id"), pane_id) or d.truthy("settled_at")) continue;
         const run = state.getRun(s, d.str("run_id") orelse "") orelse continue;
         if (!rt.eqlOpt(run.str("status"), "active")) continue;
-        if (!claims.startClaimIsFresh(d, state.START_CLAIM_MS, rt.nowMs())) {
+        if (!claims.startClaimIsFresh(d, state.START_CLAIM_MS)) {
             dispatch.settleDispatch(s, d.str("id"), "failed");
             continue;
         }
@@ -282,7 +282,7 @@ fn claimTx(c: ClaimCtx, s: State) !Claim {
     }
     const dispatch_id = state.nextId(s, "d");
     const text = workers.preamble(.{ .worker = c.o.name, .run = state.getRun(s, run_id).?, .task = task, .dispatchId = dispatch_id, .cwd = c.cwd, .explicitContext = true });
-    _ = dispatch.createDispatch(s, .{ .id = dispatch_id, .task = task, .worker = c.o.name, .preamble = text, .cwd = c.cwd, .paneId = c.pane_id });
+    _ = try dispatch.createDispatch(s, .{ .id = dispatch_id, .task = task, .worker = c.o.name, .preamble = text, .cwd = c.cwd, .paneId = c.pane_id });
     return .{ .task = task.clone(), .dispatch_id = dispatch_id, .text = text, .cwd = c.cwd, .created = created, .before = before };
 }
 
@@ -392,7 +392,7 @@ fn adoptFenced(o: AdoptWorkerOpts, claim: Claim, pane_id: []const u8, initial: T
 
     const seq = seqOf(final, initial).asInt() orelse 0;
     var retry_ctx: RetryCtx = .{ .at = at, .dispatch_id = claim.dispatch_id };
-    workers.promptWithRetry(pane_id, claim.text, seq, 2, false, .{ .ctx = &retry_ctx, .call = canRetry }) catch |err| {
+    workers.promptWithRetry(pane_id, claim.text, seq, 2, false, .{ .ctx = &retry_ctx, .func = canRetry }) catch |err| {
         const reason = rt.errMessage(err);
         const code = rt.errCode(err);
         const rolled = try state.update([]const u8, RollbackPrompt{ .claim = claim, .at = at }, rollbackPromptTx);

@@ -100,7 +100,7 @@ fn handleWorker(a: *const Args) !void {
         const direction = str(a, "direction") orelse "right";
         if (!rt.eql(direction, "right") and !rt.eql(direction, "down")) return rt.fail(null, "--direction must be right or down", .{});
         const cfg = try config.loadConfig();
-        const settings = config.settingsOf(cfg);
+        const settings = config.settingsObj(config.settingsOf(cfg));
         const placement = str(a, "placement") orelse if (has(a, "direction")) "split" else if (str(a, "host") != null) "tab" else settings.str("placement") orelse "tab";
         if (!rt.eql(placement, "tab") and !rt.eql(placement, "split")) return rt.fail(null, "--placement must be tab or split", .{});
         if (rt.eql(placement, "tab") and has(a, "direction")) return rt.fail(null, "--direction only applies to --placement split (a split without --direction goes right)", .{});
@@ -134,7 +134,7 @@ fn handleWorker(a: *const Args) !void {
             .router = if (has(a, "router")) try routing.routerProvider(str(a, "router") orelse "") else null,
             .noDefaultArgs = has(a, "no-default-args"),
             .timeoutMs = try numInt(a, "timeout", 45_000),
-            .worktree = choice.str("worktree"),
+            .worktree = choice.worktree,
             .base = str(a, "base"),
             .branch = str(a, "branch"),
             .setupCommand = str(a, "setup-command"),
@@ -158,7 +158,7 @@ fn handleWorker(a: *const Args) !void {
             .{ "runtime", r.get("runtime") },
             .{ "routing", r.get("routing") },
         });
-        if (choice.strNonEmpty("note")) |note| o.putStr("note", note);
+        if (choice.note) |note| if (note.len > 0) o.putStr("note", note);
         const warning = r.strNonEmpty("warning");
         if (warning) |x| o.putStr("warning", x);
         shared.outObj(o);
@@ -223,7 +223,7 @@ fn handleWorker(a: *const Args) !void {
         if (dispatch_id) |did| if (run) |r| if (state.getDispatch(s, did)) |d| if (!rt.eqlOpt(d.str("run_id"), r.str("id"))) return rt.fail(null, "no dispatch {s} in run {s}", .{ did, r.str("id") orelse "" });
         const known = state.getWorker(s, name);
         const live = if (run != null) known != null and rt.eqlOpt(known.?.str("run_id"), run_id) else known != null;
-        const archived: ?*Obj = if (dispatch_id) |did| dispatch.findArchive(s, .{ .runId = null, .dispatchId = did }) else if (live) null else dispatch.findArchive(s, .{ .runId = run_id, .worker = name });
+        const archived: ?*Obj = if (dispatch_id) |did| try dispatch.findArchive(s, .{ .runId = null, .dispatchId = did }) else if (live) null else try dispatch.findArchive(s, .{ .runId = run_id, .worker = name });
         if (archived) |d| {
             const o = (try dispatch.readArchive(d, lines)).clone();
             if (dispatch_id == null) o.putStr("note", rt.fmt("{s} is no longer live; this is its screen saved at release", .{name}));

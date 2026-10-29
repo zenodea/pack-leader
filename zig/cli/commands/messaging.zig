@@ -173,7 +173,7 @@ fn check(a: *const Args) !void {
         raised.putStr("hint", rt.fmt("a wait shorter than {d} min was raised to it: check --wait returns as soon as a message arrives, so a short timeout only costs you another call", .{mins}));
         timeout_ms = @floatFromInt(floor);
     }
-    const gate = if (has(a, "wait")) try handoff.handoffGate(run) else null;
+    const gate = if (has(a, "wait")) try handoff.handoffGate(run, null) else null;
     if (gate) |h| {
         const out = acked.clone();
         out.assign(h);

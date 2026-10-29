@@ -412,14 +412,14 @@ fn resolveStartRuntime(o: *const StartOptions, task: Task, dispatch_id: []const 
         if (hasThinkingFlag(a)) has_thinking = true;
     }
     const selected = try routing.selectProfile(.{
-        .config = o.routing,
+        .config = if (o.routing) |r| r.val() else null,
         .provider = o.router,
         .kind = o.kind,
         .title = task.str("title") orelse "",
         .spec = task.str("spec") orelse "",
         .explicitModel = o.model != null,
         .nativeOverride = has_model or has_thinking,
-    });
+    }, .{});
     const profile = selected.obj("profile");
     const model = o.model orelse (if (profile) |p| p.str("model") else null) orelse o.defaultModel;
     const explicit_model_thinking = modelFromArgs(o.kind, modelArgs(o.kind, o.model, null)).thinking;
@@ -1352,7 +1352,7 @@ fn releaseRemoteWorker(run: Run, known: Worker, opts: ReleaseWorkerOpts) !*Obj {
     };
     if (pane_exists) {
         if (dispatch.archiveScreen(.{ .run_id = runId(run), .worker = name, .dispatch_id = known.str("dispatch_id"), .target = pane_id })) |saved| {
-            archive_path = saved.str("path");
+            archive_path = saved.path;
         } else |err| {
             const c = Caught.of(err);
             _ = try mux.listPanes(host.str("workspace_id"));
@@ -1540,8 +1540,8 @@ fn releaseLocal(run: Run, name: []const u8, known: Worker, opts: ReleaseWorkerOp
         break :blk dispatch.archiveScreen(.{ .run_id = rid, .worker = name, .dispatch_id = w.str("dispatch_id"), .target = pane_id });
     };
     if (archived) |a| {
-        archive_path = a.str("path");
-        logEvent(.{ .{ "event", "worker.archived" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", val(w, "dispatch_id") }, .{ "path", val(a, "path") }, .{ "source", val(a, "source") } });
+        archive_path = a.path;
+        logEvent(.{ .{ "event", "worker.archived" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", val(w, "dispatch_id") }, .{ "path", a.path }, .{ "source", a.source } });
     } else |err| {
         archive_error = rt.errMessage(err);
         logEvent(.{ .{ "event", "worker.archive_failed" }, .{ "run", rid }, .{ "worker", name }, .{ "dispatch", val(w, "dispatch_id") }, .{ "error", archive_error.? } });
@@ -1871,7 +1871,7 @@ fn assertStartAuthority(s: State, a: StartAuthority) !void {
     if (bad) return startRevoked(a.runId, a.dispatchId);
     if (!a.registered) {
         const st = t.?.str("status") orelse "";
-        if (!dispatch.startClaimIsFresh(d.?, START_CLAIM_MS, rt.nowMs()) or (w != null and runActive(s, w.?.str("run_id"))) or rt.eql(st, "succeeded") or rt.eql(st, "dispatched")) return startRevoked(a.runId, a.dispatchId);
+        if (!dispatch.startClaimIsFresh(d.?, START_CLAIM_MS) or (w != null and runActive(s, w.?.str("run_id"))) or rt.eql(st, "succeeded") or rt.eql(st, "dispatched")) return startRevoked(a.runId, a.dispatchId);
     }
     try gates.assertTaskGatesApproved(s, a.taskId);
 }
@@ -1923,7 +1923,7 @@ pub fn refuseStartInFlight(s: State, name: []const u8, task_id: ?[]const u8, wor
             is_recorded = true;
         };
         if (is_recorded) continue;
-        if (!dispatch.startClaimIsFresh(d, START_CLAIM_MS, rt.nowMs())) {
+        if (!dispatch.startClaimIsFresh(d, START_CLAIM_MS)) {
             dispatch.settleDispatch(s, d.str("id"), "failed");
             continue;
         }

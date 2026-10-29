@@ -119,7 +119,7 @@ fn parseMinutes(text: []const u8) !i64 {
 }
 
 fn settings(c: Config) *Obj {
-    return config.settingsOf(c);
+    return config.settingsObj(config.settingsOf(c));
 }
 
 fn sPlacement(c: Config) []const u8 {

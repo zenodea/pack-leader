@@ -105,7 +105,7 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
         const file = try observer.transcriptPath(run);
         var tail: []*Obj = &.{};
         if (file) |f| if (fs.readFileOpt(f)) |text| {
-            tail = observer.transcriptTail(text, turns);
+            tail = observer.transcriptTail(text, @floatFromInt(turns));
         };
         var live: ?*Obj = null;
         if (mux.listAgents()) |agents| {

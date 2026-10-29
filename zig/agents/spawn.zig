@@ -46,7 +46,7 @@ pub fn spawnAgent(o: SpawnAgentOpts) !*Obj {
     const wt: ?*Obj = if (nonEmpty(o.worktree)) |spec| try worktree.planWorktree(.{ .spec = spec, .cwd = o.cwd, .runId = "spawn", .worker = o.name, .base = o.base, .branch = o.branch }) else null;
     const cwd = if (wt) |w| w.str("path") orelse o.cwd else o.cwd;
 
-    const shell_tab: ?[]const u8 = if (wt) |w| (try workers.materializeWorktree(w, o.name, true)).str("shellTab") else null;
+    const shell_tab: ?[]const u8 = if (wt) |w| (try workers.materializeWorktree(w, o.name, true)).shellTab else null;
     const workspace = (if (wt) |w| w.strNonEmpty("workspace_id") else null) orelse nonEmpty(o.workspaceId) orelse return rt.fail(null, "no herdr workspace to open the tab in: run spawn from a herdr pane", .{});
     const t = try mux.tabCreate(json.object(.{ .{ "workspace_id", workspace }, .{ "label", o.name }, .{ "cwd", cwd } }));
     const pane = (if (t.root_pane) |p| p.strNonEmpty("pane_id") else null) orelse {

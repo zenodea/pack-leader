@@ -195,7 +195,7 @@ pub fn leaderTranscript(run: *Obj, home: ?[]const u8) !?LeaderTranscript {
 pub const HandoffDue = struct { tokens: i64, at: i64, agent: []const u8 };
 
 fn handoffSettings() !*Obj {
-    const settings = config.settingsOf(try config.loadConfig());
+    const settings = config.settingsObj(config.settingsOf(try config.loadConfig()));
     return settings.obj("handoff") orelse json.newObj();
 }
 

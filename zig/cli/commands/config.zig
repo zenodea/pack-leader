@@ -75,7 +75,7 @@ fn showPayload(c: *Obj) *Obj {
         .{ "kind", kindOf(c) },
         .{ "kinds", c.get("kinds") orelse json.newObj().val() },
         .{ "routing", routingOf(c) },
-        .{ "settings", config.settingsOf(c) },
+        .{ "settings", config.settingsObj(config.settingsOf(c)) },
     });
 }
 
@@ -131,7 +131,7 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
         const payload = json.object(.{ .{ "file", configFile() }, .{ "kind", kindOf(c) } });
         if (next) |n| payload.put(kind, n.val());
         payload.put("routing", routingOf(c));
-        payload.put("settings", config.settingsOf(c).val());
+        payload.put("settings", config.settingsObj(config.settingsOf(c)).val());
         shared.outObj(payload);
         return;
     }
