@@ -55,7 +55,7 @@ export async function startObserver(run: Run, o: { timeoutMs?: number } = {}): P
   const d = defaultsFor(config, kind);
   const env = { PACK_ROLE: "observer", PACK_RUN_ID: run.id, HERDR_PLUGIN_STATE_DIR: stateDir };
   const pane = await paneSplit({ target_pane_id: run.orchestrator.pane_id, direction: "down", cwd: run.orchestrator.cwd, env, ratio: 0.5 });
-  await renamePane(pane.pane_id, "Observer").catch(() => {});
+  await renamePane(pane.pane_id, "Advisor").catch(() => {});
   const agent = `observer-${run.id}`;
   await update((s) => void (s.runs[run.id] && (s.runs[run.id]!.observer = { pane_id: pane.pane_id, agent })));
   log({ event: "observer.opened", run: run.id, pane: pane.pane_id, kind, model: d.model ?? null });
