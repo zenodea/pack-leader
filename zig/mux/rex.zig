@@ -531,92 +531,7 @@ fn split(target: []const u8, side: []const u8, share: f64, cwd: ?[]const u8, env
     appendCommand(&argv, env, command);
     const r = try newBlock(try runJson(argv.items, null), session);
     setShare(session, blockTarget(target), r.block, side, share);
-    keepToolSizes(session, r.window);
     return r;
-}
-
-const Leaf = struct { block: []const u8, rect: [4]f64 };
-
-fn collectLeaves(v: Value, out: *std.ArrayListUnmanaged(Leaf)) void {
-    const o = v.asObj() orelse return;
-    if (o.obj("split")) |sp| {
-        if (sp.get("before")) |b| collectLeaves(b, out);
-        if (sp.get("after")) |a| collectLeaves(a, out);
-        return;
-    }
-    const block = o.strNonEmpty("block_id") orelse return;
-    const xs = if (o.arr("rect")) |x| x.slice() else return;
-    if (xs.len != 4) return;
-    var rect: [4]f64 = undefined;
-    for (xs, 0..) |x, i| rect[i] = x.asNum() orelse 0;
-    out.append(rt.a, .{ .block = block, .rect = rect }) catch {};
-}
-
-/// The tab's blocks labelled Lodestar, Crew and Usage, with where each sits (fractions of the tab).
-const ToolLeaves = struct { lead: ?Leaf = null, crew: ?Leaf = null, usage: ?Leaf = null };
-
-fn toolLeaves(view: *Obj, window: []const u8) ToolLeaves {
-    var out: ToolLeaves = .{};
-    const windows = if (view.arr("windows")) |x| x.objs() else return out;
-    for (windows) |w| if (rt.eqlOpt(w.str("window_id"), window)) {
-        const layers = if (w.arr("layers")) |x| x.objs() else return out;
-        for (layers) |l| if (rt.eqlOpt(l.str("kind"), "tiled")) {
-            var leaves: std.ArrayListUnmanaged(Leaf) = .empty;
-            collectLeaves(l.get("layout") orelse .null, &leaves);
-            const blocks = if (l.arr("blocks")) |x| x.objs() else continue;
-            for (blocks) |b| {
-                const id = b.str("block_id") orelse continue;
-                const leaf = for (leaves.items) |x| {
-                    if (rt.eql(x.block, id)) break x;
-                } else continue;
-                const label = b.str("label") orelse "";
-                if (rt.eql(label, "Lodestar")) out.lead = leaf;
-                if (rt.eql(label, "Crew")) out.crew = leaf;
-                if (rt.eql(label, "Usage")) out.usage = leaf;
-            }
-        };
-    };
-    return out;
-}
-
-/// The Rex app evens out every split in a tab when a block comes or goes ("Autobalance Splits"), which undoes the
-/// sidebar's width and the usage pane's height; set them again, until they hold, after Lodestar changes a tab.
-fn keepToolSizes(session: []const u8, window: []const u8) void {
-    var cols: ?f64 = null;
-    var rows: ?f64 = null;
-    var held: usize = 0;
-    for (0..10) |_| {
-        const view = call(session, "session.view", json.newObj()) catch return;
-        const t = toolLeaves(view, window);
-        const lead = t.lead orelse return;
-        const crew = t.crew orelse return;
-        if (cols == null) {
-            const size = blockSize(lead.block) orelse return;
-            if (lead.rect[2] <= 0 or lead.rect[3] <= 0) return;
-            cols = @as(f64, @floatFromInt(size.int("columns") orelse return)) / lead.rect[2];
-            rows = @as(f64, @floatFromInt(size.int("rows") orelse return)) / lead.rect[3];
-        }
-        var ok = true;
-        const want_w = cellsShare(SIDEBAR_COLS, @intFromFloat(cols.?), 0.2, 0.3);
-        const column_w = crew.rect[2];
-        if (@abs(column_w - want_w) > 0.02) {
-            ok = false;
-            _ = call(session, "session.resize_pane", json.object(.{ .{ "direction", "horizontal" }, .{ "before_block_id", lead.block }, .{ "after_block_id", crew.block }, .{ "ratio", 1.0 - want_w } })) catch {};
-        }
-        if (t.usage) |usage| {
-            const column_h = crew.rect[3] + usage.rect[3];
-            if (column_h > 0) {
-                const want_h = cellsShare(USAGE_ROWS, @intFromFloat(rows.? * column_h), 0.1, 0.5);
-                if (@abs(usage.rect[3] / column_h - want_h) > 0.02) {
-                    ok = false;
-                    _ = call(session, "session.resize_pane", json.object(.{ .{ "direction", "vertical" }, .{ "before_block_id", crew.block }, .{ "after_block_id", usage.block }, .{ "ratio", 1.0 - want_h } })) catch {};
-                }
-            }
-        }
-        held = if (ok) held + 1 else 0;
-        if (held == 2) return;
-        rt.sleepMs(250);
-    }
 }
 
 fn paneSplit(p: *Obj) anyerror!*Obj {
@@ -628,13 +543,7 @@ fn paneSplit(p: *Obj) anyerror!*Obj {
 
 fn paneClose(pane_id: []const u8) anyerror!Value {
     try refuseRemote();
-    const session = sessionFor(pane_id);
-    const block = blockTarget(pane_id);
-    const window: ?[]const u8 = if (session) |s| for (sessionView(s) catch &.{}) |r| {
-        if (rt.eql(r.block, block)) break r.window;
-    } else null else null;
-    _ = try call(session, "block.close", json.object(.{.{ "block_id", block }}));
-    if (session) |s| if (window) |w| keepToolSizes(s, w);
+    _ = try call(sessionFor(pane_id), "block.close", json.object(.{.{ "block_id", blockTarget(pane_id) }}));
     return json.newObj().val();
 }
 
@@ -681,8 +590,6 @@ fn labelPane(pane_id: []const u8, title: ?[]const u8) void {
 /// The sidebar column's share of the window: the leader and navigator keep 70%.
 /// The sidebar column: wide enough for the crew boxes, and never more than 30% of the window.
 const SIDEBAR_COLS: i64 = 48;
-/// The usage pane's height, as the sidebar asks for it.
-const USAGE_ROWS: i64 = 12;
 
 fn toolCommand(entrypoint: []const u8) []const []const u8 {
     if (rt.eql(entrypoint, "bar")) return rt.a.dupe([]const u8, &.{ "bash", rt.concat(&.{ paths.plugin_root, "/bin/leader-bar" }) }) catch @panic("out of memory");
