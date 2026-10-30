@@ -572,7 +572,7 @@ function frame(now) {
 const watcher = new IntersectionObserver((entries) => {
   for (const e of entries) if (e.isIntersecting) setScene(e.target.dataset.scene);
 }, { rootMargin: "-50% 0px -50% 0px" });
-document.querySelectorAll("[data-scene]").forEach((s) => watcher.survey(s));
+document.querySelectorAll("[data-scene]").forEach((s) => watcher.observe(s));
 
 addEventListener("pointermove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; }, { passive: true });
 addEventListener("pointerleave", () => { mouse.x = mouse.y = -1e4; });
