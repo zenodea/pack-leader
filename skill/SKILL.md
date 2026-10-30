@@ -1,14 +1,15 @@
 ---
 name: lodestar
 description: >-
-  Orchestrate a team of crewmate coding agents inside herdr with the `lodestar` CLI:
-  delegate self-contained tasks to parallel crewmates in their own herdr tabs, supervise
+  Orchestrate a team of crewmate coding agents inside herdr, tmux or Rex with the `lodestar` CLI:
+  delegate self-contained tasks to parallel crewmates in their own tabs, supervise
   them, answer their questions, wait for their reports, and keep the run state
   outside your own context. Use when the user asks to delegate, fan out, split
   work across agents, spawn or supervise crewmates, run tasks in parallel, or
   mentions Lodestar, a crew or team of agents, or an orchestrator. Also use when your prompt starts
   with "[lodestar dispatch]": you are then a crewmate and must report through Lodestar.
-  Requires herdr (HERDR_ENV=1, HERDR_SOCKET_PATH or HERDR_PLUGIN_ID set).
+  Requires herdr (HERDR_ENV=1, HERDR_SOCKET_PATH or HERDR_PLUGIN_ID set), tmux (TMUX set) or a
+  Rex terminal (REX_SESSION and REX_BLOCK set).
 ---
 
 # Lodestar
@@ -17,11 +18,11 @@ This file is a discovery stub, not the guide. The full, version-matched guide
 is printed by the `lodestar` binary itself, so it never drifts from the commands
 that will actually run.
 
-First check that you are inside herdr (the same test `lodestar` itself applies)
-and that the CLI is on PATH:
+First check that you are inside herdr, tmux or Rex (the same test `lodestar`
+itself applies) and that the CLI is on PATH:
 
 ```bash
-{ test "${HERDR_ENV:-}" = 1 || test -n "${HERDR_SOCKET_PATH:-}${HERDR_PLUGIN_ID:-}"; } && command -v lodestar
+{ test "${HERDR_ENV:-}" = 1 || test -n "${HERDR_SOCKET_PATH:-}${HERDR_PLUGIN_ID:-}${TMUX:-}${LODESTAR_MUX:-}" || { test -n "${REX_SESSION:-}" && test -n "${REX_BLOCK:-}"; }; } && command -v lodestar
 ```
 
 If either check fails, say that Lodestar is not available here and stop. Do not

@@ -6,7 +6,7 @@ const crewmates_defaults = struct {
 };
 
 const TEXT =
-    \\Lodestar: an orchestrator agent and its crewmates, in herdr or tmux.
+    \\Lodestar: an orchestrator agent and its crewmates, in herdr, tmux or Rex.
     \\
     \\Orchestrator (the agent you talk to)
     \\ Runs

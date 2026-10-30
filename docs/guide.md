@@ -1,6 +1,6 @@
 # Lodestar orchestration
 
-Lodestar is the coordination layer for a team of coding agents inside herdr or tmux. It
+Lodestar is the coordination layer for a team of coding agents inside herdr, tmux or Rex. It
 records who owns which task, which attempt is authoritative, and what each
 crewmate reported, in a state file outside every agent's context. The
 orchestrator is the agent the user talks to; crewmates are agents Lodestar starts in
