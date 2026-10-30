@@ -482,8 +482,35 @@ fn setShare(session: []const u8, target: []const u8, block: []const u8, side: []
         .{ "after_block_id", if (after) block else target },
         .{ "ratio", if (after) 1.0 - share else share },
     });
-    // Best effort: the block exists either way, only its size is off.
-    _ = call(session, "session.resize_pane", params) catch {};
+    const want: f64 = params.num("ratio").?;
+    // The app's even split can land after ours; set the border until the view shows it held. Best effort: the
+    // block exists either way, only its size is off.
+    var held: usize = 0;
+    for (0..10) |_| {
+        if (held == 0) _ = call(session, "session.resize_pane", params) catch return;
+        rt.sleepMs(250);
+        const view = call(session, "session.view", json.newObj()) catch return;
+        const got = splitRatioOf(view.val(), block) orelse return;
+        held = if (@abs(got - want) < 0.02) held + 1 else 0;
+        if (held == 2) return;
+    }
+}
+
+/// The ratio of the split whose `before` or `after` is the block itself.
+fn splitRatioOf(v: Value, block: []const u8) ?f64 {
+    switch (v) {
+        .arr => |x| for (x.items.items) |item| if (splitRatioOf(item, block)) |r| return r,
+        .obj => |o| {
+            if (o.obj("split")) |sp| {
+                for ([_][]const u8{ "before", "after" }) |side| if (sp.obj(side)) |child| {
+                    if (rt.eqlOpt(child.str("block_id"), block) and child.obj("split") == null) return sp.num("ratio");
+                };
+            }
+            for (o.values()) |child| if (splitRatioOf(child, block)) |r| return r;
+        },
+        else => {},
+    }
+    return null;
 }
 
 /// `rex split`/`rex run --json` print `block_ids` (and `window_id` for `run`).
