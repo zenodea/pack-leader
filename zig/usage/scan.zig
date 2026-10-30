@@ -229,70 +229,23 @@ fn liveWindows(limits: *Obj, now: i64) *json.Arr {
     return out;
 }
 
-const Tm = extern struct { sec: c_int, min: c_int, hour: c_int, mday: c_int, mon: c_int, year: c_int, wday: c_int, yday: c_int, isdst: c_int, gmtoff: c_long, zone: ?[*:0]const u8 };
-extern "c" fn localtime_r(t: *const c_long, out: *Tm) ?*Tm;
-
-fn localTime(at_ms: i64) ?Tm {
-    const t: c_long = @intCast(@divFloor(at_ms, 1000));
-    var tm: Tm = undefined;
-    return if (localtime_r(&t, &tm) != null) tm else null;
-}
-
-/// Midnight, local time, of the day `at_ms` falls in.
-fn dayStart(at_ms: i64) i64 {
-    const off: i64 = if (localTime(at_ms)) |tm| @as(i64, tm.gmtoff) * 1000 else 0;
-    return @divFloor(at_ms + off, DAY) * DAY - off;
-}
-
-const Cell = struct { cost: f64 = 0, tokens: i64 = 0 };
-
-fn cellsArr(cells: []const Cell) *json.Arr {
-    const out = json.newArr();
-    for (cells) |c| {
-        const x = json.newArr();
-        x.push(json.number(c.cost));
-        x.push(.{ .int = c.tokens });
-        out.push(x.val());
-    }
-    return out;
-}
-
-/// `{ updated_at, agents: [{ agent, cost_24h, cost_7d, tokens_24h, tokens_7d, unpriced_7d, hourly, daily, plan?,
-/// limits_at?, windows }] }`. `hourly` is the last 24 hours and `daily` the last 7 local days (today last), each
-/// `[dollars, tokens]`; `days` gives each day's weekday (0 is Sunday).
+/// `{ updated_at, agents: [{ agent, cost_24h, cost_7d, tokens_24h, tokens_7d, unpriced_7d, plan?, limits_at?, windows }] }`
 pub fn summarize(root: *Obj, now: i64) *Obj {
     const agents = json.newArr();
     const hours = root.obj("hours");
     const cached_limits = root.obj("limits");
-    const this_hour = @divFloor(now, HOUR) * HOUR;
-    const first_day = dayStart(now) - 6 * DAY;
-    const days = json.newArr();
-    for (0..7) |i| days.push(.{ .int = if (localTime(first_day + @as(i64, @intCast(i)) * DAY + 12 * HOUR)) |tm| tm.wday else 0 });
     for (READERS) |r| {
         var cost_24h: f64 = 0;
         var cost_7d: f64 = 0;
         var tokens_24h: i64 = 0;
         var tokens_7d: i64 = 0;
         var unpriced: i64 = 0;
-        var hourly: [24]Cell = @splat(.{});
-        var daily: [7]Cell = @splat(.{});
         if (hours) |hs| if (hs.obj(r.agent)) |h| for (h.keys()) |k| {
             const at = std.fmt.parseInt(i64, k, 10) catch continue;
             const xs = (h.arr(k) orelse continue).slice();
-            if (xs.len < 3) continue;
+            if (xs.len < 3 or at < now - 7 * DAY) continue;
             const d = xs[0].asNum() orelse 0;
             const t = xs[1].asInt() orelse 0;
-            if (at >= first_day and at < first_day + 7 * DAY) {
-                const c = &daily[@intCast(@divFloor(at - first_day, DAY))];
-                c.cost += d;
-                c.tokens += t;
-            }
-            if (at <= this_hour and at > this_hour - 24 * HOUR) {
-                const c = &hourly[@intCast(23 - @divFloor(this_hour - at, HOUR))];
-                c.cost += d;
-                c.tokens += t;
-            }
-            if (at < now - 7 * DAY) continue;
             cost_7d += d;
             tokens_7d += t;
             unpriced += xs[2].asInt() orelse 0;
@@ -313,8 +266,6 @@ pub fn summarize(root: *Obj, now: i64) *Obj {
             .{ "tokens_24h", tokens_24h },
             .{ "tokens_7d", tokens_7d },
             .{ "unpriced_7d", unpriced },
-            .{ "hourly", cellsArr(&hourly) },
-            .{ "daily", cellsArr(&daily) },
         });
         if (limits) |l| {
             a.putStrIf("plan", l.str("plan"));
@@ -323,7 +274,7 @@ pub fn summarize(root: *Obj, now: i64) *Obj {
         }
         agents.push(a.val());
     }
-    return json.object(.{ .{ "updated_at", now }, .{ "days", days }, .{ "agents", agents } });
+    return json.object(.{ .{ "updated_at", now }, .{ "agents", agents } });
 }
 
 /// Claude Code hands its status line command the session's state, plan limits included (claude.ai plans only).

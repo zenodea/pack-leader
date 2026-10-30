@@ -65,84 +65,24 @@ fn header(s: ?*Obj, cols: usize, now: i64) []const u8 {
     return dim(rt.concat(&.{ title, ansi.repeat("─", cols -| used), " ", age }));
 }
 
-pub const Layout = enum { compact, full, history };
+pub const Layout = enum { compact, full, table };
 
-/// The roomiest layout that fits in `rows`; history's charts grow to fill what is left.
+/// The roomiest layout that fits: a table when there is width for it, else a line per agent, else one line each.
 pub fn fit(s: ?*Obj, cols: i64, rows: usize, now: i64) []const []const u8 {
-    const base = lines(s, cols, now, .history, 0);
-    if (base.len <= rows) {
-        const n = if (s) |o| (if (o.arr("agents")) |x| x.objs().len else 0) else 0;
-        return lines(s, cols, now, .history, (rows - base.len) / @max(1, n));
+    if (cols >= 50) {
+        const t = lines(s, cols, now, .table);
+        if (t.len <= rows) return t;
     }
-    const full = lines(s, cols, now, .full, 0);
+    const full = lines(s, cols, now, .full);
     if (full.len <= rows) return full;
-    return lines(s, cols, now, .compact, 0);
+    return lines(s, cols, now, .compact);
 }
 
 fn priced(a: *Obj) bool {
     return (a.int("tokens_7d") orelse 0) > (a.int("unpriced_7d") orelse 0);
 }
 
-/// Each `[dollars, tokens]` cell as the number the agent is measured in.
-fn cellValues(a: *Obj, key: []const u8) []const f64 {
-    const cells = if (a.arr(key)) |x| x.slice() else &.{};
-    const out = rt.a.alloc(f64, cells.len) catch return &.{};
-    for (cells, out) |c, *v| {
-        const xs = if (c.asArr()) |x| x.slice() else &.{};
-        v.* = if (xs.len < 2) 0 else if (priced(a)) xs[0].asNum() orelse 0 else @floatFromInt(xs[1].asInt() orelse 0);
-    }
-    return out;
-}
-
-fn amount(a: *Obj, v: f64) []const u8 {
-    return if (priced(a)) money(v) else rt.concat(&.{ count(@intFromFloat(v)), dim(" tok") });
-}
-
-fn maxOf(xs: []const f64) f64 {
-    var m: f64 = 0;
-    for (xs) |x| m = @max(m, x);
-    return m;
-}
-
-/// Columns a chart of `n` values gives each one in `w` columns.
-fn columnWidth(n: usize, w: usize) usize {
-    return @max(1, w / @max(1, n));
-}
-
-/// A bar chart `h` rows tall: a column per value, eighth blocks for the tops, a gap between columns when there
-/// is room for one. Nothing is drawn as a dim dot on the bottom row.
-fn chart(xs: []const f64, w: usize, h: usize) []const []const u8 {
-    const eighths = [_][]const u8{ " ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" };
-    const m = maxOf(xs);
-    const each = columnWidth(xs.len, w);
-    const bar_w = if (each >= 3) each - 1 else each;
-    var out: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (0..h) |r| {
-        var line: std.ArrayListUnmanaged(u8) = .empty;
-        const below = (h - 1 - r) * 8;
-        for (xs) |x| {
-            const units: usize = if (m <= 0 or x <= 0) 0 else @max(1, @as(usize, @intFromFloat(@round(x / m * @as(f64, @floatFromInt(h * 8))))));
-            const here = @min(8, units -| below);
-            const cell = if (units == 0 and r == h - 1) dim(ansi.repeat("·", bar_w)) else if (here == 0) ansi.repeat(" ", bar_w) else fg.cyan(ansi.repeat(eighths[here], bar_w));
-            line.appendSlice(rt.a, cell) catch {};
-            line.appendSlice(rt.a, ansi.repeat(" ", each - bar_w)) catch {};
-        }
-        out.append(rt.a, line.items) catch {};
-    }
-    return out.items;
-}
-
-const WEEKDAYS = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-
-/// Chart rows, padded to `w` so notes line up, with `label` and `note` on the top row and a gutter on the rest.
-fn labelled(out: *std.ArrayListUnmanaged([]const u8), rows: []const []const u8, w: usize, label: []const u8, note: []const u8, cols: usize) void {
-    for (rows, 0..) |row, i| {
-        const parts: []const []const u8 = if (i == 0) &.{ dim(ansi.pad(label, 8)), ansi.pad(row, w), note } else &.{ "        ", row };
-        out.append(rt.a, ansi.truncate(rt.concat(parts), @intCast(cols))) catch {};
-    }
-}
-
-/// A plan window's bar; `gutter` pads the label so the bar starts where the charts do.
+/// A plan window's bar; `gutter` pads the label so the bar starts at the table's first column.
 fn windowLine(w: *Obj, cols: usize, now: i64, indent: []const u8, gutter: usize, max_bar: i64) []const u8 {
     const pct = w.num("used_pct") orelse 0;
     const reset = if (w.int("resets_at")) |r| rt.concat(&.{ " ↻", until(r - now) }) else "";
@@ -153,86 +93,89 @@ fn windowLine(w: *Obj, cols: usize, now: i64, indent: []const u8, gutter: usize,
     return ansi.truncate(rt.concat(&.{ dim(label), bar(pct, @intCast(bw)), paint(pct, tail[0..5]), dim(tail[5..]) }), @intCast(cols));
 }
 
-const MAX_CHART_ROWS: usize = 8;
+const NAME_W: usize = 10;
 
-/// Compact: one line per agent. Full: a line per agent, then a bar per plan window. History adds charts of the
-/// last 24 hours and the last 7 days, one row each plus `room` more rows per agent.
-pub fn lines(s: ?*Obj, cols_: i64, now: i64, layout: Layout, room: usize) []const []const u8 {
+/// Compact: one line per agent. Full: a line per agent, then a bar per plan window. Table: spend and tokens over
+/// 24 hours and 7 days in columns with a total row, then the plan limits.
+pub fn lines(s: ?*Obj, cols_: i64, now: i64, layout: Layout) []const []const u8 {
     const cols: usize = @intCast(@max(20, cols_));
     var out: std.ArrayListUnmanaged([]const u8) = .empty;
     out.append(rt.a, header(s, cols, now)) catch {};
     const agents = if (s) |o| (if (o.arr("agents")) |x| x.objs() else &.{}) else &.{};
     if (s != null and agents.len == 0) out.append(rt.a, dim("no agent activity this week")) catch {};
-    if (layout == .history and agents.len > 1) {
-        var c24: f64 = 0;
-        var c7: f64 = 0;
-        for (agents) |a| if (priced(a)) {
-            c24 += a.num("cost_24h") orelse 0;
-            c7 += a.num("cost_7d") orelse 0;
-        };
-        out.append(rt.a, ansi.truncate(rt.concat(&.{ bold(ansi.pad("all", 8)), money(c24), dim(" 24h · "), money(c7), dim(" 7d") }), @intCast(cols))) catch {};
+    if (layout == .table) {
+        if (agents.len > 0) table(&out, agents, cols, now);
+        return out.items;
     }
-    const days = if (s) |o| (if (o.arr("days")) |x| x.slice() else &.{}) else &.{};
     for (agents) |a| {
         const name = a.str("agent") orelse "?";
         const windows = if (a.arr("windows")) |x| x.objs() else &.{};
-        switch (layout) {
-            .compact => {
-                var parts: std.ArrayListUnmanaged([]const u8) = .empty;
-                parts.append(rt.a, rt.concat(&.{ bold(ansi.pad(name, 7)), spend(a) })) catch {};
-                for (windows) |w| {
-                    const pct = w.num("used_pct") orelse 0;
-                    parts.append(rt.a, rt.concat(&.{ dim(windowName(w.int("minutes") orelse 0)), " ", paint(pct, rt.fmt("{d:.0}%", .{pct})) })) catch {};
-                }
-                out.append(rt.a, ansi.truncate(std.mem.join(rt.a, dim(" · "), parts.items) catch "", @intCast(cols))) catch {};
-                continue;
-            },
-            .full => {
-                out.append(rt.a, ansi.truncate(rt.concat(&.{ bold(ansi.pad(name, 8)), spend(a) }), @intCast(cols))) catch {};
-                if (rt.eql(name, "claude") and windows.len == 0) out.append(rt.a, dim(" plan limits: lodestar usage --help")) catch {};
-                for (windows) |w| out.append(rt.a, windowLine(w, cols, now, " ", 0, 24)) catch {};
-                continue;
-            },
-            .history => {},
-        }
-        out.append(rt.a, "") catch {};
-        var title = rt.concat(&.{ bold(ansi.pad(name, 8)), spend(a) });
-        if (priced(a)) title = rt.concat(&.{ title, dim(" · "), count(a.int("tokens_24h") orelse 0), dim(" tok 24h") });
-        if (a.str("plan")) |plan| title = rt.concat(&.{ title, dim(rt.concat(&.{ " · ", plan })) });
-        out.append(rt.a, ansi.truncate(title, @intCast(cols))) catch {};
-
-        // The 24-hour chart takes half the spare rows; the 7-day chart the rest, its first spare row
-        // going to the weekday labels under it.
-        const for_days = room - room / 2;
-        const day_labels = for_days >= 1;
-        const hour_rows = @min(MAX_CHART_ROWS, 1 + room / 2);
-        const day_rows = @min(MAX_CHART_ROWS, 1 + for_days - @intFromBool(day_labels));
-
-        const hourly = cellValues(a, "hourly");
-        const daily = cellValues(a, "daily");
-        const peak = rt.concat(&.{ " ", dim("peak "), amount(a, maxOf(hourly)), dim("/h") });
-        const best = rt.concat(&.{ " ", dim("best "), amount(a, maxOf(daily)), dim("/day") });
-        const day_w = cols -| (8 + @max(ansi.width(peak), ansi.width(best)));
-        const drawn_w = @max(hourly.len * columnWidth(hourly.len, day_w), daily.len * columnWidth(daily.len, day_w));
-        labelled(&out, chart(hourly, day_w, hour_rows), drawn_w, "  24h", peak, cols);
-        labelled(&out, chart(daily, day_w, day_rows), drawn_w, "  7d", best, cols);
-        if (day_labels) {
-            const each = columnWidth(daily.len, day_w);
-            var row: std.ArrayListUnmanaged(u8) = .empty;
-            row.appendSlice(rt.a, "        ") catch {};
-            for (0..daily.len) |i| {
-                const wd: usize = if (i < days.len) @intCast(@mod(days[i].asInt() orelse 0, 7)) else 0;
-                const name_ = if (i + 1 == daily.len and each >= 6) "today" else WEEKDAYS[wd];
-                const fit_w = if (each > name_.len) name_.len else each -| 1;
-                row.appendSlice(rt.a, ansi.pad(name_[0..@max(1, fit_w)], each)) catch {};
+        if (layout == .compact) {
+            var parts: std.ArrayListUnmanaged([]const u8) = .empty;
+            parts.append(rt.a, rt.concat(&.{ bold(ansi.pad(name, 7)), spend(a) })) catch {};
+            for (windows) |w| {
+                const pct = w.num("used_pct") orelse 0;
+                parts.append(rt.a, rt.concat(&.{ dim(windowName(w.int("minutes") orelse 0)), " ", paint(pct, rt.fmt("{d:.0}%", .{pct})) })) catch {};
             }
-            out.append(rt.a, ansi.truncate(dim(row.items), @intCast(cols))) catch {};
+            out.append(rt.a, ansi.truncate(std.mem.join(rt.a, dim(" · "), parts.items) catch "", @intCast(cols))) catch {};
+            continue;
         }
-
-        if (rt.eql(name, "claude") and windows.len == 0) out.append(rt.a, dim("  plan limits: lodestar usage --help")) catch {};
-        for (windows) |w| out.append(rt.a, windowLine(w, cols, now, "  ", 8, @intCast(cols))) catch {};
+        out.append(rt.a, ansi.truncate(rt.concat(&.{ bold(ansi.pad(name, 8)), spend(a) }), @intCast(cols))) catch {};
+        if (rt.eql(name, "claude") and windows.len == 0) out.append(rt.a, dim(" plan limits: lodestar usage --help")) catch {};
+        for (windows) |w| out.append(rt.a, windowLine(w, cols, now, " ", 0, 24)) catch {};
     }
     return out.items;
+}
+
+fn table(out: *std.ArrayListUnmanaged([]const u8), agents: []const *Obj, cols: usize, now: i64) void {
+    const cw = std.math.clamp((cols -| NAME_W) / 4, 8, 14);
+    const row = struct {
+        fn f(name: []const u8, cells: [4][]const u8, w: usize) []const u8 {
+            var parts: std.ArrayListUnmanaged([]const u8) = .empty;
+            parts.append(rt.a, name) catch {};
+            for (cells) |c| parts.append(rt.a, ansi.pad(c, w)) catch {};
+            return rt.concat(parts.items);
+        }
+    }.f;
+    out.append(rt.a, "") catch {};
+    out.append(rt.a, ansi.truncate(dim(row(ansi.repeat(" ", NAME_W), .{ "24h", "7d", "tokens 24h", "tokens 7d" }, cw)), @intCast(cols))) catch {};
+    var c24: f64 = 0;
+    var c7: f64 = 0;
+    var t24: i64 = 0;
+    var t7: i64 = 0;
+    for (agents) |a| {
+        const money_ok = priced(a);
+        if (money_ok) {
+            c24 += a.num("cost_24h") orelse 0;
+            c7 += a.num("cost_7d") orelse 0;
+        }
+        t24 += a.int("tokens_24h") orelse 0;
+        t7 += a.int("tokens_7d") orelse 0;
+        const cells = [4][]const u8{
+            if (money_ok) money(a.num("cost_24h") orelse 0) else dim("–"),
+            if (money_ok) money(a.num("cost_7d") orelse 0) else dim("–"),
+            count(a.int("tokens_24h") orelse 0),
+            count(a.int("tokens_7d") orelse 0),
+        };
+        out.append(rt.a, ansi.truncate(row(bold(ansi.pad(a.str("agent") orelse "?", NAME_W)), cells, cw), @intCast(cols))) catch {};
+    }
+    if (agents.len > 1) out.append(rt.a, ansi.truncate(row(dim(ansi.pad("all", NAME_W)), .{ money(c24), money(c7), count(t24), count(t7) }, cw), @intCast(cols))) catch {};
+
+    var limits: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (agents) |a| {
+        const name = a.str("agent") orelse "?";
+        const windows = if (a.arr("windows")) |x| x.objs() else &.{};
+        if (rt.eql(name, "claude") and windows.len == 0) limits.append(rt.a, rt.concat(&.{ bold(ansi.pad(name, NAME_W)), dim("not set up: lodestar usage --help") })) catch {};
+        for (windows, 0..) |w, i| {
+            const plan = if (i == 0) (if (a.str("plan")) |p| dim(rt.concat(&.{ "  ", p })) else "") else "";
+            const who = bold(ansi.pad(if (i == 0) name else "", NAME_W));
+            limits.append(rt.a, rt.concat(&.{ who, windowLine(w, cols -| (NAME_W + 12), now, "", 4, 40), plan })) catch {};
+        }
+    }
+    if (limits.items.len > 0) {
+        out.appendSlice(rt.a, &.{ "", dim("plan limits") }) catch {};
+        for (limits.items) |l| out.append(rt.a, ansi.truncate(l, @intCast(cols))) catch {};
+    }
 }
 
 const testing = std.testing;
@@ -246,13 +189,13 @@ test "lines shows spend, a bar per window and the reset countdown" {
     const s = (try json.parse(
         \\{"updated_at":1799999880000,"agents":[{"agent":"claude","cost_24h":12.4,"cost_7d":81,"tokens_24h":5,"tokens_7d":10,"unpriced_7d":0,"windows":[{"minutes":300,"used_pct":62,"resets_at":1800004320000}]},{"agent":"codex","cost_24h":0,"cost_7d":0,"tokens_24h":2100000,"tokens_7d":9000000,"unpriced_7d":9000000,"windows":[]}]}
     )).asObj().?;
-    const l = lines(s, 40, now, .full, 0);
+    const l = lines(s, 40, now, .full);
     try testing.expectEqual(@as(usize, 40), ansi.width(l[0]));
     try testing.expect(rt.startsWith(ansi.stripSgr(l[0]), "── Usage ──") and rt.endsWith(ansi.stripSgr(l[0]), "─ 2m ago"));
     try testing.expectEqualStrings("claude  $12 24h · $81 7d", ansi.stripSgr(l[1]));
     try testing.expectEqualStrings(" 5h ███████████████░░░░░░░░░  62% ↻1h12", ansi.stripSgr(l[2]));
     try testing.expectEqualStrings("codex   2.1M tok 24h", ansi.stripSgr(l[3]));
-    const c = lines(s, 60, now, .compact, 0);
+    const c = lines(s, 60, now, .compact);
     try testing.expectEqualStrings("claude $12 24h · $81 7d · 5h 62%", ansi.stripSgr(c[1]));
     try testing.expectEqualStrings("wk", windowName(10080));
     try testing.expectEqualStrings("4d3h", until(99 * 3_600_000));

@@ -174,7 +174,7 @@ fn statusFor(r: Raw) ?*Obj {
     return rec;
 }
 
-const DIALOG_MARKERS = [_][]const u8{ "Yes, I trust this folder", "Do you trust the files in this folder", "Allow Codex to work in this folder" };
+const DIALOG_MARKERS = [_][]const u8{ "Yes, I trust this folder", "Do you trust the files in this folder", "Allow Codex to work in this folder", "Hooks need review" };
 
 fn showsStartupDialog(pane: []const u8) bool {
     const screen = run(&.{ "capture-pane", "-p", "-J", "-t", pane }, null) catch return false;

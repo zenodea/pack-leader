@@ -310,7 +310,7 @@ fn statusFor(r: Raw) ?*Obj {
     return rec;
 }
 
-const DIALOG_MARKERS = [_][]const u8{ "Yes, I trust this folder", "Do you trust the files in this folder", "Allow Codex to work in this folder" };
+const DIALOG_MARKERS = [_][]const u8{ "Yes, I trust this folder", "Do you trust the files in this folder", "Allow Codex to work in this folder", "Hooks need review" };
 
 fn showsStartupDialog(r: Raw) bool {
     const screen = visibleScreen(r.session, r.block) catch return false;
@@ -505,13 +505,16 @@ fn labelPane(pane_id: []const u8, title: ?[]const u8) void {
     renamePane(pane_id, title);
 }
 
+/// The sidebar column's share of the window: the leader and navigator keep 70%.
+const SIDEBAR_SHARE: f64 = 0.30;
+
 fn toolCommand(entrypoint: []const u8) []const []const u8 {
     if (rt.eql(entrypoint, "bar")) return rt.a.dupe([]const u8, &.{ "bash", rt.concat(&.{ paths.plugin_root, "/bin/leader-bar" }) }) catch @panic("out of memory");
     if (rt.eql(entrypoint, "usage")) return rt.a.dupe([]const u8, &.{ paths.lodestar_bin, "usage", "--watch" }) catch @panic("out of memory");
     return rt.a.dupe([]const u8, &.{ paths.lodestar_bin, entrypoint }) catch @panic("out of memory");
 }
 
-/// Lodestar's own UI in a split: "sidebar" (a quarter-width column), "bar" (a thin strip above the target) or
+/// Lodestar's own UI in a split: "sidebar" (a column, `SIDEBAR_SHARE` wide), "bar" (a thin strip above the target) or
 /// "usage" (below the target; `pct` percent of it). Extra keys: `before` (bool) opens it left of/above the target.
 fn openToolPane(p: *Obj) anyerror!*Obj {
     try refuseRemote();
@@ -528,7 +531,7 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
     }
     const down = rt.eqlOpt(p.str("direction"), "down");
     const side = if (p.truthy("before")) (if (down) "above" else "left") else (if (down) "below" else "right");
-    return paneRecord(try split(target, side, 0.25, null, p.obj("env"), toolCommand(entrypoint)));
+    return paneRecord(try split(target, side, SIDEBAR_SHARE, null, p.obj("env"), toolCommand(entrypoint)));
 }
 
 fn tabCreate(p: *Obj) anyerror!types.TabCreated {

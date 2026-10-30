@@ -4,13 +4,15 @@
 
 - A **Usage** pane below the sidebar shows what each agent (Claude Code, Codex, pi) spent
   over the last day and week, and how much of each plan limit is used. The sidebar opens
-  it and it closes with the sidebar. Given the room, it charts each agent's last 24 hours
-  and last 7 days. `lodestar usage --watch` shows the same anywhere; `lodestar usage`
+  it and it closes with the sidebar. Given the width, it lays the numbers out as a table
+  with a total row. `lodestar usage --watch` shows the same anywhere; `lodestar usage`
   prints it as JSON.
 - **Rex** works as a multiplexer next to herdr and tmux: inside a Rex terminal Lodestar
   uses Rex (or set `LODESTAR_MUX=rex`). The skill now accepts herdr, tmux or Rex.
 - On tmux and Rex, pi crewmates now report idle and working through a small pi extension
   Lodestar loads with `-e`, instead of showing `?`.
+- A Codex crewmate waiting at Codex's "Hooks need review" prompt shows as blocked, not `?`.
+- On Rex the sidebar column is 30% of the window and keeps that size with the app attached.
 
 ## Unreleased: the crew and the navigator
 
