@@ -21,7 +21,7 @@ fn isStatus(s: []const u8) bool {
 /// Agent kinds whose hooks report every transition Lodestar relies on.
 pub fn hasHooks(kind: ?[]const u8) bool {
     const k = kind orelse return false;
-    return rt.eql(k, "claude") or rt.eql(k, "codex");
+    return rt.eql(k, "claude") or rt.eql(k, "codex") or rt.eql(k, "pi");
 }
 
 fn dir() []const u8 {
@@ -143,6 +143,42 @@ fn hookGroup(bin: []const u8, matcher: ?[]const u8, status: []const u8) json.Val
     return arr.val();
 }
 
+/// pi has no hooks, but loads extensions with `-e FILE`: this one reports a session's start, each run and the
+/// point where pi will not continue on its own. Calls are synchronous so the reports arrive in order.
+fn piExtension(bin: []const u8) []const u8 {
+    return rt.concat(&.{
+        \\// Written by Lodestar: reports this pi session's status, since tmux and Rex cannot see inside a pane.
+        \\import { spawnSync } from "node:child_process";
+        \\
+        \\function report(status: string) {
+        \\  try {
+        \\    spawnSync(
+    ,
+        json.stringify(.{ .str = bin }, false),
+        \\, ["__agent-status", status], { stdio: "ignore", timeout: 5000 });
+        \\  } catch {}
+        \\}
+        \\
+        \\export default function (pi: any) {
+        \\  pi.on("session_start", async () => report("idle"));
+        \\  pi.on("agent_start", async () => report("working"));
+        \\  pi.on("agent_settled", async () => report("idle"));
+        \\}
+        \\
+    });
+}
+
+/// The extension file, rewritten when the launcher path in it changes.
+fn piExtensionFile(bin: []const u8) ?[]const u8 {
+    const path = fs.join(&.{ dir(), "pi-status.ts" });
+    const text = piExtension(bin);
+    if (!rt.eqlOpt(fs.readFileOpt(path), text)) {
+        _ = paths.ensureDir(dir());
+        fs.writeAtomic(path, text, 0o644) catch return null;
+    }
+    return path;
+}
+
 /// Extra launch arguments that make an agent report its status. `bin` is the lodestar launcher.
 pub fn hookArgs(kind: []const u8, bin: []const u8) []const []const u8 {
     if (rt.eql(kind, "claude")) {
@@ -163,6 +199,13 @@ pub fn hookArgs(kind: []const u8, bin: []const u8) []const []const u8 {
         const out = rt.a.alloc([]const u8, 2) catch @panic("out of memory");
         out[0] = "-c";
         out[1] = rt.concat(&.{ "notify=", json.stringify(notify, false) });
+        return out;
+    }
+    if (rt.eql(kind, "pi")) {
+        const file_ = piExtensionFile(bin) orelse return &.{};
+        const out = rt.a.alloc([]const u8, 2) catch @panic("out of memory");
+        out[0] = "-e";
+        out[1] = file_;
         return out;
     }
     return &.{};
@@ -193,5 +236,8 @@ test "status transitions bump the sequences like herdr" {
     const args = hookArgs("claude", "/x/lodestar");
     try std.testing.expectEqualStrings("--settings", args[0]);
     try std.testing.expect(rt.contains(args[1], "'/x/lodestar' __agent-status working"));
-    try std.testing.expectEqual(@as(usize, 0), hookArgs("pi", "/x").len);
+    const pi_args = hookArgs("pi", "/x/lodestar");
+    try std.testing.expectEqualStrings("-e", pi_args[0]);
+    try std.testing.expect(rt.contains(fs.readFileOpt(pi_args[1]).?, "spawnSync(\"/x/lodestar\", [\"__agent-status\", status]"));
+    try std.testing.expect(hookArgs("aider", "/x").len == 0);
 }

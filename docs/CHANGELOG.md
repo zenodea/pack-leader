@@ -9,6 +9,8 @@
   prints it as JSON.
 - **Rex** works as a multiplexer next to herdr and tmux: inside a Rex terminal Lodestar
   uses Rex (or set `LODESTAR_MUX=rex`). The skill now accepts herdr, tmux or Rex.
+- On tmux and Rex, pi crewmates now report idle and working through a small pi extension
+  Lodestar loads with `-e`, instead of showing `?`.
 
 ## Unreleased: the crew and the navigator
 

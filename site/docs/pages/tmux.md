@@ -16,13 +16,13 @@ Each run remembers which multiplexer it was created under, and only that one man
 
 herdr can see whether an agent is working or idle. tmux can't, so Lodestar starts Claude Code and Codex crewmates with hooks that report their status back (`lodestar __agent-status`).
 
-pi has no such hooks. Its status stays `unknown`, which never counts as idle. pi crewmates still report through `done` and `ask` as usual; they just don't get the idle-based nudges.
+pi has no hooks, so Lodestar loads a small pi extension (`pi -e`) that reports the same way: idle when a session starts, working while it runs, idle once pi won't continue on its own. pi doesn't ask for permission, so it never shows as blocked. The same goes for Rex.
 
 ## What's different from herdr
 
 | | herdr | tmux |
 | --- | --- | --- |
-| Agent status | Native | Hooks for Claude Code and Codex; pi is `unknown` |
+| Agent status | Native | Hooks for Claude Code and Codex, an extension for pi |
 | Updates | Live event stream | Polling |
 | Sidebar and Navigator | Yes | No |
 | Crewmate placement | Hidden tabs or beside the leader | Split beside the leader |
