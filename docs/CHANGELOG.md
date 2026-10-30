@@ -4,8 +4,9 @@
 
 - A **Usage** pane below the sidebar shows what each agent (Claude Code, Codex, pi) spent
   over the last day and week, and how much of each plan limit is used. The sidebar opens
-  it and it closes with the sidebar. `lodestar usage --watch` shows the same anywhere;
-  `lodestar usage` prints it as JSON.
+  it and it closes with the sidebar. Given the room, it charts each agent's last 24 hours
+  and last 7 days. `lodestar usage --watch` shows the same anywhere; `lodestar usage`
+  prints it as JSON.
 - **Rex** works as a multiplexer next to herdr and tmux: inside a Rex terminal Lodestar
   uses Rex (or set `LODESTAR_MUX=rex`). The skill now accepts herdr, tmux or Rex.
 

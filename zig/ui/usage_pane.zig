@@ -46,8 +46,7 @@ const Pane = struct {
     fn draw(self: *Pane) void {
         const sz = term.size(40, 10);
         const now = rt.nowMs();
-        var shown = usage_box.lines(self.usage, @intCast(sz.cols), now, false);
-        if (shown.len > sz.rows) shown = usage_box.lines(self.usage, @intCast(sz.cols), now, true);
+        const shown = usage_box.fit(self.usage, @intCast(sz.cols), sz.rows, now);
         var buf: std.ArrayListUnmanaged(u8) = .empty;
         buf.appendSlice(rt.a, ansi.screen.home) catch {};
         for (0..sz.rows) |row| {
