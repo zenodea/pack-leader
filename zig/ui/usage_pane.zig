@@ -76,6 +76,7 @@ pub fn run() !void {
     var frame = Arena.init(std.heap.page_allocator);
     rt.a = frame.allocator();
     rt.writeStdout(ansi.screen.alt ++ ansi.screen.hideCursor ++ ansi.screen.clear);
+    rt.writeStdout(ansi.screen.title("Usage"));
     term.installQuitSignals();
     term.installWinch();
     if (tty) pane.raw.enable();

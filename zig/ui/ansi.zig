@@ -115,6 +115,10 @@ pub const screen = struct {
     pub const clearLine = "\x1b[2K";
     pub const mouseOn = "\x1b[?1000h\x1b[?1006h";
     pub const mouseOff = "\x1b[?1006l\x1b[?1000l";
+    /// The terminal's title (OSC 2): what Rex and many terminals show in the pane's header.
+    pub fn title(text: []const u8) []const u8 {
+        return rt.concat(&.{ "\x1b]2;", text, "\x07" });
+    }
     pub fn at(row: usize, col: usize) []const u8 {
         return rt.fmt("\x1b[{d};{d}H", .{ row, col });
     }

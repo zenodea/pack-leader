@@ -935,6 +935,7 @@ pub fn runSidebar() !void {
     _ = paths.ensureDir(paths.state_dir);
     sb.openSubscription();
     rt.writeStdout(ansi.screen.alt ++ ansi.screen.hideCursor ++ ansi.screen.clear);
+    rt.writeStdout(ansi.screen.title("Crew"));
     if (tty) {
         sb.mouse_off = ansi.screen.mouseOff;
         rt.writeStdout(ansi.screen.mouseOn);

@@ -2,8 +2,7 @@
 //! rewritten to herdr's shape so the rest of Lodestar can parse them: `session:U` is `sU`, `window:V` is `wV`,
 //! block `block:B` in session `session:U` is `sU:bB`. Agent status comes from agent hooks (see agent_status.zig).
 //!
-//! Checked against Rex 0.1.0 (server 0.0.1793299046) with `rex api list --json` and a live session. The one
-//! `UNVERIFIED` left is the bar's height, which depends on the attached client's size.
+//! Checked against Rex 0.1.0 (server 0.0.1793299046) with `rex api list --json`, a live session and the app.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -429,11 +428,30 @@ fn appendCommand(argv: *std.ArrayListUnmanaged([]const u8), env: ?*Obj, command:
     if (command.len > 0) argv.appendSlice(rt.a, command) catch {} else argv.appendSlice(rt.a, &.{ loginShell(), "-l" }) catch {};
 }
 
-/// The new block's share of the split, in percent (`ratio` is the share the existing block keeps).
-fn ratioPct(ratio: ?f64) []const u8 {
-    const r = ratio orelse 0.5;
-    const pct: i64 = @intFromFloat(@round(@max(0.05, @min(0.95, 1.0 - r)) * 100));
-    return rt.fmt("{d}", .{pct});
+/// The new block's share of the split (`ratio` is the share the existing block keeps).
+fn newShare(ratio: ?f64) f64 {
+    return @max(0.05, @min(0.95, 1.0 - (ratio orelse 0.5)));
+}
+
+/// The block's height in rows, as the server last sized it.
+fn blockRows(pane_id: []const u8) ?i64 {
+    const s = sessionFor(pane_id) orelse return null;
+    const o = runJson(&.{ "block", "call", "-s", s, "-b", blockTarget(pane_id), "size" }, null) catch return null;
+    return o.int("rows");
+}
+
+/// With the app attached, `rex split` goes through the app, which splits evenly whatever `--ratio` says; set the
+/// border on the server afterwards. `share` is the new block's part of the space the target had.
+fn setShare(session: []const u8, target: []const u8, block: []const u8, side: []const u8, share: f64) void {
+    const after = rt.eql(side, "right") or rt.eql(side, "below");
+    const params = json.object(.{
+        .{ "direction", if (rt.eql(side, "right") or rt.eql(side, "left")) "horizontal" else "vertical" },
+        .{ "before_block_id", if (after) target else block },
+        .{ "after_block_id", if (after) block else target },
+        .{ "ratio", if (after) 1.0 - share else share },
+    });
+    // Best effort: the block exists either way, only its size is off.
+    _ = call(session, "session.resize_pane", params) catch {};
 }
 
 /// `rex split`/`rex run --json` print `block_ids` (and `window_id` for `run`).
@@ -444,21 +462,24 @@ fn newBlock(out: *Obj, session: []const u8) !Raw {
     return rawPane(paneId(session, block)) catch .{ .session = session, .window = out.str("window_id") orelse "", .block = block };
 }
 
-fn split(target: []const u8, side: []const u8, pct: []const u8, cwd: ?[]const u8, env: ?*Obj, command: []const []const u8) !Raw {
+fn split(target: []const u8, side: []const u8, share: f64, cwd: ?[]const u8, env: ?*Obj, command: []const []const u8) !Raw {
     const session = sessionFor(target) orelse return rt.fail("bad_request", "pane {s} names no Rex session", .{target});
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    try argv.appendSlice(rt.a, &.{ "split", "--json", "--focus=false", "--split", side, "--ratio", pct });
+    const pct: i64 = @intFromFloat(@round(share * 100));
+    try argv.appendSlice(rt.a, &.{ "split", "--json", "--focus=false", "--split", side, "--ratio", rt.fmt("{d}", .{std.math.clamp(pct, 1, 99)}) });
     blockArgs(&argv, target);
     if (cwd) |c| try argv.appendSlice(rt.a, &.{ "--cwd", c });
     appendCommand(&argv, env, command);
-    return newBlock(try runJson(argv.items, null), session);
+    const r = try newBlock(try runJson(argv.items, null), session);
+    setShare(session, blockTarget(target), r.block, side, share);
+    return r;
 }
 
 fn paneSplit(p: *Obj) anyerror!*Obj {
     try refuseRemote();
     const target = p.str("target_pane_id") orelse return rt.fail("bad_request", "pane.split needs target_pane_id", .{});
     const side = if (rt.eqlOpt(p.str("direction"), "down")) "below" else "right";
-    return paneRecord(try split(target, side, ratioPct(p.num("ratio")), p.strNonEmpty("cwd"), p.obj("env"), &.{}));
+    return paneRecord(try split(target, side, newShare(p.num("ratio")), p.strNonEmpty("cwd"), p.obj("env"), &.{}));
 }
 
 fn paneClose(pane_id: []const u8) anyerror!Value {
@@ -496,13 +517,18 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
     try refuseRemote();
     const entrypoint = p.str("entrypoint") orelse "sidebar";
     const target = p.str("target_pane_id") orelse return rt.fail("bad_request", "plugin pane needs target_pane_id", .{});
-    // UNVERIFIED: --ratio is a percentage, so the bar's two rows are approximated; how many rows 5% gives
-    // depends on the window's height in the attached client.
-    if (rt.eql(entrypoint, "bar")) return paneRecord(try split(target, "above", "5", null, p.obj("env"), toolCommand(entrypoint)));
-    if (rt.eql(entrypoint, "usage")) return paneRecord(try split(target, "below", rt.fmt("{d}", .{p.int("pct") orelse 30}), null, p.obj("env"), toolCommand(entrypoint)));
+    if (rt.eql(entrypoint, "bar")) {
+        // Two rows of the target's height.
+        const rows = blockRows(target) orelse 40;
+        return paneRecord(try split(target, "above", 2.0 / @as(f64, @floatFromInt(@max(4, rows))), null, p.obj("env"), toolCommand(entrypoint)));
+    }
+    if (rt.eql(entrypoint, "usage")) {
+        const pct: f64 = @floatFromInt(p.int("pct") orelse 30);
+        return paneRecord(try split(target, "below", pct / 100, null, p.obj("env"), toolCommand(entrypoint)));
+    }
     const down = rt.eqlOpt(p.str("direction"), "down");
     const side = if (p.truthy("before")) (if (down) "above" else "left") else (if (down) "below" else "right");
-    return paneRecord(try split(target, side, "25", null, p.obj("env"), toolCommand(entrypoint)));
+    return paneRecord(try split(target, side, 0.25, null, p.obj("env"), toolCommand(entrypoint)));
 }
 
 fn tabCreate(p: *Obj) anyerror!types.TabCreated {
@@ -939,7 +965,7 @@ test "rex ids round trip into herdr shape" {
     try std.testing.expect(isPaneRef(pane) and isPaneRef("block:x") and !isPaneRef("parser") and !isPaneRef("s1"));
     try std.testing.expectEqualStrings("ctrl+c", rexKey("C-c"));
     try std.testing.expectEqualStrings("escape", rexKey("esc"));
-    try std.testing.expectEqualStrings("25", ratioPct(0.75));
+    try std.testing.expectEqual(@as(f64, 0.25), newShare(0.75));
     try std.testing.expectEqualStrings("/Users/me/src", pwdPath("file://mac.local/Users/me/src"));
     try std.testing.expectEqualStrings("b\nc", lastLines("a\nb\nc", 2));
 }
