@@ -486,11 +486,12 @@ fn labelPane(pane_id: []const u8, title: ?[]const u8) void {
 
 fn toolCommand(entrypoint: []const u8) []const []const u8 {
     if (rt.eql(entrypoint, "bar")) return rt.a.dupe([]const u8, &.{ "bash", rt.concat(&.{ paths.plugin_root, "/bin/leader-bar" }) }) catch @panic("out of memory");
+    if (rt.eql(entrypoint, "usage")) return rt.a.dupe([]const u8, &.{ paths.lodestar_bin, "usage", "--watch" }) catch @panic("out of memory");
     return rt.a.dupe([]const u8, &.{ paths.lodestar_bin, entrypoint }) catch @panic("out of memory");
 }
 
-/// Lodestar's own UI in a split: "sidebar" (a quarter-width column) or "bar" (a thin strip above the target).
-/// Extra keys: `before` (bool) opens it left of/above the target.
+/// Lodestar's own UI in a split: "sidebar" (a quarter-width column), "bar" (a thin strip above the target) or
+/// "usage" (below the target; `pct` percent of it). Extra keys: `before` (bool) opens it left of/above the target.
 fn openToolPane(p: *Obj) anyerror!*Obj {
     try refuseRemote();
     const entrypoint = p.str("entrypoint") orelse "sidebar";
@@ -498,6 +499,7 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
     // UNVERIFIED: --ratio is a percentage, so the bar's two rows are approximated; how many rows 5% gives
     // depends on the window's height in the attached client.
     if (rt.eql(entrypoint, "bar")) return paneRecord(try split(target, "above", "5", null, p.obj("env"), toolCommand(entrypoint)));
+    if (rt.eql(entrypoint, "usage")) return paneRecord(try split(target, "below", rt.fmt("{d}", .{p.int("pct") orelse 30}), null, p.obj("env"), toolCommand(entrypoint)));
     const down = rt.eqlOpt(p.str("direction"), "down");
     const side = if (p.truthy("before")) (if (down) "above" else "left") else (if (down) "below" else "right");
     return paneRecord(try split(target, side, "25", null, p.obj("env"), toolCommand(entrypoint)));

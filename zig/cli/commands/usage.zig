@@ -6,13 +6,16 @@ const proc = @import("../../core/proc.zig");
 const args_mod = @import("../args.zig");
 const scan = @import("../../usage/scan.zig");
 const shared = @import("../shared.zig");
+const usage_pane = @import("../../ui/usage_pane.zig");
 
 const Args = args_mod.Args;
 
 /// `lodestar usage [--quiet]`: read what the agents' logs gained since last time, then print the summary.
+/// `--watch`: show it live (the pane below the crew).
 pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
     _ = from_action;
     if (!rt.eql(command, "usage")) return;
+    if (args_mod.has(a, "watch")) return usage_pane.run();
     const fresh = scan.refresh(rt.nowMs());
     if (args_mod.has(a, "quiet")) return;
     const text = fs.readFileOpt(scan.summaryFile()) orelse return rt.fail(null, "no usage summary yet: another scan is still running", .{});

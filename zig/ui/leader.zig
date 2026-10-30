@@ -13,7 +13,7 @@ pub fn resolveLeaderRun(s: state.State, opts: ResolveLeaderRunOpts) !state.Run {
         for (state.runs(s).objValues()) |run| {
             if (!rt.eqlOpt(run.str("status"), "active")) continue;
             const ob = run.obj("navigator");
-            if (rt.eqlOpt(state.orchestratorPane(run), pane) or rt.eqlOpt(run.str("sidebar_pane_id"), pane) or (ob != null and rt.eqlOpt(ob.?.str("pane_id"), pane))) direct = true;
+            if (rt.eqlOpt(state.orchestratorPane(run), pane) or rt.eqlOpt(run.str("sidebar_pane_id"), pane) or rt.eqlOpt(run.str("usage_pane_id"), pane) or (ob != null and rt.eqlOpt(ob.?.str("pane_id"), pane))) direct = true;
         }
         var bar_runs: std.ArrayListUnmanaged([]const u8) = .empty;
         for (state.crewmates(s).objValues()) |w| {

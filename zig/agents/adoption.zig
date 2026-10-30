@@ -95,6 +95,7 @@ fn protectPane(s: State, pane_id: []const u8, except_dispatch: ?[]const u8) !voi
         const run_id = run.str("id") orelse "";
         if (rt.eqlOpt(state.orchestratorPane(run), pane_id)) return fail("adoption_protected_pane", "pane {s} is the orchestrator pane for run {s}", .{ pane_id, run_id });
         if (rt.eqlOpt(run.str("sidebar_pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is a Lodestar sidebar pane for run {s}", .{ pane_id, run_id });
+        if (rt.eqlOpt(run.str("usage_pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is a Lodestar usage pane for run {s}", .{ pane_id, run_id });
         if (run.obj("navigator")) |ob| if (rt.eqlOpt(ob.str("pane_id"), pane_id)) return fail("adoption_protected_pane", "pane {s} is the navigator pane for run {s}", .{ pane_id, run_id });
     }
     for (state.crewmates(s).objValues()) |w| {

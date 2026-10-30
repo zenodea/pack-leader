@@ -82,7 +82,7 @@ fn runPane(r: state.Run, key: []const u8) ?[]const u8 {
 
 pub fn areaPanes(root: LayoutNode, run: state.Run) []const []const u8 {
     var left: std.ArrayListUnmanaged([]const u8) = .empty;
-    for ([_]?[]const u8{ runPane(run, "orchestrator"), runPane(run, "navigator"), run.str("sidebar_pane_id") }) |p| {
+    for ([_]?[]const u8{ runPane(run, "orchestrator"), runPane(run, "navigator"), run.str("sidebar_pane_id"), run.str("usage_pane_id") }) |p| {
         if (p) |x| if (x.len > 0) left.append(rt.a, x) catch {};
     }
     var out: std.ArrayListUnmanaged([]const u8) = .empty;

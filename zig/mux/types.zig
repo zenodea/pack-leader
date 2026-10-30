@@ -90,7 +90,7 @@ pub const Multiplexer = struct {
     paneFocus: *const fn (pane_id: []const u8) anyerror!Value,
     renamePane: *const fn (pane_id: []const u8, label: ?[]const u8) void,
     labelPane: *const fn (pane_id: []const u8, title: ?[]const u8) void,
-    /// { entrypoint, target_pane_id, direction, env? }
+    /// { entrypoint, target_pane_id, direction, env?, rows? }; entrypoint "usage" opens below the target, `rows` high.
     openToolPane: *const fn (p: *Obj) anyerror!*Obj,
 
     /// { workspace_id, label, cwd?, env? } -> { tab, root_pane }

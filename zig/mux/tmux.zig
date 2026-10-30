@@ -359,11 +359,12 @@ fn labelPane(pane_id: []const u8, title: ?[]const u8) void {
 
 fn toolCommand(entrypoint: []const u8) []const u8 {
     if (rt.eql(entrypoint, "bar")) return rt.concat(&.{ "exec bash ", shellQuote(rt.concat(&.{ paths.plugin_root, "/bin/leader-bar" })) });
+    if (rt.eql(entrypoint, "usage")) return rt.concat(&.{ "exec ", shellQuote(paths.lodestar_bin), " usage --watch" });
     return rt.concat(&.{ "exec ", shellQuote(paths.lodestar_bin), " ", shellQuote(entrypoint) });
 }
 
-/// Lodestar's own UI in a split: "sidebar" (a quarter-width column) or "bar" (two rows above the target).
-/// Extra keys: `before` (bool) opens it left of/above the target.
+/// Lodestar's own UI in a split: "sidebar" (a quarter-width column), "bar" (two rows above the target) or
+/// "usage" (`rows` rows below the target). Extra keys: `before` (bool) opens it left of/above the target.
 fn openToolPane(p: *Obj) anyerror!*Obj {
     try refuseRemote();
     const entrypoint = p.str("entrypoint") orelse "sidebar";
@@ -373,6 +374,8 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
     try argv.appendSlice(rt.a, &.{ "split-window", "-d", "-P", "-F", PANE_FORMAT, "-t", paneTarget(target) });
     if (is_bar) {
         try argv.appendSlice(rt.a, &.{ "-v", "-b", "-l", "2" });
+    } else if (rt.eql(entrypoint, "usage")) {
+        try argv.appendSlice(rt.a, &.{ "-v", "-l", rt.fmt("{d}", .{p.int("rows") orelse 10}) });
     } else {
         try argv.appendSlice(rt.a, &.{ if (rt.eqlOpt(p.str("direction"), "down")) "-v" else "-h", "-l", "25%" });
         if (p.truthy("before")) try argv.append(rt.a, "-b");

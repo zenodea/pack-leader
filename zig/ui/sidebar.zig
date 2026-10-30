@@ -13,8 +13,6 @@ const ansi = @import("ansi.zig");
 const term = @import("term.zig");
 const theme_mod = @import("theme.zig");
 const sm = @import("sidebar_messages.zig");
-const usage_box = @import("usage_box.zig");
-const usage_scan = @import("../usage/scan.zig");
 const proc = @import("../core/proc.zig");
 
 const Obj = json.Obj;
@@ -381,9 +379,8 @@ const Sidebar = struct {
     keys: term.KeyReader = .{},
     state_mtime: i64 = 0,
     state_size: u64 = 0,
-    usage: ?*json.Obj = null,
-    usage_arena: Arena,
-    usage_mtime: i64 = 0,
+    /// The usage pane this sidebar opened below itself (page-allocated, lives as long as the sidebar).
+    usage_pane: ?[]const u8 = null,
 
     fn keepPanel(self: *Sidebar) void {
         if (self.panel) |*p| {
@@ -568,32 +565,40 @@ const Sidebar = struct {
         }
     }
 
-    /// Picks up the summary a background `lodestar usage` wrote; returns whether it changed.
-    fn loadUsage(self: *Sidebar) bool {
-        const st = fs.stat(usage_scan.summaryFile()) catch return false;
-        if (st.mtime_ms == self.usage_mtime) return false;
-        var next = newArena();
-        const prev = rt.a;
-        rt.a = next.allocator();
-        defer rt.a = prev;
-        const text = fs.readFileOpt(usage_scan.summaryFile()) orelse {
-            next.deinit();
-            return false;
+    /// Spend and plan limits get their own pane below the crew, `USAGE_ROWS` high. It runs
+    /// `lodestar usage --watch` with this process's pid and leaves when this sidebar is gone.
+    fn openUsagePane(self: *Sidebar) void {
+        const own = self.pane orelse return;
+        const height = term.size(30, 24).rows;
+        if (height < USAGE_ROWS * 2) return;
+        const env = json.object(.{.{ "LODESTAR_USAGE_PARENT_PID", rt.fmt("{d}", .{rt.pid}) }});
+        const p = json.object(.{ .{ "entrypoint", "usage" }, .{ "target_pane_id", own }, .{ "direction", "down" }, .{ "env", env } });
+        const herdr = rt.eql(mux.mux().name, "herdr");
+        if (!herdr) {
+            p.putInt("rows", USAGE_ROWS);
+            p.putInt("pct", @intCast(@divFloor(USAGE_ROWS * 100 + height - 1, height)));
+        }
+        const pane = mux.openToolPane(p) catch |err| {
+            mux.logMuxError("usage.open", err, json.object(.{.{ "pane", own }}));
+            return;
         };
-        const parsed = (json.parse(text) catch null) orelse {
-            next.deinit();
-            return false;
-        };
-        self.usage_arena.deinit();
-        self.usage_arena = next;
-        self.usage = parsed.asObj();
-        self.usage_mtime = st.mtime_ms;
-        return true;
+        const id = pane.str("pane_id") orelse return;
+        if (herdr and mux.caps().arrange) {
+            const ratio = 1.0 - @as(f64, @floatFromInt(USAGE_ROWS)) / @as(f64, @floatFromInt(height));
+            _ = mux.setSplitRatio(id, ratio) catch |err| mux.logMuxError("usage.open", err, json.object(.{.{ "pane", id }}));
+        }
+        mux.renamePane(id, "Usage");
+        _ = mux.paneFocus(own) catch {};
+        self.usage_pane = std.heap.page_allocator.dupe(u8, id) catch null;
     }
 
-    /// Reading the agents' logs takes seconds the first time, so it runs in its own process.
-    fn scanUsage(_: *Sidebar) void {
-        proc.spawnDetached(&.{ paths.lodestar_bin, "usage", "--quiet" }, .{}) catch {};
+    /// Runs this sidebar shows keep the usage pane's id, so crewmate splits leave it alone.
+    fn recordUsagePane(self: *Sidebar) void {
+        const id = self.usage_pane orelse return;
+        for (self.mine()) |r| if (!rt.eqlOpt(r.str("usage_pane_id"), id)) {
+            state.update(void, UsageCtx{ .sidebar = self.pane orelse return, .usage = id }, setUsagePane) catch {};
+            return;
+        };
     }
 
     fn sync(self: *Sidebar) void {
@@ -714,10 +719,6 @@ const Sidebar = struct {
         appendAll(&head, separator);
 
         var tail: std.ArrayListUnmanaged([]const u8) = .empty;
-        if (self.panel == null) {
-            tail.append(rt.a, "") catch {};
-            appendAll(&tail, usage_box.lines(self.usage, cols, rt.nowMs(), rows_avail < 24));
-        }
         if (self.panel == null) if (self.preview) |pv| if (self.preview_for) |pf| {
             tail.appendSlice(rt.a, &.{ "", dim(rt.concat(&.{ "── ", pf, " ──" })) }) catch {};
             for (pv) |l| tail.append(rt.a, truncate(l, cols)) catch {};
@@ -898,7 +899,13 @@ const TICK_MS: i64 = 5000;
 const CLOCK_MS: i64 = 1000;
 const STATE_POLL_MS: i64 = 150;
 const SUB_RECYCLE_MS: i64 = 60_000;
-const USAGE_SCAN_MS: i64 = 60_000;
+const USAGE_ROWS: usize = 10;
+
+const UsageCtx = struct { sidebar: []const u8, usage: []const u8 };
+
+fn setUsagePane(c: UsageCtx, s: State) !void {
+    for (state.activeRuns(s)) |r| if (rt.eqlOpt(r.str("sidebar_pane_id"), c.sidebar)) r.putStr("usage_pane_id", c.usage);
+}
 
 pub fn runSidebar() !void {
     const tty = term.isTty(0);
@@ -913,7 +920,6 @@ pub fn runSidebar() !void {
         .preview_arena = newArena(),
         .msg_arena = newArena(),
         .sub_arena = newArena(),
-        .usage_arena = newArena(),
         .theme = theme_mod.loadTheme(),
         .pane = own_pane,
         .workspace = shared.workspaceOf(own_pane),
@@ -936,8 +942,7 @@ pub fn runSidebar() !void {
     rt.a = sb.frame.allocator();
     sb.refreshLive();
     sb.serviceSubscription();
-    _ = sb.loadUsage();
-    sb.scanUsage();
+    if (tty) sb.openUsagePane();
     sb.draw();
     _ = sb.frame.reset(.retain_capacity);
     term.installQuitSignals();
@@ -947,7 +952,6 @@ pub fn runSidebar() !void {
     var next_tick = rt.monoMs() + TICK_MS;
     var next_clock = rt.monoMs() + CLOCK_MS;
     var next_poll = rt.monoMs() + STATE_POLL_MS;
-    var next_usage = rt.monoMs() + USAGE_SCAN_MS;
     while (true) {
         rt.a = sb.frame.allocator();
         defer _ = sb.frame.reset(.retain_capacity);
@@ -994,17 +998,13 @@ pub fn runSidebar() !void {
             next_tick = t + TICK_MS;
             sb.sync();
             sb.refreshLive();
+            sb.recordUsagePane();
             sb.schedule();
             if (t - sb.sub_born >= SUB_RECYCLE_MS) sb.recycleSubscription();
         }
         if (t >= next_clock) {
             next_clock = t + CLOCK_MS;
-            _ = sb.loadUsage();
             sb.schedule();
-        }
-        if (t >= next_usage) {
-            next_usage = t + USAGE_SCAN_MS;
-            sb.scanUsage();
         }
         if (sb.draw_due) |d| if (rt.monoMs() >= d) {
             sb.draw_due = null;

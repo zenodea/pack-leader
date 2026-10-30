@@ -46,6 +46,13 @@ title = "Crew"
 placement = "split"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/lodestar\" sidebar"]
 
+# Spend and plan limits, below the sidebar. The sidebar opens it and it leaves when the sidebar does.
+[[panes]]
+id = "usage"
+title = "Usage"
+placement = "split"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/lodestar\" usage --watch"]
+
 # The two-row bar above a crewmate's pane: a click (or Enter) there goes back to the orchestrator.
 [[panes]]
 id = "bar"
