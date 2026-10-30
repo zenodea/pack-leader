@@ -12,7 +12,7 @@ It opens in your terminal and covers:
 
 | Setting | What it controls | Default |
 | --- | --- | --- |
-| Harness | Which agent new crewmates run: Claude Code, Codex or pi | Claude Code |
+| Harness | Which agent new crewmates run: Claude Code, Codex, pi or fx | Claude Code |
 | Model and effort | The model and thinking level for each harness | The harness's own default |
 | Placement | Crewmates in hidden tabs, or split beside the leader | Hidden tabs |
 | Worktrees | Always give crewmates a worktree, never, or let the leader decide | Leader decides |

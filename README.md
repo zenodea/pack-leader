@@ -6,8 +6,8 @@ Lodestar lets one coding agent run a team of others. You talk to a single agent,
 leader. It splits your request into tasks, starts a crewmate agent for each one,
 answers their questions, reads their reports and merges the results.
 
-- **Agents:** Claude Code, Codex and pi, as the leader or as crewmates, in any mix.
-- **Terminals:** runs inside [herdr](https://herdr.dev) or tmux. Rex is next.
+- **Agents:** Claude Code, Codex and pi, as the leader or as crewmates, in any mix; Vercel fx as a crewmate.
+- **Terminals:** runs inside [herdr](https://herdr.dev), tmux or Rex.
 - **Memory:** tasks, specs, every attempt and every report live in a state file
   outside the agents, so a cleared session or a closed tab loses nothing.
 

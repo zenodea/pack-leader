@@ -1,6 +1,8 @@
 //! Rex backend (Superlogical Rex). A Rex session is a workspace, a window is a tab, a block is a pane. Ids are
 //! rewritten to herdr's shape so the rest of Lodestar can parse them: `session:U` is `sU`, `window:V` is `wV`,
-//! block `block:B` in session `session:U` is `sU:bB`. Agent status comes from agent hooks (see agent_status.zig).
+//! block `block:B` in session `session:U` is `sU:bB`. Agent status is Rex's own: Claude Code, Codex and fx report
+//! it to Rex (OSC 7501, the Program Status Protocol) and Lodestar reads each block's `program_status`. pi does not,
+//! so Lodestar starts pi with a small extension that sends the same reports (see agent_status.zig).
 //!
 //! Checked against Rex 0.1.0 (server 0.0.1793299046) with `rex api list --json`, a live session and the app.
 
@@ -9,6 +11,7 @@ const builtin = @import("builtin");
 const rt = @import("../rt.zig");
 const json = @import("../core/json.zig");
 const proc = @import("../core/proc.zig");
+const time = @import("../core/time.zig");
 const paths = @import("../core/paths.zig");
 const fs = @import("../core/fs.zig");
 const remote = @import("../herdr/remote.zig");
@@ -20,7 +23,7 @@ const Value = json.Value;
 const MuxEvent = types.MuxEvent;
 
 const SHELLS = [_][]const u8{ "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "login" };
-const AGENTS = [_][]const u8{ "claude", "codex", "pi" };
+const AGENTS = [_][]const u8{ "claude", "codex", "pi", "fx" };
 
 /// Rex puts `rex` on PATH only in its own terminals (as REX_BIN_DIR). Elsewhere, use the copy the macOS app
 /// installs, then PATH.
@@ -149,6 +152,12 @@ const Raw = struct {
     command: []const u8 = "",
     focused: bool = false,
     window_label: []const u8 = "",
+    /// What the program reported to Rex, in Lodestar's terms; empty when it reported nothing.
+    status: []const u8 = "",
+    /// When it last reported, in ms: Lodestar's state_change_seq.
+    status_at: i64 = 0,
+    /// The reporting program's `app`, such as `claude-code`.
+    status_app: []const u8 = "",
 };
 
 fn firstStr(o: *const Obj, keys: []const []const u8) ?[]const u8 {
@@ -163,11 +172,13 @@ fn pwdPath(p: []const u8) []const u8 {
     return if (std.mem.indexOfScalar(u8, rest, '/')) |i| rest[i..] else "/";
 }
 
-/// The foreground process, as the `process` block method and `process_changed` give it (`foreground` with
-/// `name`, `cwd`, `pid`), or a flat name.
+/// The foreground process, as the `process` block method and `process_changed` give it, or a flat name. Rex
+/// says to label a process by the first of `script`, `argv0` and `name`: Claude Code's `name` is its version.
 fn foregroundName(o: *const Obj) ?[]const u8 {
     for ([_][]const u8{ "foreground", "process", "foreground_process" }) |k| {
-        if (o.obj(k)) |f| if (f.strNonEmpty("name")) |n| return n;
+        if (o.obj(k)) |f| if (firstStr(f, &.{ "script", "argv0", "name" })) |n| {
+            return if (std.mem.lastIndexOfScalar(u8, n, '/')) |i| n[i + 1 ..] else n;
+        };
         if (o.strNonEmpty(k)) |n| return n;
     }
     return null;
@@ -241,8 +252,8 @@ fn sessionView(session: []const u8) ![]Raw {
     return viewBlocks(session, try call(session, "session.view", json.newObj()));
 }
 
-/// The view has no process, cwd or title; the terminal block's `process` method gives
-/// `foreground: {name, cwd, ...}` and `title` gives `{title}`.
+/// The view has no process, cwd, title or status; the terminal block's `process` method gives
+/// `foreground: {argv0, name, cwd, ...}`, `title` gives `{title}` and `program_status` what the program reported.
 fn inspect(r: *Raw) void {
     if (r.command.len == 0 or r.cwd.len == 0) {
         if (runJson(&.{ "block", "call", "-s", r.session, "-b", r.block, "process" }, null)) |o| absorb(r, o) else |_| {}
@@ -250,6 +261,20 @@ fn inspect(r: *Raw) void {
     if (r.title.len == 0) {
         if (runJson(&.{ "block", "call", "-s", r.session, "-b", r.block, "title" }, null)) |o| absorb(r, o) else |_| {}
     }
+    if (r.command.len > 0 and !isShell(r.command)) {
+        if (runJson(&.{ "block", "call", "-s", r.session, "-b", r.block, "program_status" }, null)) |o| absorbStatus(r, o) else |_| {}
+    }
+}
+
+/// The root record (no `id`) of `program_status`; records with an id are a program's sub-tasks.
+fn absorbStatus(r: *Raw, o: *const Obj) void {
+    const records = if (o.arr("records")) |x| x.objs() else return;
+    for (records) |rec| if (rec.strNonEmpty("id") == null) {
+        r.status = programState(rec.str("state") orelse "");
+        r.status_at = if (rec.str("updated_at")) |at| time.parse(at) orelse 0 else 0;
+        r.status_app = rec.str("app") orelse "";
+        return;
+    };
 }
 
 fn sessionIds() ![]const []const u8 {
@@ -300,17 +325,14 @@ fn detectedAgent(cmd: []const u8) ?[]const u8 {
     return null;
 }
 
-/// The agent record for a block: the hook-written status when Lodestar started it.
-fn statusFor(r: Raw) ?*Obj {
-    // A record outlives its agent: once the block is back at a shell, the agent has exited.
-    if (isShell(r.command)) return null;
-    const rec = agent_status.read(agent_status.REX_SERVER, agent_status.rexPaneKey(r.block)) orelse return null;
-    // Startup dialogs come before the agent's first hook; herdr reports them as blocked.
-    if (rt.eqlOpt(rec.str("agent_status"), "unknown") and agent_status.hasHooks(rec.str("agent")) and showsStartupDialog(r)) rec.putStr("agent_status", "blocked");
-    return rec;
+/// The block's agent status. Startup dialogs come before an agent's first report; herdr calls them blocked.
+fn statusOf(r: Raw) []const u8 {
+    if (r.status.len > 0) return r.status;
+    if (agentKind(r) != null and showsStartupDialog(r)) return "blocked";
+    return "unknown";
 }
 
-const DIALOG_MARKERS = [_][]const u8{ "Yes, I trust this folder", "Do you trust the files in this folder", "Allow Codex to work in this folder", "Hooks need review" };
+const DIALOG_MARKERS = [_][]const u8{ "Yes, I trust this folder", "Do you trust the files in this folder", "Allow Codex to work in this folder", "Trust this folder?", "Hooks need review" };
 
 fn showsStartupDialog(r: Raw) bool {
     const screen = visibleScreen(r.session, r.block) catch return false;
@@ -318,20 +340,22 @@ fn showsStartupDialog(r: Raw) bool {
     return false;
 }
 
-fn agentKind(r: Raw, rec: ?*Obj) ?[]const u8 {
-    if (isShell(r.command)) return null;
-    if (rec) |x| if (x.str("agent")) |k| return k;
-    return detectedAgent(r.command);
+/// The agent in a block, from its process or, failing that, the program that reports its status.
+fn agentKind(r: Raw) ?[]const u8 {
+    if (r.command.len == 0 or isShell(r.command)) return null;
+    if (detectedAgent(r.command)) |k| return k;
+    if (rt.eql(r.status_app, "claude-code")) return "claude";
+    return detectedAgent(r.status_app);
 }
 
 fn paneRecord(r: Raw) *Obj {
-    const rec = statusFor(r);
+    const kind = agentKind(r);
     return json.object(.{
         .{ "pane_id", paneId(r.session, r.block) },
         .{ "workspace_id", wsId(r.session) },
         .{ "tab_id", tabId(r.window) },
-        .{ "agent", json.optStr(agentKind(r, rec)) },
-        .{ "agent_status", if (rec) |x| x.str("agent_status") orelse "unknown" else "unknown" },
+        .{ "agent", json.optStr(kind) },
+        .{ "agent_status", if (kind != null) statusOf(r) else "unknown" },
         .{ "cwd", r.cwd },
         .{ "label", json.optStr(if (r.label.len > 0) r.label else null) },
         .{ "focused", r.focused },
@@ -339,17 +363,16 @@ fn paneRecord(r: Raw) *Obj {
 }
 
 fn agentRecord(r: Raw) ?*Obj {
-    const rec = statusFor(r);
-    const kind = agentKind(r, rec) orelse return null;
+    const kind = agentKind(r) orelse return null;
     return json.object(.{
         .{ "pane_id", paneId(r.session, r.block) },
         .{ "workspace_id", wsId(r.session) },
         .{ "tab_id", tabId(r.window) },
         .{ "agent", kind },
-        .{ "name", json.optStr(if (rec) |x| x.str("name") else null) },
-        .{ "agent_status", if (rec) |x| x.str("agent_status") orelse "unknown" else "unknown" },
-        .{ "state_change_seq", if (rec) |x| x.int("state_change_seq") orelse 0 else 0 },
-        .{ "completion_seq", if (rec) |x| x.int("completion_seq") orelse 0 else 0 },
+        .{ "name", json.optStr(if (r.window_label.len > 0) r.window_label else null) },
+        .{ "agent_status", statusOf(r) },
+        // Each report Rex records is newer than the last, so its time counts the changes.
+        .{ "state_change_seq", r.status_at },
         .{ "cwd", r.cwd },
         .{ "foreground_cwd", r.cwd },
         .{ "terminal_title_stripped", r.title },
@@ -367,11 +390,9 @@ fn listAgents() anyerror![]*Obj {
     return list.items;
 }
 
+/// A crewmate's tab is labelled with its name.
 fn findByName(name: []const u8) !?Raw {
-    for (try allPanes(null)) |r| {
-        const rec = agent_status.read(agent_status.REX_SERVER, agent_status.rexPaneKey(r.block)) orelse continue;
-        if (rt.eqlOpt(rec.str("name"), name)) return r;
-    }
+    for (try allPanes(null)) |r| if (agentKind(r) != null and (rt.eql(r.window_label, name) or rt.eql(r.label, name))) return r;
     return null;
 }
 
@@ -485,7 +506,6 @@ fn paneSplit(p: *Obj) anyerror!*Obj {
 fn paneClose(pane_id: []const u8) anyerror!Value {
     try refuseRemote();
     _ = try call(sessionFor(pane_id), "block.close", json.object(.{.{ "block_id", blockTarget(pane_id) }}));
-    agent_status.forget(agent_status.REX_SERVER, agent_status.rexPaneKey(blockTarget(pane_id)));
     return json.newObj().val();
 }
 
@@ -612,14 +632,14 @@ fn agentStart(p: *Obj) anyerror!Value {
     if (r.command.len > 0 and !isShell(r.command)) return rt.fail("agent_pane_busy", "pane {s} is running {s}, not a shell", .{ pane_id, r.command });
     var line: std.ArrayListUnmanaged(u8) = .empty;
     try line.appendSlice(rt.a, shellQuote(kind));
-    for (agent_status.hookArgs(kind, paths.lodestar_bin)) |x| try line.appendSlice(rt.a, rt.concat(&.{ " ", shellQuote(x) }));
+    // Rex hears from Claude Code, Codex and fx directly; pi needs its reporting extension.
+    if (rt.eql(kind, "pi")) for (agent_status.hookArgs(kind, paths.lodestar_bin)) |x| try line.appendSlice(rt.a, rt.concat(&.{ " ", shellQuote(x) }));
     if (p.arr("args")) |args| for (args.strs()) |x| try line.appendSlice(rt.a, rt.concat(&.{ " ", shellQuote(x) }));
-    _ = try agent_status.write(agent_status.REX_SERVER, agent_status.rexPaneKey(r.block), .{ .reset = true, .agent = kind, .name = p.str("name") });
     try sendText(r, line.items);
     try sendKey(r, "enter");
     const timeout_ms = p.int("timeout_ms") orelse 30_000;
     const deadline = rt.monoMs() + timeout_ms;
-    // Like herdr's agent.start: done once the agent process runs; its hooks report readiness later. When Rex
+    // Like herdr's agent.start: done once the agent process runs; it reports readiness to Rex later. When Rex
     // does not report the foreground process, there is nothing to wait on.
     while (true) {
         rt.sleepMs(200);
@@ -638,25 +658,19 @@ pub fn pasted(text: []const u8) []const u8 {
 
 fn agentPrompt(target: []const u8, text: []const u8) anyerror!Value {
     try refuseRemote();
-    const r = try resolveAgent(target);
-    var rec = statusFor(r);
-    // An agent with hooks is ready once it has reported; pasting earlier loses the prompt.
-    if (rec) |x| if (agent_status.hasHooks(x.str("agent"))) {
-        const deadline = rt.monoMs() + 20_000;
-        while (rt.eqlOpt(rec.?.str("agent_status"), "unknown")) {
-            if (rt.monoMs() > deadline) return rt.fail("agent_not_ready", "agent in pane {s} has not reported ready yet", .{target});
-            rt.sleepMs(250);
-            rec = statusFor(try rawPane(paneId(r.session, r.block))) orelse return rt.fail("agent_not_found", "the agent in pane {s} exited", .{target});
-        }
-    };
-    if (rec) |x| if (rt.eqlOpt(x.str("agent_status"), "blocked")) return rt.fail("agent_blocked", "agent in pane {s} is waiting on a dialog", .{target});
+    var r = try resolveAgent(target);
+    // An agent is ready once it has reported to Rex; pasting earlier can lose the prompt. One that never reports
+    // (no record after the wait, no dialog on screen) gets the prompt anyway.
+    const deadline = rt.monoMs() + 20_000;
+    while (rt.eql(statusOf(r), "unknown") and rt.monoMs() < deadline) {
+        rt.sleepMs(250);
+        r = try rawPane(paneId(r.session, r.block));
+        if (agentKind(r) == null) return rt.fail("agent_not_found", "the agent in pane {s} exited", .{target});
+    }
+    if (rt.eql(statusOf(r), "blocked")) return rt.fail("agent_blocked", "agent in pane {s} is waiting on a dialog", .{target});
     try sendText(r, pasted(text));
     rt.sleepMs(150);
     try sendKey(r, "enter");
-    // We submitted the input ourselves; agents with a completion hook will report the end of the turn.
-    if (rec) |x| if (agent_status.hasHooks(x.str("agent"))) {
-        _ = agent_status.write(agent_status.REX_SERVER, agent_status.rexPaneKey(r.block), .{ .status = "working" }) catch {};
-    };
     return json.newObj().val();
 }
 
@@ -919,7 +933,7 @@ fn reachable() bool {
 
 pub const backend: types.Multiplexer = .{
     .name = "rex",
-    .capabilities = .{ .agent_status = .hooks, .events = true, .layout_tree = false, .arrange = false, .workspaces = false },
+    .capabilities = .{ .agent_status = .native, .events = true, .layout_tree = false, .arrange = false, .workspaces = false },
 
     .listAgents = listAgents,
     .getAgent = getAgent,

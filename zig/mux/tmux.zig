@@ -15,7 +15,7 @@ const Obj = json.Obj;
 const Value = json.Value;
 
 const SHELLS = [_][]const u8{ "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "login" };
-const AGENTS = [_][]const u8{ "claude", "codex", "pi" };
+const AGENTS = [_][]const u8{ "claude", "codex", "pi", "fx" };
 
 const SEP = "\x1f";
 const PANE_FORMAT = "#{session_id}" ++ SEP ++ "#{window_id}" ++ SEP ++ "#{pane_id}" ++ SEP ++ "#{pane_current_path}" ++ SEP ++

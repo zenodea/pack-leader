@@ -899,7 +899,10 @@ const TICK_MS: i64 = 5000;
 const CLOCK_MS: i64 = 1000;
 const STATE_POLL_MS: i64 = 150;
 const SUB_RECYCLE_MS: i64 = 60_000;
-const USAGE_ROWS: usize = 10;
+/// Enough for the usage table: header, column titles, three agents, the total and two plan limits.
+const USAGE_ROWS: usize = 12;
+/// A new pane may start at a default size until the multiplexer's client sizes it; wait this long for that.
+const USAGE_OPEN_MS: i64 = 1000;
 
 const UsageCtx = struct { sidebar: []const u8, usage: []const u8 };
 
@@ -943,13 +946,13 @@ pub fn runSidebar() !void {
     rt.a = sb.frame.allocator();
     sb.refreshLive();
     sb.serviceSubscription();
-    if (tty) sb.openUsagePane();
     sb.draw();
     _ = sb.frame.reset(.retain_capacity);
     term.installQuitSignals();
     term.installWinch();
     if (tty) sb.raw.enable();
 
+    var usage_at: ?i64 = if (tty) rt.monoMs() + USAGE_OPEN_MS else null;
     var next_tick = rt.monoMs() + TICK_MS;
     var next_clock = rt.monoMs() + CLOCK_MS;
     var next_poll = rt.monoMs() + STATE_POLL_MS;
@@ -958,12 +961,17 @@ pub fn runSidebar() !void {
         defer _ = sb.frame.reset(.retain_capacity);
         if (term.got_signal.load(.seq_cst) != 0) sb.quit();
         if (term.got_winch.swap(false, .seq_cst)) sb.schedule();
+        if (usage_at) |at| if (rt.monoMs() >= at) {
+            usage_at = null;
+            sb.openUsagePane();
+        };
 
         const now = rt.monoMs();
         var wait = @min(next_tick, @min(next_clock, next_poll)) - now;
         if (sb.draw_due) |d| wait = @min(wait, d - now);
         if (sb.sub.retryInMs()) |r| wait = @min(wait, r);
         if (sb.keys.timeoutMs()) |k| wait = @min(wait, k);
+        if (usage_at) |at| wait = @min(wait, at - now);
         wait = @max(0, wait);
 
         var fds: [2]std.posix.pollfd = undefined;

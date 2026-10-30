@@ -17,12 +17,14 @@ pub const KINDS = [_]PickItem{
     .{ .value = "claude", .description = "Claude Code" },
     .{ .value = "codex", .description = "OpenAI Codex" },
     .{ .value = "pi", .description = "pi coding agent" },
+    .{ .value = "fx", .description = "Vercel fx" },
 };
 
 pub fn thinkingFor(kind: []const u8) ?[]const []const u8 {
     if (rt.eql(kind, "claude")) return &.{ "low", "medium", "high", "xhigh", "max" };
     if (rt.eql(kind, "codex")) return &.{ "minimal", "low", "medium", "high", "xhigh" };
     if (rt.eql(kind, "pi")) return &.{ "off", "minimal", "low", "medium", "high", "xhigh", "max" };
+    if (rt.eql(kind, "fx")) return &.{ "auto", "minimal", "low", "medium", "high", "xhigh" };
     return null;
 }
 
@@ -44,8 +46,25 @@ pub fn piModels() []const Model {
     return out.items;
 }
 
+/// `fx models` lists ` - <id> · <provider>` under a `[models]` header.
+pub fn fxModels() []const PickItem {
+    const res = proc.run(&.{ "fx", "models" }, .{});
+    if (!res.ok()) return &.{};
+    var out: std.ArrayListUnmanaged(PickItem) = .empty;
+    for (ansi.splitLines(res.stdout)) |l| {
+        const t = rt.trim(l);
+        if (!rt.startsWith(t, "- ")) continue;
+        const rest = t[2..];
+        const sep = std.mem.indexOf(u8, rest, " · ");
+        const id = rt.trim(if (sep) |i| rest[0..i] else rest);
+        if (id.len > 0) out.append(rt.a, .{ .value = id, .description = if (sep) |i| rt.trim(rest[i + " · ".len ..]) else null }) catch {};
+    }
+    return out.items;
+}
+
 pub fn modelsFor(kind: []const u8) []const PickItem {
     if (rt.eql(kind, "claude")) return &.{ .{ .value = "opus" }, .{ .value = "sonnet" }, .{ .value = "haiku" } };
+    if (rt.eql(kind, "fx")) return fxModels();
     const models = piModels();
     var out: std.ArrayListUnmanaged(PickItem) = .empty;
     for (models) |m| {

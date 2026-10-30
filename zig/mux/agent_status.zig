@@ -1,5 +1,6 @@
-//! Agent status for multiplexers that cannot see inside a pane (tmux, Rex). Agents report through hooks that run
-//! `lodestar __agent-status STATUS`; the record lives in `<state_dir>/agent-status/<server>-<pane>.json`.
+//! Agent status for tmux, which cannot see inside a pane. Agents report through hooks that run
+//! `lodestar __agent-status STATUS`; the record lives in `<state_dir>/agent-status/<server>-<pane>.json`. Rex needs
+//! none of this (agents report to Rex itself), except pi, whose extension below reports to Rex directly.
 
 const std = @import("std");
 const rt = @import("../rt.zig");
@@ -101,27 +102,14 @@ pub fn tmuxServerFromEnv() ?[]const u8 {
     return if (pid.len > 0) pid else null;
 }
 
-/// Rex block ids are never reused, so one server key serves every Rex server.
-pub const REX_SERVER = "rex";
-
-/// `block:<uuid>` -> `<uuid>`, the pane part of a Rex block's record.
-pub fn rexPaneKey(block: []const u8) []const u8 {
-    return if (std.mem.lastIndexOfScalar(u8, block, ':')) |c| block[c + 1 ..] else block;
-}
-
 /// `lodestar __agent-status STATUS [...]`, run by an agent's hook inside its pane. Never fails loudly.
 pub fn runHookCommand(argv: []const []const u8) void {
     const raw = if (argv.len > 0) argv[0] else return;
     const status = if (rt.eql(raw, "stop")) "idle" else raw;
     if (!isStatus(status)) return;
-    // tmux first: a tmux running inside a Rex terminal owns the pane the agent is in.
-    if (tmuxServerFromEnv()) |server| {
-        const pane = rt.getenvNonEmpty("TMUX_PANE") orelse return;
-        _ = write(server, pane, .{ .status = status }) catch {};
-        return;
-    }
-    const block = rt.getenvNonEmpty("REX_BLOCK") orelse return;
-    _ = write(REX_SERVER, rexPaneKey(block), .{ .status = status }) catch {};
+    const server = tmuxServerFromEnv() orelse return;
+    const pane = rt.getenvNonEmpty("TMUX_PANE") orelse return;
+    _ = write(server, pane, .{ .status = status }) catch {};
 }
 
 fn shellQuote(v: []const u8) []const u8 {
@@ -143,16 +131,20 @@ fn hookGroup(bin: []const u8, matcher: ?[]const u8, status: []const u8) json.Val
     return arr.val();
 }
 
-/// pi has no hooks, but loads extensions with `-e FILE`: this one reports a session's start, each run and the
-/// point where pi will not continue on its own. Calls are synchronous so the reports arrive in order.
+/// pi has no hooks and does not report to Rex, but loads extensions with `-e FILE`: this one reports a session's
+/// start, each run and the point where pi will not continue on its own. In Rex it tells Rex (OSC 7501, as Claude
+/// Code and Codex do); in tmux it runs `lodestar __agent-status`, synchronously so the reports arrive in order.
 fn piExtension(bin: []const u8) []const u8 {
     return rt.concat(&.{
-        \\// Written by Lodestar: reports this pi session's status, since tmux and Rex cannot see inside a pane.
+        \\// Written by Lodestar: reports this pi session's status to Rex, or to Lodestar under tmux.
         \\import { spawnSync } from "node:child_process";
+        \\
+        \\const inRex = !!process.env.REX_BLOCK && !process.env.TMUX;
         \\
         \\function report(status: string) {
         \\  try {
-        \\    spawnSync(
+        \\    if (inRex) process.stdout.write("\x1b]7501;state=" + status + ":app=pi\x1b\\");
+        \\    else spawnSync(
     ,
         json.stringify(.{ .str = bin }, false),
         \\, ["__agent-status", status], { stdio: "ignore", timeout: 5000 });

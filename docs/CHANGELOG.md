@@ -9,8 +9,10 @@
   prints it as JSON.
 - **Rex** works as a multiplexer next to herdr and tmux: inside a Rex terminal Lodestar
   uses Rex (or set `LODESTAR_MUX=rex`). The skill now accepts herdr, tmux or Rex.
-- On tmux and Rex, pi crewmates now report idle and working through a small pi extension
-  Lodestar loads with `-e`, instead of showing `?`.
+- On Rex, agent status comes from Rex itself: Claude Code, Codex and fx report it to Rex,
+  and Lodestar no longer adds hooks or writes status files there. pi gets a small extension
+  (`pi -e`) that reports to Rex the same way (under tmux, to Lodestar).
+- **fx** (Vercel) is a crewmate type: `--kind fx`, or pick it under Harness in settings.
 - A Codex crewmate waiting at Codex's "Hooks need review" prompt shows as blocked, not `?`.
 - On Rex the sidebar column is 30% of the window and keeps that size with the app attached.
 
