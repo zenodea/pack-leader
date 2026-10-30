@@ -365,6 +365,8 @@ const Sidebar = struct {
     draw_due: ?i64 = null,
     theme: Theme,
     mouse_off: []const u8 = "",
+    /// A mouse report the last read cut off.
+    input_tail: IdBuf = .{},
     box_spans: std.ArrayListUnmanaged(Span) = .empty,
     drawn_scroll: i64 = 0,
     drawn_header: i64 = 0,
@@ -585,7 +587,8 @@ const Sidebar = struct {
             _ = mux.setSplitRatio(id, ratio) catch |err| mux.logMuxError("usage.open", err, json.object(.{.{ "pane", id }}));
         }
         mux.renamePane(id, "Usage");
-        _ = mux.paneFocus(own) catch {};
+        // tmux and Rex split without moving focus; on Rex, focusing would also switch the app to this tab.
+        if (herdr) _ = mux.paneFocus(own) catch {};
         self.usage_pane = std.heap.page_allocator.dupe(u8, id) catch null;
     }
 
@@ -791,6 +794,16 @@ const Sidebar = struct {
         self.schedule();
     }
 
+    /// The wheel moves like j/k but stops at the first and last crewmate: a trackpad sends a burst of
+    /// steps, and wrapping round would land it at the other end of the list.
+    fn scrollBy(self: *Sidebar, by: i64) void {
+        if (self.panel == null) {
+            const n = self.rows().len;
+            if (n == 0 or (by < 0 and self.sel == 0) or (by > 0 and self.sel + 1 >= n)) return;
+        }
+        self.move(by);
+    }
+
     fn setPreview(self: *Sidebar, text: []const u8, for_name: []const u8) void {
         var next = newArena();
         const al = next.allocator();
@@ -811,9 +824,10 @@ const Sidebar = struct {
     }
 
     fn onInput(self: *Sidebar, chunk: []const u8) void {
-        const split = term.splitMouse(chunk);
+        const split = term.splitMouse(rt.concat(&.{ self.input_tail.buf[0..self.input_tail.len], chunk }));
+        _ = self.input_tail.keep(split.pending);
         for (split.mouse) |m| {
-            if (m.button == 64) self.move(-1) else if (m.button == 65) self.move(1) else if (m.press and m.button == 0 and self.panel == null) {
+            if (m.wheel() != 0) self.scrollBy(m.wheel()) else if (m.press and m.button == 0 and self.panel == null) {
                 const c = clickOn(boxAt(self.box_spans.items, self.drawn_scroll, m.y - self.drawn_header, self.drawn_avail), self.sel);
                 if (c.sel == self.sel and !c.open) continue;
                 self.sel = c.sel;

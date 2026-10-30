@@ -244,8 +244,23 @@ pub const KeyReader = struct {
     }
 };
 
-pub const Mouse = struct { button: u32, x: i64, y: i64, press: bool };
-pub const SplitMouse = struct { keys: []const u8, mouse: []Mouse };
+pub const Mouse = struct {
+    button: u32,
+    x: i64,
+    y: i64,
+    press: bool,
+
+    /// -1 for wheel up, 1 for wheel down, whatever Shift, Alt or Ctrl add to the button.
+    pub fn wheel(self: Mouse) i64 {
+        return switch (self.button & ~@as(u32, 4 | 8 | 16)) {
+            64 => -1,
+            65 => 1,
+            else => 0,
+        };
+    }
+};
+/// `pending` is a report cut off at the end of the chunk: put it before the next read.
+pub const SplitMouse = struct { keys: []const u8, mouse: []Mouse, pending: []const u8 = "" };
 
 /// Remove SGR mouse reports `\x1b[<b;x;y(M|m)` from the input.
 pub fn splitMouse(chunk: []const u8) SplitMouse {
@@ -253,18 +268,23 @@ pub fn splitMouse(chunk: []const u8) SplitMouse {
     var mouse: std.ArrayListUnmanaged(Mouse) = .empty;
     var i: usize = 0;
     outer: while (i < chunk.len) {
+        const prefix = chunk[i..@min(chunk.len, i + 3)];
+        if (prefix.len < 3 and std.mem.startsWith(u8, "\x1b[<", prefix) and prefix.len > 1) {
+            return .{ .keys = keys.items, .mouse = mouse.items, .pending = rt.dupe(chunk[i..]) };
+        }
         if (chunk[i] == 0x1b and i + 2 < chunk.len and chunk[i + 1] == '[' and chunk[i + 2] == '<') {
             var nums: [3]u64 = .{ 0, 0, 0 };
             var j = i + 3;
             for (0..3) |k| {
                 const s = j;
                 while (j < chunk.len and chunk[j] >= '0' and chunk[j] <= '9') j += 1;
+                if (j >= chunk.len) return .{ .keys = keys.items, .mouse = mouse.items, .pending = rt.dupe(chunk[i..]) };
                 if (j == s) break;
                 nums[k] = std.fmt.parseInt(u64, chunk[s..j], 10) catch 0;
                 if (k < 2) {
-                    if (j >= chunk.len or chunk[j] != ';') break;
+                    if (chunk[j] != ';') break;
                     j += 1;
-                } else if (j < chunk.len and (chunk[j] == 'M' or chunk[j] == 'm')) {
+                } else if (chunk[j] == 'M' or chunk[j] == 'm') {
                     mouse.append(rt.a, .{ .button = @intCast(@min(nums[0], std.math.maxInt(u32))), .x = @intCast(nums[1]), .y = @intCast(nums[2]), .press = chunk[j] == 'M' }) catch {};
                     i = j + 1;
                     continue :outer;
@@ -319,4 +339,11 @@ test "parseKeys follows readline names" {
     try std.testing.expectEqualStrings("ab", m.keys);
     try std.testing.expectEqual(@as(usize, 2), m.mouse.len);
     try std.testing.expect(m.mouse[0].button == 64 and m.mouse[0].press and m.mouse[1].y == 2 and !m.mouse[1].press);
+    const cut = splitMouse("x\x1b[<65;10");
+    try std.testing.expectEqualStrings("x", cut.keys);
+    try std.testing.expectEqualStrings("\x1b[<65;10", cut.pending);
+    const rest = splitMouse("\x1b[<65;10;5M");
+    try std.testing.expectEqual(@as(i64, 1), rest.mouse[0].wheel());
+    try std.testing.expectEqualStrings("\x1b[", splitMouse("\x1b[").pending);
+    try std.testing.expectEqual(@as(i64, -1), (Mouse{ .button = 64 + 4, .x = 0, .y = 0, .press = true }).wheel());
 }

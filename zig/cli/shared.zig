@@ -143,7 +143,9 @@ pub fn openSidebar(target: []const u8, on_left: bool, focus: bool) ![]const u8 {
         const pane = try mux.openToolPane(json.object(.{ .{ "entrypoint", "sidebar" }, .{ "target_pane_id", target }, .{ "direction", "right" }, .{ "before", on_left } }));
         const id = pane.str("pane_id") orelse return rt.fail(null, "{s} did not report the sidebar pane id", .{mux.mux().name});
         if (owner) |o| state.update(void, SidebarCtx{ .run_id = o.str("id").?, .pane = id }, setSidebar) catch {};
-        _ = mux.paneFocus(if (focus) id else target) catch {};
+        // The split left focus where it was. Focusing the leader again would make the Rex app switch to its tab
+        // while the user works somewhere else.
+        if (focus) _ = mux.paneFocus(id) catch {};
         return id;
     }
     const plugin_id = rt.getenvNonEmpty("HERDR_PLUGIN_ID") orelse "lodestar";
