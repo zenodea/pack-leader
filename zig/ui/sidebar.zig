@@ -574,10 +574,7 @@ const Sidebar = struct {
         const env = json.object(.{.{ "LODESTAR_USAGE_PARENT_PID", rt.fmt("{d}", .{rt.pid}) }});
         const p = json.object(.{ .{ "entrypoint", "usage" }, .{ "target_pane_id", own }, .{ "direction", "down" }, .{ "env", env } });
         const herdr = rt.eql(mux.mux().name, "herdr");
-        if (!herdr) {
-            p.putInt("rows", USAGE_ROWS);
-            p.putInt("pct", @intCast(@divFloor(USAGE_ROWS * 100 + height - 1, height)));
-        }
+        if (!herdr) p.putInt("rows", USAGE_ROWS);
         const pane = mux.openToolPane(p) catch |err| {
             mux.logMuxError("usage.open", err, json.object(.{.{ "pane", own }}));
             return;

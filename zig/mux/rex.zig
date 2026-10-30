@@ -455,10 +455,21 @@ fn newShare(ratio: ?f64) f64 {
 }
 
 /// The block's height in rows, as the server last sized it.
-fn blockRows(pane_id: []const u8) ?i64 {
+/// The block's size, as the server last sized it (`columns`, `rows`).
+fn blockSize(pane_id: []const u8) ?*Obj {
     const s = sessionFor(pane_id) orelse return null;
-    const o = runJson(&.{ "block", "call", "-s", s, "-b", blockTarget(pane_id), "size" }, null) catch return null;
-    return o.int("rows");
+    return runJson(&.{ "block", "call", "-s", s, "-b", blockTarget(pane_id), "size" }, null) catch null;
+}
+
+fn blockRows(pane_id: []const u8) ?i64 {
+    return if (blockSize(pane_id)) |o| o.int("rows") else null;
+}
+
+/// `want` cells out of the target's `total`, as a share kept between `lo` and `hi`.
+fn cellsShare(want: i64, total: ?i64, lo: f64, hi: f64) f64 {
+    const t = total orelse return hi;
+    if (t <= 0) return hi;
+    return std.math.clamp(@as(f64, @floatFromInt(want)) / @as(f64, @floatFromInt(t)), lo, hi);
 }
 
 /// With the app attached, `rex split` goes through the app, which splits evenly whatever `--ratio` says; set the
@@ -526,7 +537,8 @@ fn labelPane(pane_id: []const u8, title: ?[]const u8) void {
 }
 
 /// The sidebar column's share of the window: the leader and navigator keep 70%.
-const SIDEBAR_SHARE: f64 = 0.30;
+/// The sidebar column: wide enough for the crew boxes, and never more than 30% of the window.
+const SIDEBAR_COLS: i64 = 48;
 
 fn toolCommand(entrypoint: []const u8) []const []const u8 {
     if (rt.eql(entrypoint, "bar")) return rt.a.dupe([]const u8, &.{ "bash", rt.concat(&.{ paths.plugin_root, "/bin/leader-bar" }) }) catch @panic("out of memory");
@@ -534,8 +546,9 @@ fn toolCommand(entrypoint: []const u8) []const []const u8 {
     return rt.a.dupe([]const u8, &.{ paths.lodestar_bin, entrypoint }) catch @panic("out of memory");
 }
 
-/// Lodestar's own UI in a split: "sidebar" (a column, `SIDEBAR_SHARE` wide), "bar" (a thin strip above the target) or
-/// "usage" (below the target; `pct` percent of it). Extra keys: `before` (bool) opens it left of/above the target.
+/// Lodestar's own UI in a split: "sidebar" (a column `SIDEBAR_COLS` wide), "bar" (a thin strip above the target) or
+/// "usage" (`rows` rows below the target). Sizes come from the target's size on the server, which is the app's
+/// real size once a client shows it. Extra keys: `before` (bool) opens it left of/above the target.
 fn openToolPane(p: *Obj) anyerror!*Obj {
     try refuseRemote();
     const entrypoint = p.str("entrypoint") orelse "sidebar";
@@ -546,12 +559,13 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
         return paneRecord(try split(target, "above", 2.0 / @as(f64, @floatFromInt(@max(4, rows))), null, p.obj("env"), toolCommand(entrypoint)));
     }
     if (rt.eql(entrypoint, "usage")) {
-        const pct: f64 = @floatFromInt(p.int("pct") orelse 30);
-        return paneRecord(try split(target, "below", pct / 100, null, p.obj("env"), toolCommand(entrypoint)));
+        const share = cellsShare(p.int("rows") orelse 12, blockRows(target), 0.1, 0.5);
+        return paneRecord(try split(target, "below", share, null, p.obj("env"), toolCommand(entrypoint)));
     }
     const down = rt.eqlOpt(p.str("direction"), "down");
     const side = if (p.truthy("before")) (if (down) "above" else "left") else (if (down) "below" else "right");
-    return paneRecord(try split(target, side, SIDEBAR_SHARE, null, p.obj("env"), toolCommand(entrypoint)));
+    const cols = if (blockSize(target)) |o| o.int("columns") else null;
+    return paneRecord(try split(target, side, cellsShare(SIDEBAR_COLS, cols, 0.2, 0.3), null, p.obj("env"), toolCommand(entrypoint)));
 }
 
 fn tabCreate(p: *Obj) anyerror!types.TabCreated {
