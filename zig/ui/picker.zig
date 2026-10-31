@@ -73,7 +73,7 @@ fn draw(o: PickOptions, query: []const u8, sel: usize, visible: []const PickItem
     const cols = sz.cols;
     const rows = sz.rows;
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
-    lines.appendSlice(rt.a, &.{ ansi.bold(o.title), "" }) catch {};
+    lines.appendSlice(rt.a, &.{ "", ansi.bold(o.title), "" }) catch {};
     lines.append(rt.a, rt.concat(&.{ ansi.fg.cyan("›"), " ", query, ansi.inverse(" ") })) catch {};
     lines.append(rt.a, "") catch {};
     const room: usize = @intCast(@max(1, @as(i64, @intCast(rows)) - @as(i64, @intCast(lines.items.len)) - 2));
@@ -88,14 +88,14 @@ fn draw(o: PickOptions, query: []const u8, sel: usize, visible: []const PickItem
         lines.append(rt.a, if (index == sel) rt.concat(&.{ ansi.fg.cyan("❯"), " ", ansi.fg.cyan(text) }) else rt.concat(&.{ "  ", text })) catch {};
     }
     if (visible.len == 0) lines.append(rt.a, ansi.dim(if (o.allowCustom) rt.fmt("  no match, enter uses \"{s}\"", .{query}) else "  no match")) catch {};
-    const hint = o.hint orelse "type to search · enter picks · esc cancels";
+    const hint = o.hint orelse "type to search · ctrl-j/k move · enter picks · esc cancels";
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     buf.appendSlice(rt.a, ansi.screen.home) catch {};
     for (0..rows) |r| {
-        const line = if (r < lines.items.len) lines.items[r] else if (r == rows - 1) ansi.dim(hint) else "";
+        const line = if (r < lines.items.len) lines.items[r] else if (r == rows - 2) ansi.dim(hint) else "";
         buf.appendSlice(rt.a, ansi.screen.at(r + 1, 1)) catch {};
         buf.appendSlice(rt.a, ansi.screen.clearLine) catch {};
-        buf.appendSlice(rt.a, ansi.truncate(line, @intCast(cols))) catch {};
+        if (line.len > 0) buf.appendSlice(rt.a, rt.concat(&.{ "  ", ansi.truncate(line, @as(i64, @intCast(cols)) - 4) })) catch {};
     }
     rt.writeStdout(buf.items);
 }
@@ -147,9 +147,9 @@ pub fn pick(o: PickOptions) !?[]const u8 {
                 query = sliceUnits(query, true);
                 visible = fuzzyFilter(query, o.items);
                 sel = 0;
-            } else if (key.ctrl and rt.eql(name, "k")) {
+            } else if (key.ctrl and (rt.eql(name, "k") or rt.eql(name, "p"))) {
                 sel = step(sel, -1, visible.len);
-            } else if (key.ctrl and rt.eql(name, "j")) {
+            } else if (key.ctrl and (rt.eql(name, "j") or rt.eql(name, "n"))) {
                 sel = step(sel, 1, visible.len);
             } else if (key.ctrl and rt.eql(name, "u")) {
                 query = "";

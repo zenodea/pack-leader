@@ -52,6 +52,7 @@ fn applySettingFlags(c: *Obj, a: *const Args) !void {
     }
     if (has(a, "navigator")) c.putBool("navigator", try onOff(a, "navigator"));
     if (has(a, "popup")) c.putBool("popup", try onOff(a, "popup"));
+    if (has(a, "usage-pane")) c.putBool("usage_pane", try onOff(a, "usage-pane"));
     if (has(a, "review")) c.putBool("review", try onOff(a, "review"));
     if (has(a, "stall-minutes")) {
         const n = args_mod.jsNumber(str(a, "stall-minutes") orelse "x");
@@ -88,7 +89,7 @@ fn openSettings(from_action: bool) !void {
 }
 
 const KIND_FLAGS = [_][]const u8{ "kind", "model", "thinking", "clear-model", "clear-thinking", "default" };
-const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "navigator", "popup", "review", "stall-minutes", "handoff", "handoff-at" };
+const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "navigator", "popup", "usage-pane", "review", "stall-minutes", "handoff", "handoff-at" };
 
 fn anyFlag(a: *const Args, names: []const []const u8) bool {
     for (names) |n| if (has(a, n)) return true;

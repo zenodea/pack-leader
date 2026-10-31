@@ -9,16 +9,17 @@ const routing = @import("routing.zig");
 const Obj = json.Obj;
 const Value = json.Value;
 
-/// The config file document: { kind, routing?, kinds, placement?, worktree?, navigator?, popup?, stall_minutes?, handoff?, ... }.
+/// The config file document: { kind, routing?, kinds, placement?, worktree?, navigator?, popup?, usage_pane?, stall_minutes?,
+/// handoff?, ... }.
 pub const Config = *Obj;
 
 pub const PLACEMENTS = [_][]const u8{ "tab", "split", "background" };
 pub const WORKTREE_MODES = [_][]const u8{ "on", "off", "leader", "shared" };
 
 pub const HandoffSettings = struct { enabled: bool, at_tokens: i64 };
-pub const Settings = struct { placement: []const u8, worktree: []const u8, navigator: bool, popup: bool, review: bool, stall_minutes: i64, handoff: HandoffSettings };
+pub const Settings = struct { placement: []const u8, worktree: []const u8, navigator: bool, popup: bool, usage_pane: bool, review: bool, stall_minutes: i64, handoff: HandoffSettings };
 
-pub const DEFAULT_SETTINGS: Settings = .{ .placement = "tab", .worktree = "leader", .navigator = true, .popup = true, .review = true, .stall_minutes = 20, .handoff = .{ .enabled = false, .at_tokens = 200_000 } };
+pub const DEFAULT_SETTINGS: Settings = .{ .placement = "tab", .worktree = "leader", .navigator = true, .popup = true, .usage_pane = true, .review = true, .stall_minutes = 20, .handoff = .{ .enabled = false, .at_tokens = 200_000 } };
 
 pub fn settingsOf(config: Config) Settings {
     const handoff = config.obj("handoff");
@@ -27,6 +28,7 @@ pub fn settingsOf(config: Config) Settings {
         .worktree = nonNullStr(config.get("worktree")) orelse DEFAULT_SETTINGS.worktree,
         .navigator = config.boolean("navigator") orelse DEFAULT_SETTINGS.navigator,
         .popup = config.boolean("popup") orelse DEFAULT_SETTINGS.popup,
+        .usage_pane = config.boolean("usage_pane") orelse DEFAULT_SETTINGS.usage_pane,
         .review = config.boolean("review") orelse DEFAULT_SETTINGS.review,
         .stall_minutes = config.int("stall_minutes") orelse DEFAULT_SETTINGS.stall_minutes,
         .handoff = .{
@@ -48,6 +50,7 @@ pub fn settingsObj(st: Settings) *Obj {
         .{ "worktree", st.worktree },
         .{ "navigator", st.navigator },
         .{ "popup", st.popup },
+        .{ "usage_pane", st.usage_pane },
         .{ "review", st.review },
         .{ "stall_minutes", st.stall_minutes },
         .{ "handoff", json.object(.{ .{ "enabled", st.handoff.enabled }, .{ "at_tokens", st.handoff.at_tokens } }) },
@@ -138,6 +141,7 @@ fn validateSettings(v: *const Obj) !void {
     if (v.get("worktree")) |w| if (!(w == .str and rt.oneOf(w.str, &WORKTREE_MODES))) return invalidConfig("\"worktree\" must be one of {s}", .{joinList(&WORKTREE_MODES)});
     if (v.get("navigator")) |o| if (o != .bool) return invalidConfig("\"navigator\" must be true or false", .{});
     if (v.get("popup")) |o| if (o != .bool) return invalidConfig("\"popup\" must be true or false", .{});
+    if (v.get("usage_pane")) |o| if (o != .bool) return invalidConfig("\"usage_pane\" must be true or false", .{});
     if (v.get("review")) |o| if (o != .bool) return invalidConfig("\"review\" must be true or false", .{});
     if (v.get("stall_minutes")) |s| if (!isWholeAtLeast(s, 0)) return invalidConfig("\"stall_minutes\" must be a whole number of minutes, 0 for off", .{});
     const handoff = v.get("handoff") orelse return;

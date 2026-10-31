@@ -14,13 +14,28 @@ It opens in your terminal and covers:
 | --- | --- | --- |
 | Harness | Which agent new crewmates run: Claude Code, Codex, pi or fx | Claude Code |
 | Model and effort | The model and thinking level for each harness | The harness's own default |
+| Routing | Let OpenAI Decisions or TypeSafe Jev pick each crewmate's model from profiles you approve. See [Model routing](?p=model-routing) | Off |
 | Placement | Crewmates in hidden tabs, split beside the leader, or (Rex) in no tab at all | Hidden tabs |
 | Popup (Rex) | `p` in the crew pane opens the selected crewmate in a window floating over your tab | On |
 | Worktrees | Always give crewmates a worktree, never, or let the leader decide | Leader decides |
 | Navigator | Open the Navigator with every run | On |
+| Review | The leader checks each crewmate's work before accepting its report | On |
 | Stall alert | Minutes of silence before a crewmate that owes a report is flagged. `0` is off | 20 |
 | Handoff | Hand the leader over to a fresh session when its context fills | Off |
 | Handoff at | The context size, in tokens, that triggers it | 200,000 |
+| Usage pane | The sidebar opens a pane below the crew with plan limits and spend | On |
+
+Keys:
+
+| Key | Does |
+| --- | --- |
+| `j` / `k` (or ↓ / ↑) | Move down or up |
+| `g` / `G` | First or last setting |
+| `l` / `h` (or → / ←) | Step the value on or back; flips an on/off setting |
+| Enter or Space | Open the full list of values, where you can type to search; flips an on/off setting |
+| `q` or Esc | Close |
+
+In a list, `ctrl-j` / `ctrl-k` (or `ctrl-n` / `ctrl-p`, or the arrows) move, since letters search.
 
 The page only lists what the multiplexer you're in can do. Popup and the "no tabs" placement show under Rex and stay hidden under herdr and tmux.
 
@@ -37,6 +52,7 @@ lodestar config set --placement split
 lodestar config set --worktree-mode on
 lodestar config set --navigator off
 lodestar config set --popup off
+lodestar config set --usage-pane off
 lodestar config set --stall-minutes 30
 lodestar config set --handoff on --handoff-at 180000
 ```

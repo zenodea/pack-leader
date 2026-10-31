@@ -8,6 +8,8 @@ const mux = @import("../mux/index.zig");
 const ansi = @import("ansi.zig");
 const term = @import("term.zig");
 const picker = @import("picker.zig");
+const theme = @import("theme.zig");
+const routing = @import("../core/routing.zig");
 
 const Obj = json.Obj;
 const Config = *Obj;
@@ -283,10 +285,46 @@ fn cHandoffAt(c: Config, ask: Ask) anyerror!void {
     if (v) |x| handoffWith(c, "at_tokens", json.i(try config.parseTokens(x)));
 }
 
+fn sRouter(c: Config) []const u8 {
+    return (c.obj("routing") orelse return "off").str("provider") orelse "off";
+}
+fn vRouting(c: Config) []const u8 {
+    const p = sRouter(c);
+    if (rt.eql(p, "off")) return "off";
+    const kinds = (c.obj("routing") orelse return p).obj("kinds");
+    if (kinds == null or kinds.?.obj(kindOf(c)) == null) return rt.concat(&.{ p, " (no profiles for ", kindOf(c), ")" });
+    return p;
+}
+fn cRouting(c: Config, ask: Ask) anyerror!void {
+    const items = [_]PickItem{
+        .{ .value = "off", .label = "off" },
+        .{ .value = "openai", .label = "openai", .description = "OpenAI Decisions; needs OPENAI_API_KEY" },
+        .{ .value = "jev", .label = "jev", .description = "TypeSafe Jev; needs TYPESAFE_API_KEY" },
+    };
+    const v = try ask(.{ .title = "Model routing", .items = &items, .current = sRouter(c) });
+    const x = v orelse return;
+    if (x.len == 0) return;
+    const base = if (c.obj("routing")) |r| r.clone() else json.object(.{.{ "kinds", json.newObj() }});
+    base.putStr("provider", x);
+    c.put("routing", (try routing.validateRouting(base.val())).val());
+}
+
+fn sUsagePane(c: Config) bool {
+    return settings(c).boolean("usage_pane") orelse true;
+}
+fn vUsagePane(c: Config) []const u8 {
+    return onOff(sUsagePane(c));
+}
+fn cUsagePane(c: Config, ask: Ask) anyerror!void {
+    _ = ask;
+    c.putBool("usage_pane", !sUsagePane(c));
+}
+
 pub const SETTINGS_ROWS = [_]SettingsRow{
     .{ .section = "Crew", .label = "Harness", .help = "The agent new crewmates run in. Model and effort below belong to this harness.", .value = vHarness, .change = cHarness },
     .{ .section = "Crew", .label = "Model", .help = "The model new crewmates get. Type a name that is not listed and press enter to use it.", .value = modelOrDefault, .change = cModel },
     .{ .section = "Crew", .label = "Effort", .help = "The thinking level new crewmates get.", .value = thinkingOrDefault, .change = cEffort },
+    .{ .section = "Crew", .label = "Routing", .help = "openai or jev: that provider picks each new crewmate's model and effort from profiles you approve. Needs a profiles file (lodestar config set --routing-config FILE; see Model routing in the docs) and the provider's API key where Lodestar runs.", .value = vRouting, .change = cRouting },
     .{ .section = "Crew", .label = "Placement", .help = "hidden tabs: each crewmate in its own tab, shown in the sidebar. beside the leader: leader top left, navigator below it, crewmates fill the right half; each new one splits the biggest crewmate the other way. no tabs (Rex): crewmates run in no tab; enter in the crew pane opens one as a popup. Remote crewmates always get a tab.", .value = vPlacement, .change = cPlacement },
     .{ .section = "Crew", .label = "Popup", .help = "on: p in the crew pane opens the selected crewmate in a window floating over your tab; type to answer it, ctrl-] closes it. Crewmates without a tab always open this way.", .value = vPopup, .change = cPopup, .shown = canFloat },
     .{ .section = "Crew", .label = "Worktrees", .help = "on: every crewmate in a git repo gets its own worktree. off: no crewmate gets one. leader decides: the orchestrator picks per crewmate. one shared worktree: all crewmates of a run edit one checkout on branch lodestar/<run>/shared; each `done` commits that crewmate's files (retrying while git is busy) and `lodestar run merge` merges the branch back.", .value = vWorktree, .change = cWorktree },
@@ -295,6 +333,7 @@ pub const SETTINGS_ROWS = [_]SettingsRow{
     .{ .section = "Orchestrator", .label = "Stall alert", .help = "How long a crewmate that owes a report can stay silent before the leader is told. LODESTAR_STALL_MS still wins when set.", .value = vStall, .change = cStall },
     .{ .section = "Orchestrator", .label = "Handoff", .help = "Past the limit below, the leader writes a note, its session is cleared, and it resumes the run from the note and `lodestar status`.", .value = vHandoff, .change = cHandoff },
     .{ .section = "Orchestrator", .label = "Handoff at", .help = "The leader's context size that triggers a handoff. Keep it below the harness's own auto-compact point.", .value = vHandoffAt, .change = cHandoffAt },
+    .{ .section = "Sidebar", .label = "Usage pane", .help = "on: the sidebar opens a pane below the crew with each plan limit and what each agent spent. Applies to sidebars opened from now on.", .value = vUsagePane, .change = cUsagePane },
 };
 
 fn joinNonEmpty(parts: []const ?[]const u8, sep: []const u8) []const u8 {
@@ -360,34 +399,64 @@ pub fn visibleRows() []const SettingsRow {
     return out.items;
 }
 
-pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: []const u8) []const []const u8 {
+/// On and off as a filled or hollow dot; other values as they are.
+fn shownValue(v: []const u8, accent: ansi.Paint) []const u8 {
+    if (rt.eql(v, "on")) return accent.apply("● on");
+    if (rt.eql(v, "off")) return ansi.dim("○ off");
+    return v;
+}
+
+const KEYS = [_][2][]const u8{ .{ "j/k", "move" }, .{ "h/l", "change" }, .{ "enter", "pick" }, .{ "q", "close" } };
+
+/// The page: a margin, rows by section with values in one column, the selected row's help under a rule, and the keys
+/// at the bottom. When the rows don't fit, they scroll to keep the selected one in view.
+pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: []const u8, accent: ansi.Paint) []const []const u8 {
     const shown = visibleRows();
+    const margin = if (cols >= 40) "  " else " ";
+    const w: usize = @max(10, cols -| 2 * margin.len);
     var label_width: usize = 0;
     for (shown) |r| label_width = @max(label_width, r.label.len);
-    label_width += 3;
-    var lines: std.ArrayListUnmanaged([]const u8) = .empty;
-    lines.append(rt.a, ansi.bold("Lodestar settings")) catch {};
+    label_width += 4;
+
+    var body: std.ArrayListUnmanaged([]const u8) = .empty;
+    var sel_line: usize = 0;
     var section: []const u8 = "";
     for (shown, 0..) |row, i| {
         if (!rt.eql(row.section, section)) {
             section = row.section;
-            lines.appendSlice(rt.a, &.{ "", ansi.dim(section) }) catch {};
+            if (body.items.len > 0) body.append(rt.a, "") catch {};
+            body.append(rt.a, ansi.dim(std.ascii.allocUpperString(rt.a, section) catch section)) catch {};
         }
-        const text = rt.concat(&.{ ansi.pad(row.label, label_width), row.value(c) });
-        lines.append(rt.a, if (i == sel) rt.concat(&.{ ansi.fg.cyan("❯"), " ", ansi.fg.cyan(text) }) else rt.concat(&.{ "  ", text })) catch {};
+        if (i == sel) sel_line = body.items.len;
+        const value = row.value(c);
+        body.append(rt.a, if (i == sel)
+            rt.concat(&.{ accent.apply("❯ "), accent.apply(ansi.bold(ansi.pad(row.label, label_width))), if (rt.eql(value, "on") or rt.eql(value, "off")) shownValue(value, accent) else accent.apply(value) })
+        else
+            rt.concat(&.{ "  ", ansi.pad(row.label, label_width), shownValue(value, accent) })) catch {};
     }
-    lines.append(rt.a, "") catch {};
-    const help_width: usize = @intCast(@max(20, @as(i64, @intCast(cols)) - 2));
-    for (ansi.wrap(shown[sel].help, help_width)) |l| lines.append(rt.a, ansi.dim(l)) catch {};
-    if (notice.len > 0) lines.appendSlice(rt.a, &.{ "", ansi.fg.yellow(notice) }) catch {};
-    const hint = ansi.dim("↑↓ move · enter change · esc close");
-    const body_n = @min(lines.items.len, @max(1, @as(usize, @intCast(@max(0, @as(i64, @intCast(rows)) - 1)))));
+
+    var foot: std.ArrayListUnmanaged([]const u8) = .empty;
+    foot.appendSlice(rt.a, &.{ "", ansi.dim(ansi.repeat("─", w)) }) catch {};
+    for (ansi.wrap(shown[sel].help, w)) |l| foot.append(rt.a, ansi.dim(l)) catch {};
+    if (notice.len > 0) foot.appendSlice(rt.a, &.{ "", ansi.fg.yellow(notice) }) catch {};
+    var keys: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (KEYS) |k| keys.append(rt.a, rt.concat(&.{ k[0], " ", ansi.dim(k[1]) })) catch {};
+    const hint = std.mem.join(rt.a, ansi.dim("   "), keys.items) catch "";
+
+    // Top margin, title, gap; then the rows; then the footer and the keys on the last line.
+    const head = [_][]const u8{ "", ansi.bold("Lodestar settings"), "" };
+    const room: usize = rows -| (head.len + foot.items.len + 3);
+    const start: usize = if (body.items.len <= room or room == 0) 0 else @min(sel_line -| room / 2, body.items.len - room);
+    const end = @min(body.items.len, start + @max(1, room));
+
     var out: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (lines.items[0..body_n]) |l| out.append(rt.a, ansi.truncate(l, @intCast(cols))) catch {};
-    const fill: usize = @intCast(@max(0, @as(i64, @intCast(rows)) - 1 - @as(i64, @intCast(body_n))));
-    for (0..fill) |_| out.append(rt.a, "") catch {};
-    out.append(rt.a, hint) catch {};
-    return out.items;
+    for (head) |l| out.append(rt.a, l) catch {};
+    for (body.items[start..end]) |l| out.append(rt.a, l) catch {};
+    for (foot.items) |l| out.append(rt.a, l) catch {};
+    while (out.items.len + 2 < rows) out.append(rt.a, "") catch {};
+    out.appendSlice(rt.a, &.{ hint, "" }) catch {};
+    for (out.items) |*l| l.* = if (l.len == 0) "" else rt.concat(&.{ margin, ansi.truncate(l.*, @intCast(w)) });
+    return out.items[0..@min(out.items.len, rows)];
 }
 
 fn askNested(o: PickOptions) anyerror!?[]const u8 {
@@ -398,22 +467,43 @@ fn askNested(o: PickOptions) anyerror!?[]const u8 {
     return v;
 }
 
-fn drawSettings(c: Config, sel: usize, notice: []const u8) void {
+/// Which way h and l step a row's value: the next or previous item of the list `enter` would show, without showing it.
+var cycle_by: i64 = 1;
+
+fn askCycle(o: PickOptions) anyerror!?[]const u8 {
+    if (o.items.len == 0) return null;
+    const n: i64 = @intCast(o.items.len);
+    var at: i64 = if (cycle_by > 0) -1 else 0;
+    if (o.current) |cur| for (o.items, 0..) |it, i| if (rt.eql(it.value, cur)) {
+        at = @intCast(i);
+        break;
+    };
+    return o.items[@intCast(@mod(at + cycle_by, n))].value;
+}
+
+fn drawSettings(c: Config, sel: usize, notice: []const u8, accent: ansi.Paint) void {
     const sz = term.size(80, 24);
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     buf.appendSlice(rt.a, ansi.screen.home) catch {};
-    for (renderSettings(c, sel, sz.cols, sz.rows, notice), 0..) |line, r| {
+    const lines = renderSettings(c, sel, sz.cols, sz.rows, notice, accent);
+    for (0..sz.rows) |r| {
         buf.appendSlice(rt.a, ansi.screen.at(r + 1, 1)) catch {};
         buf.appendSlice(rt.a, ansi.screen.clearLine) catch {};
-        buf.appendSlice(rt.a, line) catch {};
+        if (r < lines.len) buf.appendSlice(rt.a, lines[r]) catch {};
     }
     rt.writeStdout(buf.items);
 }
 
-/// The interactive settings page; returns the (saved) configuration when closed.
+fn isKey(key: term.Key, ch: []const u8) bool {
+    return !key.ctrl and !key.meta and key.ch != null and rt.eql(key.ch.?, ch);
+}
+
+/// The interactive settings page; returns the (saved) configuration when closed. Vim keys: j/k move, g/G jump to the
+/// first or last row, h/l step the value back or on, enter (or space) opens the full list or flips a toggle.
 pub fn runSettings() !Config {
     if (!term.isTty(0) or !term.isTty(1)) return rt.fail(null, "lodestar settings needs a terminal", .{});
     const c = try config.loadConfig();
+    const accent: ansi.Paint = if (theme.loadTheme().accent) |hex| .{ .color = ansi.rgb(hex) } else ansi.Paint.of(&ansi.fg.cyan);
     var sel: usize = 0;
     var notice: []const u8 = "";
     var raw: term.Raw = .{};
@@ -425,28 +515,40 @@ pub fn runSettings() !Config {
     }
     const shown = visibleRows();
     const n = shown.len;
-    drawSettings(c, sel, notice);
+    drawSettings(c, sel, notice, accent);
     var reader: term.KeyReader = .{};
     while (true) {
         const data = term.readStdin(reader.timeoutMs() orelse -1) orelse return c;
         const keys = if (data.len == 0) reader.expire() else reader.feed(data);
         for (keys) |key| {
             const name = key.name orelse "";
-            if ((key.ctrl and rt.eql(name, "c")) or rt.eql(name, "escape") or rt.eql(name, "q")) return c;
-            if (rt.eql(name, "up") or rt.eql(name, "k") or (key.ctrl and rt.eql(name, "p"))) {
+            if ((key.ctrl and rt.eql(name, "c")) or rt.eql(name, "escape") or isKey(key, "q")) return c;
+            var ask: ?Ask = null;
+            if (rt.eql(name, "up") or isKey(key, "k") or (key.ctrl and rt.eql(name, "p"))) {
                 sel = (sel + n - 1) % n;
-            } else if (rt.eql(name, "down") or rt.eql(name, "j") or (key.ctrl and rt.eql(name, "n"))) {
+            } else if (rt.eql(name, "down") or isKey(key, "j") or (key.ctrl and rt.eql(name, "n"))) {
                 sel = (sel + 1) % n;
+            } else if (isKey(key, "g") or rt.eql(name, "home")) {
+                sel = 0;
+            } else if (isKey(key, "G") or rt.eql(name, "end")) {
+                sel = n - 1;
+            } else if (isKey(key, "l") or rt.eql(name, "right")) {
+                cycle_by = 1;
+                ask = askCycle;
+            } else if (isKey(key, "h") or rt.eql(name, "left")) {
+                cycle_by = -1;
+                ask = askCycle;
             } else if (rt.eql(name, "return") or rt.eql(name, "enter") or rt.eql(name, "space")) {
-                if (shown[sel].change(c, askNested)) |_| {
-                    if (config.saveConfig(c)) |_| notice = "" else |err| notice = rt.dupe(rt.errMessage(err));
-                } else |err| notice = rt.dupe(rt.errMessage(err));
-                raw.enable();
-                drawSettings(c, sel, notice);
-                continue;
+                ask = askNested;
             } else continue;
             notice = "";
-            drawSettings(c, sel, notice);
+            if (ask) |f| {
+                if (shown[sel].change(c, f)) |_| {
+                    if (config.saveConfig(c)) |_| {} else |err| notice = rt.dupe(rt.errMessage(err));
+                } else |err| notice = rt.dupe(rt.errMessage(err));
+                raw.enable();
+            }
+            drawSettings(c, sel, notice, accent);
         }
     }
 }
@@ -466,4 +568,32 @@ test "the settings page shows the popup row and no-tabs placement only where the
     for (visibleRows()) |r| popup = popup or rt.eql(r.label, "Popup");
     try std.testing.expect(popup);
     try std.testing.expectEqualStrings("on", vPopup(c));
+}
+
+test "h and l step through a row's values, and a short page scrolls to the selected row" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var map = std.process.Environ.Map.init(arena.allocator());
+    rt.initForTest(arena.allocator(), &map);
+    defer mux.useMux(null);
+    mux.useMux(&@import("../mux/rex.zig").backend);
+    const c = json.newObj();
+    cycle_by = 1;
+    try cPlacement(c, askCycle);
+    try std.testing.expectEqualStrings("split", sPlacement(c));
+    cycle_by = -1;
+    try cPlacement(c, askCycle);
+    try cPlacement(c, askCycle);
+    try std.testing.expectEqualStrings("background", sPlacement(c));
+    try cRouting(c, askCycle);
+    try std.testing.expectEqualStrings("jev", sRouter(c));
+    try cUsagePane(c, askCycle);
+    try std.testing.expectEqualStrings("off", vUsagePane(c));
+    const last = visibleRows().len - 1;
+    const page = renderSettings(c, last, 50, 16, "", .{});
+    try std.testing.expectEqual(@as(usize, 16), page.len);
+    var found = false;
+    for (page) |l| found = found or std.mem.indexOf(u8, ansi.stripSgr(l), "❯ Usage pane") != null;
+    try std.testing.expect(found);
+    try std.testing.expectEqualStrings("  j/k move   h/l change   enter pick   q close", ansi.stripSgr(page[14]));
 }

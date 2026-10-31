@@ -14,6 +14,10 @@
   gaps when there is room and gives them up when it is short. The sidebar opens it and it
   closes with the sidebar. `lodestar usage --watch` shows the same anywhere; `lodestar
   usage` prints it as JSON.
+- The **settings page** moves with vim keys: `j`/`k`, `g`/`G`, and `h`/`l` to step a value
+  without opening its list. On/off settings show as a dot, the page keeps a margin, and
+  long pages scroll. New rows: **Routing** (model routing's provider) and **Usage pane**
+  (`config set --usage-pane on|off`).
 - **Rex** works as a multiplexer next to herdr and tmux: inside a Rex terminal Lodestar
   uses Rex (or set `LODESTAR_MUX=rex`). The skill now accepts herdr, tmux or Rex.
 - On Rex, agent status comes from Rex itself: Claude Code, Codex and fx report it to Rex,

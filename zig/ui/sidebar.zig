@@ -582,6 +582,7 @@ const Sidebar = struct {
         const own = self.pane orelse return;
         const height = term.size(30, 24).rows;
         if (height < USAGE_ROWS * 2) return;
+        if (!config.settingsOf(config.loadConfig() catch return).usage_pane) return;
         const env = json.object(.{.{ "LODESTAR_USAGE_PARENT_PID", rt.fmt("{d}", .{rt.pid}) }});
         const runs = self.mine();
         if (runs.len > 0) if (runs[0].str("id")) |id| env.putStr("LODESTAR_USAGE_RUN", id);
