@@ -33,6 +33,7 @@ let scene = "scatter";
 let wanted = "title";     // the section in view, applied once the intro is over
 let sceneAt = 0;
 let introDone = still;
+let glideNext = false;    // the next scene change glides in order, like the one into the docs
 const mouse = { x: -1e4, y: -1e4 };
 
 function size() {
@@ -345,10 +346,15 @@ function setScene(name, force) {
   }
   // Into the docs from somewhere else: no shuffle. The dots go in reading order, so the highest ones on
   // the screen take the highest lines and, along a line, the leftmost take its left end; nobody crosses.
-  const orderly = name === "docs" && !again && !still;
+  // Back out of the docs (glideNext) works the same way.
+  const orderly = ((name === "docs" && !again) || glideNext) && !still;
+  glideNext = false;
   if (orderly) {
     plan = [...pts].sort((a, b) => a.y - b.y || a.x - b.x);
-    const src = dots.map((_, i) => i).sort((a, b) => dots[a].y - dots[b].y);
+    // Dots you can see go first; any left over stay where they are.
+    const byY = (a, b) => dots[a].y - dots[b].y;
+    const all = dots.map((_, i) => i).sort((a, b) => dots[a].free - dots[b].free);
+    const src = [...all.slice(0, plan.length).sort(byY), ...all.slice(plan.length)];
     order = [];
     for (let i = 0; i < plan.length;) {
       let j = i;
@@ -824,8 +830,8 @@ async function goHome(push = true) {
   const root = document.getElementById("docs-root");
   docsForm = docsLines(root);
   setScene("docs", true);
-  for (const d of dots) { d.x = d.tx; d.y = d.ty; d.vx = d.vy = 0; d.s = d.ts; d.c = d.tc.slice(); d.a = d.free ? 0 : d.ta; }
-  Object.assign(leader, { x: leader.tx, y: leader.ty, vx: 0, vy: 0, s: leader.ts, a: 1 });
+  for (const d of dots) { d.x = d.tx; d.y = d.ty - (d.anchor ? scrollY : 0); d.vx = d.vy = 0; d.s = d.ts; d.c = d.tc.slice(); d.a = d.free ? 0 : d.ta; d.fly = null; }
+  Object.assign(leader, { x: leader.tx, y: leader.ty - scrollY, vx: 0, vy: 0, s: leader.ts, a: 1, fly: null });
   root.classList.add("ghost");
   await wait(450);
   if (push) history.pushState(null, "", HOME);
@@ -834,10 +840,16 @@ async function goHome(push = true) {
   document.title = "Lodestar";
   document.body.classList.remove("in-docs");
   window.scrollTo({ top: savedY, behavior: "instant" });
+  // Scrolling back moves the page, not the dots: they set off from where they are on the screen.
+  lastY = scrollY;
   inDocs = false;
+  // Keep the dots on lines, so none of them vanish.
+  dots.sort((a, b) => a.free - b.free);
   dots.length = Math.min(dots.length, baseCount());
+  glideNext = true;
   setScene(sectionInView(), true);
-  await wait(40);
+  // The landing comes back once the dots are in place, as the docs do.
+  await wait(REVEAL);
   document.body.classList.remove("to-docs");
   busy = false;
 }

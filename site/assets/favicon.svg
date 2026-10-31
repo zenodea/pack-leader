@@ -1,14 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
     <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#8fc1ff" stop-opacity=".5"/>
+      <stop offset="0" stop-color="#8fc1ff" stop-opacity=".55"/>
+      <stop offset=".5" stop-color="#8fc1ff" stop-opacity=".12"/>
       <stop offset="1" stop-color="#8fc1ff" stop-opacity="0"/>
     </radialGradient>
+    <linearGradient id="ray" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#b9d7ff"/>
+    </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="14" fill="#05070d"/>
-  <circle cx="32" cy="34" r="22" fill="url(#glow)"/>
-  <g transform="translate(32 35) scale(2.45)">
-    <path d="M0 -11 L.57 -1.39 L2.55 -2.55 L1.39 -.57 L8 0 L1.39 .57 L2.55 2.55 L.57 1.39 L0 8 L-.57 1.39 L-2.55 2.55 L-1.39 .57 L-8 0 L-1.39 -.57 L-2.55 -2.55 L-.57 -1.39Z" fill="#d6e8ff"/>
-    <circle r="1.9" fill="#ffffff"/>
+  <rect width="64" height="64" rx="14" fill="#070b16"/>
+  <circle cx="32" cy="35" r="20" fill="url(#glow)"/>
+  <g transform="translate(32 35) scale(2.7)">
+    <path d="M0 -11 L.75 -1.8 L2.55 -2.55 L1.8 -.75 L8 0 L1.8 .75 L2.55 2.55 L.75 1.8 L0 8 L-.75 1.8 L-2.55 2.55 L-1.8 .75 L-8 0 L-1.8 -.75 L-2.55 -2.55 L-.75 -1.8Z" fill="url(#ray)"/>
+    <circle r="1.7" fill="#ffffff"/>
   </g>
 </svg>
