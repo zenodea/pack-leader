@@ -62,6 +62,7 @@ test {
     std.testing.refAllDecls(@import("ui/theme.zig"));
     std.testing.refAllDecls(@import("ui/usage_box.zig"));
     std.testing.refAllDecls(@import("usage/claude.zig"));
+    std.testing.refAllDecls(@import("usage/claude_plan.zig"));
     std.testing.refAllDecls(@import("usage/codex.zig"));
     std.testing.refAllDecls(@import("usage/pi.zig"));
     std.testing.refAllDecls(@import("usage/prices.zig"));

@@ -6,7 +6,8 @@
   cross on the bar for how far through the window the clock is, when it resets, and a
   warning ("runs out in ~23h") when the rate so far would use it up before then. Below
   that, what each agent (Claude Code, Codex, pi) spent over the last day and week, and a
-  total row. It keeps a margin and gaps when there
+  total row. Claude Code's plan limits come from the same server as its `/usage` screen,
+  using Claude Code's own login, so they show without any setup. It keeps a margin and gaps when there
   is room and gives them up when the pane is short. The sidebar opens it and it closes
   with the sidebar. `lodestar usage --watch` shows the same anywhere; `lodestar usage`
   prints it as JSON.

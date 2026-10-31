@@ -1,7 +1,8 @@
 //! Spend and plan limits per agent over the last week, kept current by reading only what each session log gained
 //! since the last scan. `<state_dir>/usage/cache.json` remembers how far each log was read and hourly totals;
-//! `summary.json` is the small file the sidebar shows. Claude Code's plan limits arrive separately, through
-//! `lodestar __usage-statusline`, as `claude-limits.json`.
+//! `summary.json` is the small file the sidebar shows. Claude Code's plan limits arrive separately, as
+//! `claude-limits.json`: from the server behind Claude Code's `/usage` (claude_plan.zig), or through
+//! `lodestar __usage-statusline`.
 
 const std = @import("std");
 const rt = @import("../rt.zig");
@@ -10,6 +11,7 @@ const fs = @import("../core/fs.zig");
 const paths = @import("../core/paths.zig");
 const prices = @import("prices.zig");
 const record = @import("record.zig");
+const claude_plan = @import("claude_plan.zig");
 
 const Obj = json.Obj;
 const Record = record.Record;
@@ -213,6 +215,8 @@ pub fn refresh(now: i64) bool {
         scanFile(&c, r, p, files);
     };
     c.save(listed.items);
+    const plan = claude_plan.fetch(now, limitsFile("claude"));
+    if (plan.len > 0) fs.writeAtomic(limitsFile("claude"), json.stringifyObj(limitsObj(now, null, plan), false), 0o600) catch {};
     fs.writeAtomic(summaryFile(), json.stringifyObj(summarize(c.root, now), false), 0o600) catch {};
     return true;
 }

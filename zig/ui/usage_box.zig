@@ -87,9 +87,9 @@ fn bar(pct: f64, w: usize, mark: ?usize, accent: Paint) []const u8 {
     return rt.concat(out.items);
 }
 
-/// At the rate the window has been used so far: "runs out in ~23h" when that is before the reset. Null when it lasts,
-/// or early on.
-fn pace(w: *Obj, now: i64) ?[]const u8 {
+/// At the rate the window has been used so far: "runs out in ~23h" ("out in ~23h" when `short`) when that is before
+/// the reset. Null when it lasts, or early on.
+fn pace(w: *Obj, now: i64, short: bool) ?[]const u8 {
     const pct = w.num("used_pct") orelse return null;
     if (pct >= 100) return fg.red("used up");
     const e = elapsed(w, now) orelse return null;
@@ -97,7 +97,7 @@ fn pace(w: *Obj, now: i64) ?[]const u8 {
     const total: f64 = @floatFromInt((w.int("minutes") orelse 0) * 60_000);
     const to_full = (100 - pct) / pct * e * total;
     if (to_full >= (1 - e) * total) return null;
-    return paint(@max(pct, 70), rt.concat(&.{ "runs out in ~", about(@intFromFloat(to_full)) }), .{});
+    return paint(@max(pct, 70), rt.concat(&.{ if (short) "out in ~" else "runs out in ~", about(@intFromFloat(to_full)) }), .{});
 }
 
 /// What the agent spent, or its tokens when there is no price for its model.
@@ -180,8 +180,9 @@ pub fn lines(s: ?*Obj, cols_: i64, now: i64, accent: Paint, room: Room) []const 
             out.add(windowLine(if (i == 0) name else "", win, out.w, now, accent, !room.detail));
             if (room.detail) {
                 var parts: std.ArrayListUnmanaged([]const u8) = .empty;
-                if (win.int("resets_at")) |r| parts.append(rt.a, dim(rt.concat(&.{ "resets in ", until(r - now) }))) catch {};
-                if (pace(win, now)) |p| parts.append(rt.a, p) catch {};
+                const short = out.w < 40;
+                if (win.int("resets_at")) |r| parts.append(rt.a, dim(rt.concat(&.{ if (short) "↻" else "resets in ", until(r - now) }))) catch {};
+                if (pace(win, now, short)) |p| parts.append(rt.a, p) catch {};
                 if (parts.items.len > 0) out.add(rt.concat(&.{ ansi.repeat(" ", NAME_W), std.mem.join(rt.a, dim(" · "), parts.items) catch "" }));
             }
         }
@@ -281,5 +282,5 @@ test "pace warns when the rate so far fills the window before it resets" {
     const now: i64 = 1_800_000_000_000;
     // 75% used 71 hours into a week: the last 25% goes in about 23 hours, with 97 left.
     const w = (try json.parse("{\"minutes\":10080,\"used_pct\":75,\"resets_at\":1800349200000}")).asObj().?;
-    try testing.expectEqualStrings("runs out in ~23h", ansi.stripSgr(pace(w, now).?));
+    try testing.expectEqualStrings("runs out in ~23h", ansi.stripSgr(pace(w, now, false).?));
 }

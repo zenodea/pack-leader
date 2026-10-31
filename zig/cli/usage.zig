@@ -27,9 +27,11 @@ const TEXT =
     \\  lodestar usage [--quiet] [--watch]              spend and plan limits per agent (Claude Code, Codex, pi) over the last
     \\                                                week, from their session logs; --watch shows it live, as in the pane
     \\                                                the sidebar opens below the crew.
-    \\                                                Claude's plan limits need its status line to pass through Lodestar:
-    \\                                                "statusLine": {{"type": "command", "command": "lodestar __usage-statusline
-    \\                                                -- YOUR_OLD_COMMAND"}}; extra prices: usage-prices.json in the config dir
+    \\                                                Claude's plan limits come from the server behind Claude Code's /usage,
+    \\                                                signed in with Claude Code's own login, at most every 5 minutes; or pass
+    \\                                                its status line through: "statusLine": {{"type": "command", "command":
+    \\                                                "lodestar __usage-statusline -- YOUR_OLD_COMMAND"}}; extra prices:
+    \\                                                usage-prices.json in the config dir
     \\  lodestar COMMAND ... [--run ID]             any orchestrator command: that run, not the pane's own (or $LODESTAR_RUN_ID)
     \\ Tasks
     \\  lodestar task create --spec "..." [--title T] [--depends-on a,b] [--parent ID]
