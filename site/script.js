@@ -343,6 +343,21 @@ function setScene(name, force) {
     for (const p of fresh) { order.push(spare.shift()); plan.push(p); }
     for (const i of spare) { order.push(i); Object.assign(dots[i], { hx: dots[i].x, hy: dots[i].y }); }
   }
+  // Into the docs from somewhere else: no shuffle. The dots go in reading order, so the highest ones on
+  // the screen take the highest lines and, along a line, the leftmost take its left end; nobody crosses.
+  const orderly = name === "docs" && !again && !still;
+  if (orderly) {
+    plan = [...pts].sort((a, b) => a.y - b.y || a.x - b.x);
+    const src = dots.map((_, i) => i).sort((a, b) => dots[a].y - dots[b].y);
+    order = [];
+    for (let i = 0; i < plan.length;) {
+      let j = i;
+      while (j < plan.length && plan[j].y === plan[i].y) j++;
+      order.push(...src.slice(i, j).sort((a, b) => dots[a].x - dots[b].x));
+      i = j;
+    }
+    order.push(...src.slice(plan.length));
+  }
   order.forEach((di, i) => {
     const d = dots[di], p = plan[i];
     if (p) {
@@ -350,15 +365,26 @@ function setScene(name, force) {
       Object.assign(d, { free: false, tx: p.x, ty: p.y, tc: p.c, ts: p.s, ta: p.a ?? (form.faint ? .45 : .95), jit: p.jit || 0, pulse: !!p.pulse, delay: stays ? 0 : p.delay || 0, orbit: p.orbit || null, anchor: !!(form.doc || p.anchor), key: p.key || null });
       // A dot that only shows once something has loaded starts out there, unseen, and fades in.
       if (p.pop && !stays) Object.assign(d, { x: p.x, y: p.y, vx: 0, vy: 0, a: 0, c: p.c.slice() });
+      // A wave out from the leader's new place: the nearest dots set off first, and each glides in.
+      else if (orderly) {
+        const far = Math.hypot(p.x - form.leader.x, p.y - form.leader.y) / Math.hypot(W, H);
+        d.fly = { x: d.x, y: d.y, at: sceneAt + far * FLY_WAVE };
+      }
     } else {
       if (!again) Object.assign(d, { hx: Math.random() * W, hy: Math.random() * H });
       Object.assign(d, { free: true, key: null, tc: C.dim, ts: 1, ta: form.hideRest ? 0 : .16, jit: 0, pulse: false, delay: 0, orbit: null, anchor: false });
     }
+    if (!orderly || !p || p.pop) d.fly = null;
     if (still) { d.x = d.tx; d.y = d.ty; }
   });
   leader.tx = form.leader.x; leader.ty = form.leader.y; leader.ts = form.leader.s; leader.ta = 1;
+  leader.fly = orderly ? { x: leader.x, y: leader.y, at: sceneAt } : null;
   if (still) { leader.x = leader.tx; leader.y = leader.ty - (form.doc ? scrollY : 0); }
 }
+
+// Into the docs, each dot glides to its line in FLY_TIME, setting off up to FLY_WAVE after the first.
+const FLY_TIME = 900, FLY_WAVE = 700;
+const ease = (u) => (u < .5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
 
 // How fast the sky turns around the North Star, in radians per millisecond (about half a degree a second).
 const SKY_TURN = .0000095;
@@ -516,7 +542,11 @@ function frame(now) {
     }
     if (d.jit && !still) { tx += Math.sin(now * .011 + d.ph * 9) * d.jit; ty += Math.cos(now * .013 + d.ph * 7) * d.jit; }
     const shown = since >= d.delay;
-    if (!still) {
+    if (d.fly) {
+      const u = Math.min(1, Math.max(0, (now - d.fly.at) / FLY_TIME)), e = ease(u);
+      d.x = d.fly.x + (tx - d.fly.x) * e; d.y = d.fly.y + (ty - d.fly.y) * e; d.vx = d.vy = 0;
+      if (u >= 1) d.fly = null;
+    } else if (!still) {
       const k = d.free ? .01 : d.k;
       d.vx = (d.vx + (tx - d.x) * k) * .84;
       d.vy = (d.vy + (ty - d.y) * k) * .84;
@@ -553,7 +583,12 @@ function frame(now) {
   if (form && form.draw && fade > 0 && !still) form.draw(now);
 
   // The leader.
-  if (!still) {
+  if (leader.fly) {
+    const u = Math.min(1, (now - leader.fly.at) / FLY_TIME), e = ease(u);
+    leader.x = leader.fly.x + (leader.tx - leader.fly.x) * e; leader.y = leader.fly.y + (leader.ty - off - leader.fly.y) * e;
+    leader.vx = leader.vy = 0;
+    if (u >= 1) leader.fly = null;
+  } else if (!still) {
     leader.vx = (leader.vx + (leader.tx - leader.x) * .035) * .82;
     if (form && form.doc) leader.y -= dy;
     leader.vy = (leader.vy + (leader.ty - off - leader.y) * .035) * .82;
@@ -664,7 +699,8 @@ const loadShell = () => (shell ||= fetch(DOCS).then((r) => { if (!r.ok) throw ne
 let scripts = null;
 const loadScripts = () => (scripts ||= load("script", "marked-js", { src: "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" })
   .then(() => window.packDocs || load("script", "docs-js", { src: new URL("docs.js?v=7", DOCS).href })));
-const REVEAL = 450;
+// The docs page shows once the dots are on its lines.
+const REVEAL = FLY_TIME + FLY_WAVE + 100;
 
 function load(tag, id, attrs) {
   const old = document.getElementById(id);
