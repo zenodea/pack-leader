@@ -49,29 +49,11 @@ pub fn init() void {
     herdr_state = fs.join(&.{ xdg_state, "herdr" });
     herdr_bin = envOr("HERDR_BIN_PATH", "herdr");
     config_dir = envOr("HERDR_PLUGIN_CONFIG_DIR", fs.join(&.{ herdr_home, "plugins", "config", "lodestar" }));
-    migrateOldName(config_dir);
-    const state = resolveStateDir();
-    migrateOldName(state);
-    setStateDir(state);
+    setStateDir(resolveStateDir());
     local_bin = fs.join(&.{ home, ".local", "bin" });
     skill_claude = fs.join(&.{ envOr("CLAUDE_CONFIG_DIR", fs.join(&.{ home, ".claude" })), "skills", "lodestar" });
     skill_codex = fs.join(&.{ envOr("CODEX_HOME", fs.join(&.{ home, ".codex" })), "skills", "lodestar" });
     skill_pi = fs.join(&.{ envOr("PI_CODING_AGENT_DIR", fs.join(&.{ home, ".pi", "agent" })), "skills", "lodestar" });
-}
-
-/// Lodestar used to be called Pack Leader. The first run under the new name moves the old
-/// state or settings folder (`.../pack-leader`, next to `dir`) into place, unless `dir` already
-/// has something in it. Only folders named after the plugin are touched.
-fn migrateOldName(dir: []const u8) void {
-    if (!rt.eql(fs.basename(dir), "lodestar")) return;
-    const old = fs.join(&.{ fs.dirname(dir), "pack-leader" });
-    if (!fs.isDir(old)) return;
-    if (fs.isDir(dir)) {
-        const entries = fs.listDir(dir) catch return;
-        if (entries.len != 0) return;
-        fs.rmdir(dir) catch return;
-    }
-    fs.rename(old, dir) catch {};
 }
 
 pub fn setStateDir(dir: []const u8) void {

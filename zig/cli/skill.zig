@@ -37,14 +37,6 @@ pub fn installSkill() !*json.Obj {
         skills.pushStr(stub_path);
     }
     if (skills.len() == 0) note.pushStr("no harness directory found (~/.claude, ~/.codex, ~/.pi/agent)");
-    // The skill used to be called pack-leader: remove those copies so agents don't load both.
-    for ([_][]const u8{ paths.skill_claude, paths.skill_codex, paths.skill_pi }) |dir| {
-        const old = fs.join(&.{ fs.dirname(dir), "pack-leader" });
-        const old_stub = fs.readFileOpt(fs.join(&.{ old, "SKILL.md" })) orelse continue;
-        if (!rt.contains(old_stub, "name: pack-leader")) continue;
-        fs.rmrf(old);
-        note.pushStr(rt.fmt("removed the old pack-leader skill at {s}", .{old}));
-    }
 
     var bin: ?[]const u8 = null;
     link: {
@@ -75,11 +67,6 @@ pub fn installSkill() !*json.Obj {
             bin = link;
         }
     }
-    // And the old command name, when it is our link.
-    const old_link = fs.join(&.{ paths.local_bin, "pack-leader" });
-    if (isLink(old_link)) if (fs.readlink(old_link)) |target| if (rt.endsWith(target, "/bin/pack-leader")) {
-        if (fs.unlink(old_link)) |_| note.pushStr(rt.fmt("removed the old {s} link", .{old_link})) else |_| {}
-    };
     if (bin != null) {
         var on_path = false;
         var it = std.mem.splitScalar(u8, rt.getenv("PATH") orelse "", ':');

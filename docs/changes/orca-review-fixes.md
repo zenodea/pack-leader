@@ -20,7 +20,7 @@ Implementation scope: the nine confirmed defects from the Orca comparison, not t
 
 - Nine initial implementation tasks ran in isolated worktrees. Follow-up repairs addressed independent review findings before application.
 - The independently reviewed candidate passed typecheck and **237/237 tests**. Final CLI review passed **33/33 focused tests**; final runtime review passed **37/37 focused tests**. Both reviewers approved.
-- Existing and concurrent user changes were preserved, including theme/sidebar work, the worker leader bar, and default cleanup of clean Pack-created worktrees with `--keep-worktree` opt-out. Those flags are accepted by strict validation. Revoked split starts also clean up their own leader bar.
+- Existing and concurrent user changes were preserved, including theme/sidebar work, the worker leader bar, and default cleanup of clean Lodestar-created worktrees with `--keep-worktree` opt-out. Those flags are accepted by strict validation. Revoked split starts also clean up their own leader bar.
 - The sidebar first-line test now ignores centering whitespace when testing the bold label; its separate centering assertion remains intact.
 
 ## Boundaries

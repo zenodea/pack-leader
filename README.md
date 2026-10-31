@@ -91,19 +91,6 @@ More in the docs: [tasks and gates](https://dea.dev/lodestar/docs/?p=tasks),
 [remote crewmates](https://dea.dev/lodestar/docs/?p=remote),
 [model routing](https://dea.dev/lodestar/docs/?p=model-routing).
 
-## Coming from Pack Leader
-
-Lodestar used to be called Pack Leader.
-
-- **Moves on its own:** on its first run, `lodestar` moves your old state and settings
-  folders to their new names.
-- **Reinstall the skill:** `lodestar skill --install` installs the new skill and removes
-  the old `pack-leader` skill and command link.
-- **On herdr:** install the `lodestar` plugin and remove the old `pack-leader` one.
-- **Renamed:** environment variables now start with `LODESTAR_` instead of `PACK_`.
-- **New branches:** they're named `lodestar/<run>/<crewmate>`; old `pack/...` branches
-  stay as they are.
-
 ## Develop
 
 ```sh

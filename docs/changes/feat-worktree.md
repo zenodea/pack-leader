@@ -41,12 +41,12 @@ worker its own working tree, so two workers never share one.
   without the worktree API (`invalid_request: unknown variant`) falls back to
   `git worktree add`. `--placement split` always uses `git worktree add`, since the
   pane sits next to the orchestrator rather than in a new workspace.
-- **Record:** `Worker.worktree = { path, branch, base, created_by_pack, repo,
+- **Record:** `Worker.worktree = { path, branch, base, created_by_lodestar, repo,
   workspace_id? }`, and `state.worktrees[path]` keeps the same plus `worker`,
   `run_id`, `created_at`, `released_at`, `removed`, so the work is findable after
   the worker is gone.
 - **Release:** keeps the worktree by default. `--remove-worktree` removes it only
-  when `created_by_pack`, via herdr's `worktree.remove` when herdr created the
+  when `created_by_lodestar`, via herdr's `worktree.remove` when herdr created the
   workspace (else `git worktree remove`), and never with `--force`: a dirty
   checkout is kept and the output's `note` says how to remove it by hand. The
   branch is never deleted. `--remove-worktree` with `--keep-pane` or a retained

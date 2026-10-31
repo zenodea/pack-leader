@@ -148,7 +148,7 @@ fn handleCrewmate(a: *const Args) !void {
             .cwd = start_cwd,
             .host = str(a, "host"),
             .placement = placement,
-            .packLayout = crew_layout,
+            .crewLayout = crew_layout,
             .direction = direction,
             .targetPane = str(a, "target-pane"),
             .ratio = if (str(a, "ratio") != null) try args_mod.num(a, "ratio", 0.5) else null,

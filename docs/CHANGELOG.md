@@ -39,19 +39,6 @@
 - state.json moves to version 2 on first use (`workers` → `crewmates` and the matching
   fields); crewmate names are kept as they are.
 
-## Unreleased: renamed to Lodestar
-
-- Pack Leader is now **Lodestar**. The command is `lodestar`, the herdr plugin id is
-  `lodestar`, and the skill is installed as `lodestar`.
-- Environment variables use the `LODESTAR_` prefix instead of `PACK_` /
-  `PACK_LEADER_` (for example `LODESTAR_RUN_ID`, `LODESTAR_MUX`).
-- New worktree branches are `lodestar/<run>/<worker>` and `lodestar/spawn/<name>`.
-  Existing `pack/...` branches are left alone.
-- The sidebar pane is titled "Workers" and the worker bar "Worker bar".
-- On first run, Lodestar moves the old `pack-leader` state and settings folders to
-  their new names when the new ones are empty. `lodestar skill --install` removes
-  the old `pack-leader` skill copies and the old `~/.local/bin/pack-leader` link.
-
 ## Unreleased: orchestration parity with Orca
 
 - `check` returns the whole backlog in `messages` (oldest first, up to 50), so one

@@ -161,7 +161,7 @@ async function show(slug, hash) {
   if (target) target.scrollIntoView();
   else window.scrollTo(0, 0);
   markReading();
-  window.packDocsShown = true;
+  window.lodestarDocsShown = true;
   document.dispatchEvent(new CustomEvent("docs:shown"));
   // The rest of the pages are small: fetch them once this one is up, so changing page is instant.
   (window.requestIdleCallback || setTimeout)(() => prefetch());
@@ -280,6 +280,6 @@ function mount() {
   q.addEventListener("keydown", searchKeys);
   return show(current(), location.hash);
 }
-window.packDocs = { mount, prefetch };
+window.lodestarDocs = { mount, prefetch };
 // Inside the landing page, script.js mounts it once the docs are on the page.
 if (document.getElementById("doc") && !document.getElementById("docs-root")) mount();

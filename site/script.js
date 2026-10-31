@@ -5,6 +5,8 @@ document.documentElement.classList.add("js");
 // The same engine runs on the landing page and on the docs, where the dots are the dividers.
 const landing = !!document.querySelector(".hero");
 const ROOT = new URL("./", document.currentScript.src);
+// The icon links are relative: make them absolute before the address changes to the docs, or the tab loses its icon.
+for (const l of document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]')) l.setAttribute("href", l.href);
 
 const canvas = document.getElementById("field");
 const ctx = canvas.getContext("2d");
@@ -704,7 +706,7 @@ const loadShell = () => (shell ||= fetch(DOCS).then((r) => { if (!r.ok) throw ne
 // The renderer and the docs' script: neither does anything on the landing until mounted.
 let scripts = null;
 const loadScripts = () => (scripts ||= load("script", "marked-js", { src: "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" })
-  .then(() => window.packDocs || load("script", "docs-js", { src: new URL("docs.js?v=7", DOCS).href })));
+  .then(() => window.lodestarDocs || load("script", "docs-js", { src: new URL("docs.js?v=8", DOCS).href })));
 // The docs page shows once the dots are on its lines.
 const REVEAL = FLY_TIME + FLY_WAVE + 100;
 
@@ -777,7 +779,7 @@ async function goDocs(url, push = true) {
   if (push) history.pushState({ docs: true }, "", url);
   inDocs = true;
   const shown = new Promise((r) => document.addEventListener("docs:shown", r, { once: true }));
-  try { await ready; window.packDocs.mount(); } catch { location.reload(); return; }
+  try { await ready; window.lodestarDocs.mount(); } catch { location.reload(); return; }
   await Promise.race([shown, wait(2500)]);
   docsForm = docsLines(root, still ? 0 : REVEAL);
   setScene("docs", true);
@@ -798,7 +800,7 @@ document.addEventListener("scroll", (e) => {
   if (e.target.id !== "side" || sideFrame) return;
   sideFrame = requestAnimationFrame(() => { sideFrame = 0; onDocsShown(); });
 }, true);
-if (window.packDocsShown) onDocsShown();
+if (window.lodestarDocsShown) onDocsShown();
 
 // Things drawn over the docs that the dots shouldn't show through.
 function occluders() {
@@ -870,7 +872,7 @@ addEventListener("popstate", () => {
   else if (!there && inDocs) goHome(false);
 });
 // Fetch the docs early, so the transition doesn't wait on the network.
-const warmDocs = () => { loadShell().catch(() => {}); if (landing) loadScripts().then(() => window.packDocs.prefetch("introduction")).catch(() => {}); };
+const warmDocs = () => { loadShell().catch(() => {}); if (landing) loadScripts().then(() => window.lodestarDocs.prefetch("introduction")).catch(() => {}); };
 document.addEventListener("pointerover", (e) => { if (e.target.closest?.('a[href^="docs/"]')) warmDocs(); }, { passive: true });
 setTimeout(warmDocs, 4000);
 

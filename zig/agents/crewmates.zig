@@ -316,7 +316,7 @@ fn worktreeRule(wt: WorktreeInfo) []const u8 {
         rt.fmt("You are in a git worktree of your own at {s}, on branch {s}. Commit your work on that branch; do not switch branches.", .{ path, br })
     else
         rt.fmt("You are in a git worktree of your own at {s}, on a detached HEAD ({s}). Create a branch before you commit, and commit your work on it.", .{ path, shortSha(base) });
-    const fresh = if (wt.truthy("created_by_pack")) rt.fmt(" It is a fresh checkout of {s}: nothing was installed or copied into it, so install dependencies yourself if the task needs them.", .{shortSha(base)}) else "";
+    const fresh = if (wt.truthy("created_by_lodestar")) rt.fmt(" It is a fresh checkout of {s}: nothing was installed or copied into it, so install dependencies yourself if the task needs them.", .{shortSha(base)}) else "";
     return rt.concat(&.{ "- ", where, fresh });
 }
 
@@ -333,7 +333,7 @@ pub const StartOptions = struct {
     cwd: ?[]const u8 = null,
     /// "tab" | "split" | "background" (no tab at all; only where the multiplexer can)
     placement: []const u8,
-    packLayout: bool = false,
+    crewLayout: bool = false,
     /// "right" | "down"
     direction: []const u8,
     targetPane: ?[]const u8 = null,
@@ -506,7 +506,7 @@ fn admitTx(c: *const AdmitCtx, s: State) !Admitted {
 
 fn sameWorktreePlan(x: WorktreeInfo, y: WorktreeInfo) bool {
     return rt.eqlOpt(x.str("path"), y.str("path")) and rt.eqlOpt(x.str("repo"), y.str("repo")) and rt.eqlOpt(x.str("branch"), y.str("branch")) and
-        rt.eqlOpt(x.str("base"), y.str("base")) and x.truthy("created_by_pack") == y.truthy("created_by_pack");
+        rt.eqlOpt(x.str("base"), y.str("base")) and x.truthy("created_by_lodestar") == y.truthy("created_by_lodestar");
 }
 
 const ClaimCtx = struct { o: *const StartOptions, task_id: []const u8, dispatch_id: []const u8 };
@@ -605,7 +605,7 @@ fn startStages(o: *const StartOptions, task: Task, dispatch_id: []const u8, wt: 
             }
             try state.update(void, &AuthCtx{ .a = .{ .runId = rid, .name = o.name, .taskId = task_id, .dispatchId = dispatch_id } }, authTx);
         }
-        logEvent(.{ .{ "event", "worktree.ready" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "path", path }, .{ "branch", val(w, "branch") }, .{ "created", w.truthy("created_by_pack") }, .{ "workspace", json.optStr(w.str("workspace_id")) } });
+        logEvent(.{ .{ "event", "worktree.ready" }, .{ "run", rid }, .{ "crewmate", o.name }, .{ "path", path }, .{ "branch", val(w, "branch") }, .{ "created", w.truthy("created_by_lodestar") }, .{ "workspace", json.optStr(w.str("workspace_id")) } });
     }
     if (rt.eql(o.placement, "tab") or rt.eql(o.placement, "background")) {
         const or_ = orch(o.run);
@@ -644,7 +644,7 @@ fn startStages(o: *const StartOptions, task: Task, dispatch_id: []const u8, wt: 
     } else {
         const target = o.targetPane orelse orch(o.run).str("pane_id");
         if (target == null or target.?.len == 0) return rt.fail(null, "the run has no orchestrator pane; pass --target-pane", .{});
-        const pane = if (o.packLayout)
+        const pane = if (o.crewLayout)
             try crew_layout.placeInPack(o.run, .{ .cwd = cwd, .env = env })
         else
             try mux.paneSplit(json.object(.{ .{ "target_pane_id", target.? }, .{ "direction", o.direction }, .{ "cwd", cwd }, .{ "env", env }, .{ "ratio", o.ratio } }));
@@ -751,7 +751,7 @@ pub fn startCrewmate(o_in: StartOptions) !*Obj {
     const sel = p.selection.?;
 
     const background = rt.eql(o.placement, "background");
-    const bar_pane: ?[]const u8 = if (rt.eqlOpt(rt.getenv("LODESTAR_BAR"), "0") or o.packLayout or background) null else blk: {
+    const bar_pane: ?[]const u8 = if (rt.eqlOpt(rt.getenv("LODESTAR_BAR"), "0") or o.crewLayout or background) null else blk: {
         const br = if (wt) |w| w.strNonEmpty("branch") else null;
         break :blk openLeaderBar(o.run, o.name, pane_id, br orelse (if (wt) |w| w.str("branch") else null) orelse fs.basename(cwd), if (br != null) "Branch" else "Dir", task.str("title") orelse "");
     };
@@ -1624,7 +1624,7 @@ pub fn releaseCrewmate(run: Run, name: []const u8, opts: ReleaseCrewmateOpts) !*
     const pane_stays = opts.keepPane or w.truthy("retained") or !w.truthy("owns_pane");
     if (opts.keepWorktree) {
         note = "kept (--keep-worktree)";
-    } else if (!wt.truthy("created_by_pack")) {
+    } else if (!wt.truthy("created_by_lodestar")) {
         note = "not created by lodestar, so it was left in place";
     } else if (pane_stays) {
         note = "kept: its pane stays open";
@@ -1656,7 +1656,7 @@ pub fn materializeWorktree(wt: WorktreeInfo, label: []const u8, as_workspace: bo
     if (as_workspace and mux.caps().workspaces) {
         const repo = wt.str("repo") orelse "";
         const path = wt.str("path") orelse "";
-        const res = if (wt.truthy("created_by_pack"))
+        const res = if (wt.truthy("created_by_lodestar"))
             mux.worktreeCreate(json.object(.{ .{ "cwd", repo }, .{ "path", path }, .{ "branch", wt.str("branch") orelse "" }, .{ "base", wt.str("base") orelse "" }, .{ "label", label } }))
         else
             mux.worktreeOpen(json.object(.{ .{ "cwd", repo }, .{ "path", path }, .{ "label", label } }));
@@ -1670,7 +1670,7 @@ pub fn materializeWorktree(wt: WorktreeInfo, label: []const u8, as_workspace: bo
             if (!worktree.isUnknownMethod(err)) return err;
         }
     }
-    if (wt.truthy("created_by_pack")) try worktree.gitWorktreeAdd(wt);
+    if (wt.truthy("created_by_lodestar")) try worktree.gitWorktreeAdd(wt);
     return .{ .shellTab = null };
 }
 
@@ -1707,7 +1707,7 @@ pub fn sweepWorktrees(o: SweepWorktreesOpts) !*Obj {
     const kept = json.newArr();
     const recs = if (s.obj("worktrees")) |x| x.objValues() else &[_]*Obj{};
     for (recs) |rec| {
-        if (!rec.truthy("created_by_pack") or rec.truthy("removed")) continue;
+        if (!rec.truthy("created_by_lodestar") or rec.truthy("removed")) continue;
         const id = json.object(.{ .{ "path", val(rec, "path") }, .{ "crewmate", val(rec, "crewmate") }, .{ "run_id", val(rec, "run_id") } });
         const keep = struct {
             fn f(k: *json.Arr, base: *Obj, reason: []const u8) void {
@@ -1762,14 +1762,14 @@ fn localDispatchClaimsCheckout(d: *const Obj, path: []const u8) bool {
     return rt.eql(worktree.worktreeIdentityPath(p), path);
 }
 
-/// `wt` carries { path, created_by_pack, crewmate, run_id }; `owner_dispatch_id` is the record's dispatch.
+/// `wt` carries { path, created_by_lodestar, crewmate, run_id }; `owner_dispatch_id` is the record's dispatch.
 fn sweepLeaseOwned(s: State, wt: *const Obj, owner_dispatch_id: ?[]const u8, require_released: bool) bool {
     const path = wt.str("path") orelse "";
     const rec = state.worktrees(s).obj(path);
     const d: ?*Obj = if (owner_dispatch_id) |id| state.getDispatch(s, id) else null;
     const record_matches = rec != null and rt.eqlOpt(rec.?.str("crewmate"), wt.str("crewmate")) and rt.eqlOpt(rec.?.str("run_id"), wt.str("run_id")) and
-        rt.eqlOpt(rec.?.str("dispatch_id"), owner_dispatch_id) and rec.?.truthy("created_by_pack") == wt.truthy("created_by_pack") and
-        (!require_released or (rec.?.truthy("released_at") and rec.?.truthy("created_by_pack") and !rec.?.truthy("kept") and !rec.?.truthy("removed") and !rec.?.truthy("cleanup_protection")));
+        rt.eqlOpt(rec.?.str("dispatch_id"), owner_dispatch_id) and rec.?.truthy("created_by_lodestar") == wt.truthy("created_by_lodestar") and
+        (!require_released or (rec.?.truthy("released_at") and rec.?.truthy("created_by_lodestar") and !rec.?.truthy("kept") and !rec.?.truthy("removed") and !rec.?.truthy("cleanup_protection")));
     const dispatch_matches = d != null and !d.?.truthy("execution_host") and rt.eqlOpt(d.?.str("run_id"), wt.str("run_id")) and rt.eqlOpt(d.?.str("crewmate"), wt.str("crewmate")) and
         isTruthyStr(d.?.str("worktree_path")) and rt.eql(worktree.worktreeIdentityPath(d.?.str("worktree_path").?), path);
     var other_crewmate = false;
@@ -1816,7 +1816,7 @@ fn cleanupOwnedWorktree(wt: WorktreeInfo, run_id: []const u8, crewmate: []const 
     var removed = false;
     var already_missing = false;
     var note: ?[]const u8 = null;
-    if (!wt.truthy("created_by_pack")) {
+    if (!wt.truthy("created_by_lodestar")) {
         note = "not created by lodestar, so it was left in place";
     } else if (!fs.exists(path)) {
         removed = true;
@@ -1836,7 +1836,7 @@ fn undoWorktree(wt: WorktreeInfo, run_id: []const u8, crewmate: []const u8, disp
     logEvent(.{ .{ "event", "worktree.start_failed" }, .{ "run", run_id }, .{ "crewmate", crewmate }, .{ "dispatch", dispatch_id }, .{ "path", path }, .{ "removed", result.removed }, .{ "note", result.note } });
     if (result.removed) return rt.fmt("the worktree {s} made for it was removed (branch {s} kept)", .{ path, wt.str("branch") orelse "null" });
     if (result.note) |n| if (rt.contains(n, "ownership changed")) return rt.fmt("the worktree {s} is left in place ({s})", .{ path, n });
-    if (wt.truthy("created_by_pack")) return rt.fmt("the worktree {s} made for it is left in place ({s})", .{ path, result.note orelse "not removed" });
+    if (wt.truthy("created_by_lodestar")) return rt.fmt("the worktree {s} made for it is left in place ({s})", .{ path, result.note orelse "not removed" });
     return rt.fmt("the worktree {s} is left as it was", .{path});
 }
 
@@ -2299,7 +2299,7 @@ test "sweepWorktrees removes a released, clean crew checkout and keeps protected
     rec.putStr("released_at", state.now());
     state.worktrees(s).put(path, rec.val());
     state.dispatches(s).put("d1", json.object(.{ .{ "id", "d1" }, .{ "run_id", "r1" }, .{ "task_id", "t1" }, .{ "crewmate", "a" }, .{ "worktree_path", path }, .{ "settled_at", state.now() } }).val());
-    const kept = json.object(.{ .{ "path", "/elsewhere" }, .{ "created_by_pack", true }, .{ "crewmate", "b" }, .{ "run_id", "r1" }, .{ "cleanup_protection", "pane_kept" } });
+    const kept = json.object(.{ .{ "path", "/elsewhere" }, .{ "created_by_lodestar", true }, .{ "crewmate", "b" }, .{ "run_id", "r1" }, .{ "cleanup_protection", "pane_kept" } });
     state.worktrees(s).put("/elsewhere", kept.val());
     try state.save(s);
     const dry = try sweepWorktrees(.{ .dryRun = true });
@@ -2322,7 +2322,7 @@ test "preamble, summaries and next action" {
     const run = json.object(.{ .{ "id", "r1" }, .{ "status", "active" }, .{ "orchestrator", json.object(.{ .{ "pane_id", "w:1" }, .{ "cwd", "/repo" } }) } });
     state.runs(s).put("r1", run.val());
     const task = state.addTask(s, "r1", "  Do the thing\nwith care  ", null);
-    const wt = json.object(.{ .{ "path", "/wt/a" }, .{ "branch", json.nul }, .{ "base", "0123456789abcdef" }, .{ "created_by_pack", true }, .{ "repo", "/repo" } });
+    const wt = json.object(.{ .{ "path", "/wt/a" }, .{ "branch", json.nul }, .{ "base", "0123456789abcdef" }, .{ "created_by_lodestar", true }, .{ "repo", "/repo" } });
     const text = preamble(.{ .crewmate = "a", .run = run, .task = task, .dispatchId = "d2", .cwd = "/wt/a", .worktree = wt, .explicitContext = true });
     try std.testing.expect(rt.startsWith(text, "[lodestar dispatch] You are crewmate \"a\" in run r1, on task t1 (\"Do the thing\"), dispatch d2.\n"));
     try std.testing.expect(rt.contains(text, "on a detached HEAD (0123456789ab)"));

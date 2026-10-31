@@ -6,7 +6,7 @@ const proc = @import("../core/proc.zig");
 
 const Obj = json.Obj;
 
-/// { path, branch: string|null, base, created_by_pack, repo, workspace_id? }
+/// { path, branch: string|null, base, created_by_lodestar, repo, workspace_id? }
 pub const WorktreeInfo = *Obj;
 /// WorktreeInfo & { crewmate, run_id, dispatch_id?, created_at, released_at?, removed?, kept?, cleanup_protection? }
 pub const WorktreeRecord = *Obj;
@@ -81,12 +81,12 @@ pub fn defaultBranch(run_id: []const u8, crewmate: []const u8) []const u8 {
     return rt.concat(&.{ "lodestar/", run_id, "/", crewmate });
 }
 
-fn info(path: []const u8, branch: ?[]const u8, base: []const u8, created_by_pack: bool, repo: []const u8) WorktreeInfo {
+fn info(path: []const u8, branch: ?[]const u8, base: []const u8, created_by_lodestar: bool, repo: []const u8) WorktreeInfo {
     return json.object(.{
         .{ "path", path },
         .{ "branch", json.optStr(branch) },
         .{ "base", base },
-        .{ "created_by_pack", created_by_pack },
+        .{ "created_by_lodestar", created_by_lodestar },
         .{ "repo", repo },
     });
 }
@@ -172,13 +172,13 @@ test "worktree planning in a fresh repository" {
     rt.setenv("LODESTAR_WORKTREE_DIR", "");
     const wt = try planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .crewmate = "w" });
     try std.testing.expectEqualStrings("lodestar/r1/w", wt.str("branch").?);
-    try std.testing.expect(wt.boolean("created_by_pack").?);
+    try std.testing.expect(wt.boolean("created_by_lodestar").?);
     try std.testing.expect(rt.endsWith(wt.str("path").?, "repo-wt/w"));
     try std.testing.expectError(error.Fail, planWorktree(.{ .spec = "new", .cwd = repo, .runId = "r1", .crewmate = "w", .branch = "bad..name" }));
     try std.testing.expectEqualStrings("--branch bad..name is not a valid branch name", rt.last.message);
     try std.testing.expectError(error.Fail, planWorktree(.{ .spec = "nope", .cwd = repo, .runId = "r1", .crewmate = "w" }));
     const reuse = try planWorktree(.{ .spec = ".", .cwd = repo, .runId = "r1", .crewmate = "w" });
-    try std.testing.expect(!reuse.boolean("created_by_pack").?);
+    try std.testing.expect(!reuse.boolean("created_by_lodestar").?);
     const choice = try worktreeForMode("on", null, repo, false);
     try std.testing.expectEqualStrings("new", choice.worktree.?);
     const shared = try worktreeForMode("on", null, tmp, false);
