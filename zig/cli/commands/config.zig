@@ -16,7 +16,7 @@ const Obj = json.Obj;
 const str = args_mod.str;
 const has = args_mod.has;
 
-const PLACEMENTS = [_][]const u8{ "tab", "split" };
+const PLACEMENTS = config.PLACEMENTS;
 const WORKTREE_MODES = config.WORKTREE_MODES;
 
 fn configFile() []const u8 {
@@ -43,7 +43,7 @@ fn handoffWith(c: *Obj, key: []const u8, v: json.Value) void {
 
 fn applySettingFlags(c: *Obj, a: *const Args) !void {
     if (str(a, "placement")) |p| {
-        if (!inList(p, &PLACEMENTS)) return rt.fail(null, "--placement takes tab or split", .{});
+        if (!inList(p, &PLACEMENTS)) return rt.fail(null, "--placement takes tab, split or background", .{});
         c.putStr("placement", p);
     }
     if (str(a, "worktree-mode")) |w| {
@@ -51,6 +51,7 @@ fn applySettingFlags(c: *Obj, a: *const Args) !void {
         c.putStr("worktree", w);
     }
     if (has(a, "navigator")) c.putBool("navigator", try onOff(a, "navigator"));
+    if (has(a, "popup")) c.putBool("popup", try onOff(a, "popup"));
     if (has(a, "review")) c.putBool("review", try onOff(a, "review"));
     if (has(a, "stall-minutes")) {
         const n = args_mod.jsNumber(str(a, "stall-minutes") orelse "x");
@@ -87,7 +88,7 @@ fn openSettings(from_action: bool) !void {
 }
 
 const KIND_FLAGS = [_][]const u8{ "kind", "model", "thinking", "clear-model", "clear-thinking", "default" };
-const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "navigator", "review", "stall-minutes", "handoff", "handoff-at" };
+const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "navigator", "popup", "review", "stall-minutes", "handoff", "handoff-at" };
 
 fn anyFlag(a: *const Args, names: []const []const u8) bool {
     for (names) |n| if (has(a, n)) return true;

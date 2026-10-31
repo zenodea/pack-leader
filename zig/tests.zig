@@ -57,6 +57,7 @@ test {
     std.testing.refAllDecls(@import("ui/settings.zig"));
     std.testing.refAllDecls(@import("ui/sidebar_messages.zig"));
     std.testing.refAllDecls(@import("ui/sidebar.zig"));
+    std.testing.refAllDecls(@import("ui/popup.zig"));
     std.testing.refAllDecls(@import("ui/term.zig"));
     std.testing.refAllDecls(@import("ui/theme.zig"));
     std.testing.refAllDecls(@import("ui/usage_box.zig"));

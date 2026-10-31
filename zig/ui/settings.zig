@@ -4,6 +4,7 @@ const json = @import("../core/json.zig");
 const proc = @import("../core/proc.zig");
 const config = @import("../core/config.zig");
 const crewmates = @import("../agents/crewmates.zig");
+const mux = @import("../mux/index.zig");
 const ansi = @import("ansi.zig");
 const term = @import("term.zig");
 const picker = @import("picker.zig");
@@ -78,12 +79,14 @@ pub fn modelsFor(kind: []const u8) []const PickItem {
 pub fn placementLabel(p: []const u8) []const u8 {
     if (rt.eql(p, "tab")) return "hidden tabs";
     if (rt.eql(p, "split")) return "beside the leader";
+    if (rt.eql(p, "background")) return if (mux.caps().background) "no tabs" else "no tabs (hidden tabs here)";
     return "undefined";
 }
 
 fn placementPhrase(p: []const u8) []const u8 {
     if (rt.eql(p, "tab")) return "each in a hidden tab of its own";
     if (rt.eql(p, "split")) return "in the right half of your tab, each new one splitting the biggest crewmate the other way";
+    if (rt.eql(p, "background")) return if (mux.caps().background) "in no tab at all; the user opens one from the crew pane as a popup" else "each in a hidden tab of its own (no tabs is set, but this multiplexer needs a tab)";
     return "undefined";
 }
 
@@ -103,6 +106,8 @@ pub const SettingsRow = struct {
     help: []const u8,
     value: *const fn (c: Config) []const u8,
     change: *const fn (c: Config, ask: Ask) anyerror!void,
+    /// Whether the row applies under the multiplexer Lodestar runs in; rows without one always do.
+    shown: ?*const fn () bool = null,
 };
 
 const HARNESS_DEFAULT: PickItem = .{ .value = "", .label = "harness default", .description = "pass nothing; the harness picks" };
@@ -151,6 +156,9 @@ fn sWorktree(c: Config) []const u8 {
 fn sNavigator(c: Config) bool {
     return settings(c).boolean("navigator") orelse true;
 }
+fn sPopup(c: Config) bool {
+    return settings(c).boolean("popup") orelse true;
+}
 fn sReview(c: Config) bool {
     return settings(c).boolean("review") orelse true;
 }
@@ -196,8 +204,9 @@ fn vPlacement(c: Config) []const u8 {
     return placementLabel(sPlacement(c));
 }
 fn cPlacement(c: Config, ask: Ask) anyerror!void {
-    const items = [_]PickItem{ .{ .value = "tab", .label = "hidden tabs" }, .{ .value = "split", .label = "beside the leader" } };
-    const v = try ask(.{ .title = "New crewmates open in", .items = &items, .current = sPlacement(c) });
+    const all = [_]PickItem{ .{ .value = "tab", .label = "hidden tabs" }, .{ .value = "split", .label = "beside the leader" }, .{ .value = "background", .label = "no tabs" } };
+    const items = if (mux.caps().background) all[0..] else all[0..2];
+    const v = try ask(.{ .title = "New crewmates open in", .items = items, .current = sPlacement(c) });
     if (v) |x| if (x.len > 0) c.putStr("placement", x);
 }
 
@@ -216,6 +225,17 @@ fn vNavigator(c: Config) []const u8 {
 fn cNavigator(c: Config, ask: Ask) anyerror!void {
     _ = ask;
     c.putBool("navigator", !sNavigator(c));
+}
+
+fn vPopup(c: Config) []const u8 {
+    return onOff(sPopup(c));
+}
+fn cPopup(c: Config, ask: Ask) anyerror!void {
+    _ = ask;
+    c.putBool("popup", !sPopup(c));
+}
+fn canFloat() bool {
+    return mux.caps().float;
 }
 
 fn vReview(c: Config) []const u8 {
@@ -267,7 +287,8 @@ pub const SETTINGS_ROWS = [_]SettingsRow{
     .{ .section = "Crew", .label = "Harness", .help = "The agent new crewmates run in. Model and effort below belong to this harness.", .value = vHarness, .change = cHarness },
     .{ .section = "Crew", .label = "Model", .help = "The model new crewmates get. Type a name that is not listed and press enter to use it.", .value = modelOrDefault, .change = cModel },
     .{ .section = "Crew", .label = "Effort", .help = "The thinking level new crewmates get.", .value = thinkingOrDefault, .change = cEffort },
-    .{ .section = "Crew", .label = "Placement", .help = "hidden tabs: each crewmate in its own tab, shown in the sidebar. beside the leader: leader top left, navigator below it, crewmates fill the right half; each new one splits the biggest crewmate the other way. Remote crewmates always get a tab.", .value = vPlacement, .change = cPlacement },
+    .{ .section = "Crew", .label = "Placement", .help = "hidden tabs: each crewmate in its own tab, shown in the sidebar. beside the leader: leader top left, navigator below it, crewmates fill the right half; each new one splits the biggest crewmate the other way. no tabs (Rex): crewmates run in no tab; enter in the crew pane opens one as a popup. Remote crewmates always get a tab.", .value = vPlacement, .change = cPlacement },
+    .{ .section = "Crew", .label = "Popup", .help = "on: p in the crew pane opens the selected crewmate in a window floating over your tab; type to answer it, ctrl-] closes it. Crewmates without a tab always open this way.", .value = vPopup, .change = cPopup, .shown = canFloat },
     .{ .section = "Crew", .label = "Worktrees", .help = "on: every crewmate in a git repo gets its own worktree. off: no crewmate gets one. leader decides: the orchestrator picks per crewmate. one shared worktree: all crewmates of a run edit one checkout on branch lodestar/<run>/shared; each `done` commits that crewmate's files (retrying while git is busy) and `lodestar run merge` merges the branch back.", .value = vWorktree, .change = cWorktree },
     .{ .section = "Orchestrator", .label = "Navigator", .help = "The second agent under the leader that you can ask about the run. It never acts on the run.", .value = vNavigator, .change = cNavigator },
     .{ .section = "Orchestrator", .label = "Review", .help = "on: the leader checks each crewmate's work before accepting its report. off: the leader only assigns work, answers questions and unsticks crewmates; it accepts reports without reviewing the code, and crewmates are told to verify their own work.", .value = vReview, .change = cReview },
@@ -292,7 +313,7 @@ fn joinNonEmpty(parts: []const ?[]const u8, sep: []const u8) []const u8 {
 pub fn describeSettings(c: Config) []const u8 {
     const d = kindDefaults(c);
     const handoff = sHandoff(c);
-    const wk = joinNonEmpty(&.{ kindOf(c), d.str("model"), d.str("thinking"), placementLabel(sPlacement(c)), rt.concat(&.{ "worktrees ", worktreeLabel(sWorktree(c)) }) }, " · ");
+    const wk = joinNonEmpty(&.{ kindOf(c), d.str("model"), d.str("thinking"), placementLabel(sPlacement(c)), if (canFloat()) rt.concat(&.{ "popup ", onOff(sPopup(c)) }) else null, rt.concat(&.{ "worktrees ", worktreeLabel(sWorktree(c)) }) }, " · ");
     const handoff_text = if (handoff.boolean("enabled") orelse false) rt.concat(&.{ "handoff at ", config.formatTokens(atTokens(c)) }) else "handoff off";
     const leader = joinNonEmpty(&.{ rt.concat(&.{ "navigator ", onOff(sNavigator(c)) }), rt.concat(&.{ "review ", onOff(sReview(c)) }), rt.concat(&.{ "stall ", minutes(sStall(c)) }), handoff_text }, " · ");
     return rt.concat(&.{ "crewmates: ", wk, " | leader: ", leader });
@@ -332,14 +353,22 @@ pub fn settingsInForce(c: Config) []const u8 {
     return out.items;
 }
 
+/// The rows that apply under the current multiplexer.
+pub fn visibleRows() []const SettingsRow {
+    var out: std.ArrayListUnmanaged(SettingsRow) = .empty;
+    for (SETTINGS_ROWS) |r| if (r.shown == null or r.shown.?()) out.append(rt.a, r) catch {};
+    return out.items;
+}
+
 pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: []const u8) []const []const u8 {
+    const shown = visibleRows();
     var label_width: usize = 0;
-    for (SETTINGS_ROWS) |r| label_width = @max(label_width, r.label.len);
+    for (shown) |r| label_width = @max(label_width, r.label.len);
     label_width += 3;
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
     lines.append(rt.a, ansi.bold("Lodestar settings")) catch {};
     var section: []const u8 = "";
-    for (SETTINGS_ROWS, 0..) |row, i| {
+    for (shown, 0..) |row, i| {
         if (!rt.eql(row.section, section)) {
             section = row.section;
             lines.appendSlice(rt.a, &.{ "", ansi.dim(section) }) catch {};
@@ -349,7 +378,7 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     }
     lines.append(rt.a, "") catch {};
     const help_width: usize = @intCast(@max(20, @as(i64, @intCast(cols)) - 2));
-    for (ansi.wrap(SETTINGS_ROWS[sel].help, help_width)) |l| lines.append(rt.a, ansi.dim(l)) catch {};
+    for (ansi.wrap(shown[sel].help, help_width)) |l| lines.append(rt.a, ansi.dim(l)) catch {};
     if (notice.len > 0) lines.appendSlice(rt.a, &.{ "", ansi.fg.yellow(notice) }) catch {};
     const hint = ansi.dim("↑↓ move · enter change · esc close");
     const body_n = @min(lines.items.len, @max(1, @as(usize, @intCast(@max(0, @as(i64, @intCast(rows)) - 1)))));
@@ -394,7 +423,8 @@ pub fn runSettings() !Config {
         raw.disable();
         rt.writeStdout(ansi.screen.showCursor ++ ansi.screen.main);
     }
-    const n = SETTINGS_ROWS.len;
+    const shown = visibleRows();
+    const n = shown.len;
     drawSettings(c, sel, notice);
     var reader: term.KeyReader = .{};
     while (true) {
@@ -408,7 +438,7 @@ pub fn runSettings() !Config {
             } else if (rt.eql(name, "down") or rt.eql(name, "j") or (key.ctrl and rt.eql(name, "n"))) {
                 sel = (sel + 1) % n;
             } else if (rt.eql(name, "return") or rt.eql(name, "enter") or rt.eql(name, "space")) {
-                if (SETTINGS_ROWS[sel].change(c, askNested)) |_| {
+                if (shown[sel].change(c, askNested)) |_| {
                     if (config.saveConfig(c)) |_| notice = "" else |err| notice = rt.dupe(rt.errMessage(err));
                 } else |err| notice = rt.dupe(rt.errMessage(err));
                 raw.enable();
@@ -419,4 +449,21 @@ pub fn runSettings() !Config {
             drawSettings(c, sel, notice);
         }
     }
+}
+
+test "the settings page shows the popup row and no-tabs placement only where the multiplexer can" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var map = std.process.Environ.Map.init(arena.allocator());
+    rt.initForTest(arena.allocator(), &map);
+    defer mux.useMux(null);
+    const c = json.newObj();
+    mux.useMux(&@import("../mux/herdr.zig").backend);
+    for (visibleRows()) |r| try std.testing.expect(!rt.eql(r.label, "Popup"));
+    try std.testing.expectEqualStrings("no tabs (hidden tabs here)", placementLabel("background"));
+    mux.useMux(&@import("../mux/rex.zig").backend);
+    var popup = false;
+    for (visibleRows()) |r| popup = popup or rt.eql(r.label, "Popup");
+    try std.testing.expect(popup);
+    try std.testing.expectEqualStrings("on", vPopup(c));
 }

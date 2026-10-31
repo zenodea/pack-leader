@@ -14,6 +14,7 @@ const term = @import("term.zig");
 const theme_mod = @import("theme.zig");
 const sm = @import("sidebar_messages.zig");
 const proc = @import("../core/proc.zig");
+const config = @import("../core/config.zig");
 
 const Obj = json.Obj;
 const State = state.State;
@@ -297,6 +298,13 @@ pub fn statusOf(w: Crewmate, live: ?*const Live) []const u8 {
         return e.status;
     }
     return if (rt.eqlOpt(liveness, "exited")) "exited" else "unknown";
+}
+
+/// The popup key works where the multiplexer can float a window and the settings leave it on.
+fn popupOn() bool {
+    if (!mux.caps().float) return false;
+    const c = config.loadConfig() catch return true;
+    return config.settingsOf(c).popup;
 }
 
 pub fn sidebarCrewmateTarget(w: Crewmate) []const u8 {
@@ -720,7 +728,7 @@ const Sidebar = struct {
         if (self.help) footer = dim(if (self.panel) |p|
             (if (p.detail) "j/k or wheel scroll message · Esc returns to list · u/y switch views · q quit" else "j/k or wheel browse · Enter reads full message · Esc returns to dashboard · u/y switch views · q quit")
         else
-            "j/k or wheel move · click selects, click again opens · enter opens · o back · r peek · R refresh · u/y messages · q quit");
+            (if (popupOn()) "j/k or wheel move · click selects, click again opens · enter opens · p popup · o back · r preview · R refresh · u/y messages · q quit" else "j/k or wheel move · click selects, click again opens · enter opens · o back · r preview · R refresh · u/y messages · q quit"));
 
         const half: usize = @intCast(@divFloor(rows_avail, 2));
         const pinned = if (half == 0) tail.items else tail.items[tail.items.len -| half..];
@@ -770,9 +778,33 @@ const Sidebar = struct {
         const rws = self.rows();
         if (self.sel >= rws.len) return;
         const w = rws[self.sel].crewmate;
+        // A crewmate without a tab has nowhere to switch to; it opens over this tab.
+        if (w.truthy("background")) return self.popupSelected(true);
         const prev = remote.enterHost(w.get("execution_host")) catch |err| return self.errorMessage(err);
         defer remote.leaveHost(prev);
         _ = mux.agentFocus(sidebarCrewmateTarget(w)) catch |err| self.errorMessage(err);
+    }
+
+    /// The selected crewmate in a window floating over this tab (`lodestar popup`). `always` skips the setting,
+    /// for crewmates that have no tab to open instead.
+    fn popupSelected(self: *Sidebar, always: bool) void {
+        if (self.panel != null) return;
+        if (!(if (always) mux.caps().float else popupOn())) return;
+        const rws = self.rows();
+        if (self.sel >= rws.len) return;
+        const w = rws[self.sel].crewmate;
+        if (w.truthy("execution_host")) {
+            self.setMessage("remote crewmates have no popup; enter opens their tab");
+            return self.schedule();
+        }
+        const pane = w.strNonEmpty("pane_id") orelse return;
+        const name = w.str("name") orelse pane;
+        const over = self.pane orelse return;
+        _ = mux.openFloat(json.object(.{
+            .{ "over_pane_id", over },
+            .{ "label", name },
+            .{ "command", json.strArr(&.{ paths.lodestar_bin, "popup", pane, "--name", name }) },
+        })) catch |err| self.errorMessage(err);
     }
 
     fn move(self: *Sidebar, by: i64) void {
@@ -869,6 +901,7 @@ const Sidebar = struct {
         if (rt.eql(n, "j") or rt.eql(n, "down")) return self.move(1);
         if (rt.eql(n, "k") or rt.eql(n, "up")) return self.move(-1);
         if (rt.eql(n, "return") or rt.eql(n, "enter")) return self.openSelected();
+        if (rt.eql(n, "p")) return self.popupSelected(false);
         if (rt.eql(n, "o")) {
             if (cur) |c| if (state.orchestratorPane(c.run)) |p| if (p.len > 0) {
                 _ = mux.paneFocus(p) catch |err| self.errorMessage(err);

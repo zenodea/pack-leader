@@ -46,6 +46,11 @@ pub const Capabilities = struct {
     layout_tree: bool,
     arrange: bool,
     workspaces: bool,
+    /// A window floating over a tab that runs a command (`openFloat`), and a crewmate's styled screen and raw
+    /// input (`screenStyled`, `writeInput`): what the popup needs.
+    float: bool = false,
+    /// Panes that run in no tab at all (`createBackground`), shown through the popup.
+    background: bool = false,
 };
 
 pub const Serviced = struct { events: []MuxEvent, state: ?bool };
@@ -127,6 +132,18 @@ pub const Multiplexer = struct {
     worktreeCreate: ?*const fn (p: *Obj) anyerror!Value = null,
     worktreeOpen: ?*const fn (p: *Obj) anyerror!Value = null,
     worktreeRemove: ?*const fn (workspace_id: []const u8) anyerror!Value = null,
+
+    /// { over_pane_id, command: [argv], label? } -> pane: a focused window floating over the pane's tab, running
+    /// the command; it closes when the command exits.
+    openFloat: ?*const fn (p: *Obj) anyerror!*Obj = null,
+    /// The pane's visible screen with its colours, one row per line ("\r\n" between rows).
+    screenStyled: ?*const fn (pane_id: []const u8) anyerror![]const u8 = null,
+    /// Bytes typed into the pane as if from its keyboard, escape sequences included.
+    writeInput: ?*const fn (pane_id: []const u8, bytes: []const u8) anyerror!void = null,
+    /// { workspace_id, label, cwd?, env?, columns?, rows? } -> pane running the user's shell in no tab.
+    createBackground: ?*const fn (p: *Obj) anyerror!*Obj = null,
+    /// Sets a pane's size while no client shows it (a background pane); a no-op otherwise.
+    resizeHidden: ?*const fn (pane_id: []const u8, columns: i64, rows: i64) anyerror!void = null,
 };
 
 pub const TabCreated = struct { tab: ?*Obj, root_pane: ?*Obj };

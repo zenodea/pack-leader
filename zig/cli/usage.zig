@@ -53,12 +53,13 @@ const TEXT =
     \\  lodestar host list | show NAME | remove NAME        trusted profiles only; credentials stay in OpenSSH
     \\ Crewmates
     \\  lodestar crew start NAME --spec "..." | --task ID [--retry] [--kind {s}] [--model M] [--thinking L] [--router off|openai|jev] [--cwd D] [--host NAME]
-    \\                    [--placement tab|split] [--direction right|down]
+    \\                    [--placement tab|split|background] [--direction right|down]
     \\                    [--worktree new|PATH [--base REF] [--branch B]] [--title T] [--target-pane P] [--ratio R]
     \\                    [--setup-command STRING [--setup-timeout MS]] [--no-default-args] [--timeout MS] [-- agent args]
     \\                                                hidden tab by default; split fills the right half of your tab, each new crewmate
     \\                                                halving the biggest one the other way. --target-pane, --direction or --ratio
-    \\                                                split that one pane instead (--direction is an error with --placement tab). --worktree new: its own
+    \\                                                split that one pane instead (--direction is an error with --placement tab). background (Rex):
+    \\                                                no tab at all; open it from the sidebar as a popup. --worktree new: its own
     \\                                                checkout at <repo>-wt/NAME (or $LODESTAR_WORKTREE_DIR/NAME) on lodestar/RUN/NAME
     \\                                                --setup-command runs an explicitly authorized shell hook there once before agent launch
     \\                                                --setup-timeout defaults to {d}ms (maximum {d}ms); hook output is logged privately
@@ -109,15 +110,17 @@ const TEXT =
     \\                                                done/ask/note/heartbeat/send/inbox: override the IDs from the environment; orchestrator send accepts --run only
     \\Remote host requirements: reciprocal non-interactive SSH access, pre-trusted host keys, and Lodestar/herdr/Node already installed remotely. Remote worktrees, local setup hooks and adoption are unsupported; host disconnects preserve crewmates/tasks as unreachable, not exited.
     \\Either
-    \\  lodestar settings                                 the settings page: harness, model, effort, placement, worktrees, navigator,
-    \\                                                       review, stall alert and handoff (needs a terminal)
+    \\  lodestar settings                                 the settings page: harness, model, effort, placement, popup, worktrees,
+    \\                                                       navigator, review, stall alert and handoff (needs a terminal); rows the
+    \\                                                       multiplexer can't use are hidden
     \\  lodestar config pick                              the same page, under its old name
     \\  lodestar config [show]                            the settings as JSON
     \\  lodestar config set [--routing-config FILE] [--router off|openai|jev] [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
-    \\                     [--placement tab|split] [--worktree-mode on|off|leader|shared] [--navigator on|off]
+    \\                     [--placement tab|split|background] [--popup on|off] [--worktree-mode on|off|leader|shared] [--navigator on|off]
     \\                     [--review on|off] [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
     \\  lodestar skill [--install]                        the guide; or install it into Claude Code, Codex and pi
     \\  lodestar sidebar                                  the crewmates, live (run by herdr in a pane)
+    \\  lodestar popup PANE [--name NAME]                 a crewmate's screen to read and type into; ctrl-] closes (the sidebar's p, Rex)
     \\  lodestar leader [--run ID]                        focus this pane's orchestrator (from a crewmate pane or the sidebar)
     \\  lodestar survey [--turns N]                      the run, its crewmates, unread messages and the orchestrator's last N turns (8)
     \\  lodestar navigator [--close]                       (re)open the navigator agent under the orchestrator, or close it

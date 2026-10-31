@@ -189,6 +189,27 @@ pub fn worktreeOpen(p: *Obj) !Value {
     const f = mux().worktreeOpen orelse return unsupported("worktreeOpen");
     return f(p);
 }
+pub fn openFloat(p: *Obj) !*Obj {
+    const f = mux().openFloat orelse return unsupported("openFloat");
+    return f(p);
+}
+pub fn screenStyled(pane_id: []const u8) ![]const u8 {
+    const f = mux().screenStyled orelse return unsupported("screenStyled");
+    return f(pane_id);
+}
+pub fn writeInput(pane_id: []const u8, bytes: []const u8) !void {
+    const f = mux().writeInput orelse return unsupported("writeInput");
+    return f(pane_id, bytes);
+}
+pub fn createBackground(p: *Obj) !*Obj {
+    const f = mux().createBackground orelse return unsupported("createBackground");
+    return f(p);
+}
+pub fn resizeHidden(pane_id: []const u8, columns: i64, rows: i64) !void {
+    const f = mux().resizeHidden orelse return;
+    return f(pane_id, columns, rows);
+}
+
 pub fn worktreeRemove(workspace_id: []const u8) !Value {
     const f = mux().worktreeRemove orelse return unsupported("worktreeRemove");
     return f(workspace_id);

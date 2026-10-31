@@ -49,6 +49,7 @@ const commands = [_]Route{
     .{ .name = "settings", .handler = config_cmd.handle },
     .{ .name = "skill", .handler = plugin_cmd.handle },
     .{ .name = "sidebar", .handler = plugin_cmd.handle },
+    .{ .name = "popup", .handler = plugin_cmd.handle },
     .{ .name = "sidebar-open", .handler = plugin_cmd.handle },
     .{ .name = "leader", .handler = plugin_cmd.handle },
     .{ .name = "event", .handler = plugin_cmd.handle },

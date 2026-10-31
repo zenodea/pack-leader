@@ -127,6 +127,7 @@ const commands = [_]Cmd{
     .{ .name = "handoff", .flags = withRun(schema(&.{}, &.{"body"}, &.{})) },
     .{ .name = "skill", .flags = schema(&.{"install"}, &.{}, &.{}) },
     .{ .name = "sidebar", .flags = empty },
+    .{ .name = "popup", .flags = schema(&.{}, &.{"name"}, &.{}) },
     .{ .name = "leader", .flags = withRun(empty) },
     .{ .name = "say", .flags = withRun(schema(&.{}, &.{"body"}, &.{})) },
     .{ .name = "spawn", .flags = schema(&.{"no-default-args"}, &.{ "prompt", "kind", "model", "thinking", "cwd", "worktree", "base", "branch", "timeout" }, &.{}) },
@@ -137,7 +138,7 @@ const commands = [_]Cmd{
     .{ .name = "usage", .flags = schema(&.{ "quiet", "watch" }, &.{}, &.{}) },
 };
 
-const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "navigator", "review", "stall-minutes", "handoff", "handoff-at" }, &.{});
+const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "navigator", "popup", "review", "stall-minutes", "handoff", "handoff-at" }, &.{});
 
 fn findGroup(name: []const u8) ?*const Group {
     for (&groups) |*g| if (rt.eql(g.name, name)) return g;

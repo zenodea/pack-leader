@@ -287,12 +287,25 @@ fn sessionIds() ![]const []const u8 {
     return out.items;
 }
 
+/// The view's blocks plus the session's detached ones (background crewmates), which no window shows.
+fn sessionBlocks(session: []const u8) ![]Raw {
+    var list: std.ArrayListUnmanaged(Raw) = .empty;
+    try list.appendSlice(rt.a, try sessionView(session));
+    const listed = call(session, "session.list_blocks", json.newObj()) catch return list.items;
+    const blocks = if (listed.arr("blocks")) |x| x.objs() else return list.items;
+    for (blocks) |b| if (rt.eqlOpt(b.str("placement"), "detached")) {
+        const id = b.strNonEmpty("block_id") orelse continue;
+        try list.append(rt.a, .{ .session = session, .window = "", .block = id, .label = b.str("label") orelse "" });
+    };
+    return list.items;
+}
+
 fn allPanes(session: ?[]const u8) ![]Raw {
     var list: std.ArrayListUnmanaged(Raw) = .empty;
     if (session) |s| {
-        try list.appendSlice(rt.a, try sessionView(s));
+        try list.appendSlice(rt.a, try sessionBlocks(s));
     } else for (try sessionIds()) |s| {
-        try list.appendSlice(rt.a, sessionView(s) catch continue);
+        try list.appendSlice(rt.a, sessionBlocks(s) catch continue);
     }
     for (list.items) |*r| inspect(r);
     return list.items;
@@ -305,7 +318,7 @@ fn rawPane(pane_id: []const u8) !Raw {
         one[0] = s;
         break :blk &one;
     } else try sessionIds();
-    for (sessions) |s| for (sessionView(s) catch continue) |r| if (rt.eql(r.block, block)) {
+    for (sessions) |s| for (sessionBlocks(s) catch continue) |r| if (rt.eql(r.block, block)) {
         var found = r;
         inspect(&found);
         return found;
@@ -353,7 +366,7 @@ fn paneRecord(r: Raw) *Obj {
     return json.object(.{
         .{ "pane_id", paneId(r.session, r.block) },
         .{ "workspace_id", wsId(r.session) },
-        .{ "tab_id", tabId(r.window) },
+        .{ "tab_id", json.optStr(if (r.window.len > 0) tabId(r.window) else null) },
         .{ "agent", json.optStr(kind) },
         .{ "agent_status", if (kind != null) statusOf(r) else "unknown" },
         .{ "cwd", r.cwd },
@@ -367,9 +380,10 @@ fn agentRecord(r: Raw) ?*Obj {
     return json.object(.{
         .{ "pane_id", paneId(r.session, r.block) },
         .{ "workspace_id", wsId(r.session) },
-        .{ "tab_id", tabId(r.window) },
+        .{ "tab_id", json.optStr(if (r.window.len > 0) tabId(r.window) else null) },
         .{ "agent", kind },
-        .{ "name", json.optStr(if (r.window_label.len > 0) r.window_label else null) },
+        // A background crewmate has no tab; its block carries the name.
+        .{ "name", json.optStr(if (r.window_label.len > 0) r.window_label else if (r.window.len == 0 and r.label.len > 0) r.label else null) },
         .{ "agent_status", statusOf(r) },
         // Each report Rex records is newer than the last, so its time counts the changes.
         .{ "state_change_seq", r.status_at },
@@ -436,7 +450,14 @@ fn loginShell() []const u8 {
 /// `-- env K=V ... COMMAND`: Rex has no documented flag for a new terminal's environment, and runs commands
 /// without a shell, so `env` carries Lodestar's variables. With no command, the user's shell starts.
 fn appendCommand(argv: *std.ArrayListUnmanaged([]const u8), env: ?*Obj, command: []const []const u8) void {
-    argv.appendSlice(rt.a, &.{ "--", "env", "LODESTAR_MUX=rex" }) catch {};
+    argv.append(rt.a, "--") catch {};
+    argv.appendSlice(rt.a, envCommand(env, command)) catch {};
+}
+
+/// `/usr/bin/env LODESTAR_MUX=rex K=V ... COMMAND`, the program a new block runs (see `appendCommand`).
+fn envCommand(env: ?*Obj, command: []const []const u8) []const []const u8 {
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    argv.appendSlice(rt.a, &.{ "/usr/bin/env", "LODESTAR_MUX=rex" }) catch {};
     // Processes in the new block (crewmates, the sidebar, hooks) must use the same state as this leader.
     for ([_][]const u8{ "HERDR_PLUGIN_STATE_DIR", "HERDR_PLUGIN_CONFIG_DIR", "LODESTAR_REX_SERVER" }) |k| {
         if (rt.getenvNonEmpty(k)) |v| argv.append(rt.a, rt.concat(&.{ k, "=", v })) catch {};
@@ -447,6 +468,7 @@ fn appendCommand(argv: *std.ArrayListUnmanaged([]const u8), env: ?*Obj, command:
         argv.append(rt.a, rt.concat(&.{ k, "=", s })) catch {};
     };
     if (command.len > 0) argv.appendSlice(rt.a, command) catch {} else argv.appendSlice(rt.a, &.{ loginShell(), "-l" }) catch {};
+    return argv.items;
 }
 
 /// The new block's share of the split (`ratio` is the share the existing block keeps).
@@ -616,6 +638,70 @@ fn setSplitRatio(pane_id: []const u8, ratio: f64) anyerror!Value {
     return json.newObj().val();
 }
 
+// ---- popup and background panes ----
+
+const SHELL_FLAVOR = "com.superlogical.terminal.shell";
+
+/// A floating layer over most of the pane's window, running the command with no shell in between. Rex closes
+/// the block when the command exits, and the layer with it.
+fn openFloat(p: *Obj) anyerror!*Obj {
+    try refuseRemote();
+    const over = p.str("over_pane_id") orelse return rt.fail("bad_request", "a popup needs over_pane_id", .{});
+    const session = sessionFor(over) orelse return rt.fail("bad_request", "pane {s} names no Rex session", .{over});
+    const block = blockTarget(over);
+    const window = for (try sessionView(session)) |r| {
+        if (rt.eql(r.block, block)) break r.window;
+    } else return rt.fail("pane_not_found", "pane {s} is in no window", .{over});
+    const out = try call(session, "session.new_layer", json.object(.{
+        .{ "window_id", window },
+        .{ "bounds", json.object(.{ .{ "x", 0.06 }, .{ "y", 0.06 }, .{ "w", 0.88 }, .{ "h", 0.88 } }) },
+        .{ "focus", true },
+        .{ "layout", json.object(.{.{ "block", json.object(.{
+            .{ "flavor", SHELL_FLAVOR },
+            .{ "label", p.str("label") orelse "popup" },
+            .{ "options", json.object(.{ .{ "shell", "none" }, .{ "command", json.strArr(envCommand(null, p.strs("command"))) } }) },
+        }) }}) },
+    }));
+    const ids = out.arr("block_ids") orelse return rt.fail("bad_result", "rex did not report the popup block", .{});
+    const id = if (ids.items.items.len > 0) ids.items.items[0].asStr() else null;
+    return json.object(.{ .{ "pane_id", paneId(session, id orelse return rt.fail("bad_result", "rex did not report the popup block", .{})) }, .{ "workspace_id", wsId(session) } });
+}
+
+fn screenStyled(pane_id: []const u8) anyerror![]const u8 {
+    try refuseRemote();
+    const session = sessionFor(pane_id) orelse return rt.fail("bad_request", "pane {s} names no Rex session", .{pane_id});
+    const o = try call(session, "com.superlogical.terminal.format", json.object(.{ .{ "block_id", blockTarget(pane_id) }, .{ "args", json.object(.{.{ "format", "vt" }}) } }));
+    return o.str("content") orelse "";
+}
+
+fn writeInput(pane_id: []const u8, bytes: []const u8) anyerror!void {
+    try refuseRemote();
+    const session = sessionFor(pane_id) orelse return rt.fail("bad_request", "pane {s} names no Rex session", .{pane_id});
+    _ = try call(session, "com.superlogical.terminal.write", json.object(.{ .{ "block_id", blockTarget(pane_id) }, .{ "args", json.object(.{.{ "data", bytes }}) } }));
+}
+
+/// A detached block running the user's shell: it belongs to the session but to no window.
+fn createBackground(p: *Obj) anyerror!*Obj {
+    try refuseRemote();
+    const session = if (p.strNonEmpty("workspace_id")) |ws| sessionTarget(ws) else rt.getenvNonEmpty("REX_SESSION") orelse return rt.fail("bad_request", "a background pane needs workspace_id outside Rex", .{});
+    const options = json.object(.{ .{ "shell", "none" }, .{ "command", json.strArr(envCommand(p.obj("env"), &.{})) } });
+    if (p.strNonEmpty("cwd")) |c| options.putStr("cwd", c);
+    options.put("size", json.object(.{ .{ "columns", p.int("columns") orelse 120 }, .{ "rows", p.int("rows") orelse 40 } }).val());
+    const out = try call(session, "session.new_block", json.object(.{ .{ "flavor", SHELL_FLAVOR }, .{ "label", p.str("label") orelse "crewmate" }, .{ "options", options } }));
+    const block = out.strNonEmpty("block_id") orelse return rt.fail("bad_result", "rex did not report the new block", .{});
+    return paneRecord(rawPane(paneId(session, block)) catch .{ .session = session, .window = "", .block = block, .label = p.str("label") orelse "" });
+}
+
+/// Rex applies a size only while no client owns the block, which is the case for a background one.
+fn resizeHidden(pane_id: []const u8, columns: i64, rows: i64) anyerror!void {
+    try refuseRemote();
+    const session = sessionFor(pane_id) orelse return;
+    const size = blockSize(pane_id) orelse return;
+    if (size.get("owner")) |o| if (o != .null) return;
+    if (size.int("columns") == columns and size.int("rows") == rows) return;
+    _ = try call(session, "com.superlogical.terminal.resize", json.object(.{ .{ "block_id", blockTarget(pane_id) }, .{ "args", json.object(.{ .{ "columns", columns }, .{ "rows", rows } }) } }));
+}
+
 /// `rex split`/`rex run --json` print `block_ids` (and `window_id` for `run`).
 fn newBlock(out: *Obj, session: []const u8) !Raw {
     const ids = out.arr("block_ids") orelse return rt.fail("bad_result", "rex did not report the new block", .{});
@@ -685,9 +771,20 @@ fn renamePane(pane_id: []const u8, label: ?[]const u8) void {
     _ = call(sessionFor(pane_id), "session.set_block_label", json.object(.{ .{ "block_id", blockTarget(pane_id) }, .{ "label", label orelse "" } })) catch {};
 }
 
-// Rex keeps no title separate from the block's label that Lodestar can set; the label carries both.
+// Rex keeps no title separate from the block's label that Lodestar can set; the label carries both. A detached
+// (background) block has no tab to carry the crewmate's name, so its label keeps the name.
 fn labelPane(pane_id: []const u8, title: ?[]const u8) void {
+    if (isDetached(pane_id)) return;
     renamePane(pane_id, title);
+}
+
+fn isDetached(pane_id: []const u8) bool {
+    const session = sessionFor(pane_id) orelse return false;
+    const listed = call(session, "session.list_blocks", json.newObj()) catch return false;
+    const blocks = if (listed.arr("blocks")) |x| x.objs() else return false;
+    const block = blockTarget(pane_id);
+    for (blocks) |b| if (rt.eqlOpt(b.str("block_id"), block)) return rt.eqlOpt(b.str("placement"), "detached");
+    return false;
 }
 
 /// The sidebar column's share of the window: the leader and navigator keep 70%.
@@ -1101,7 +1198,7 @@ fn reachable() bool {
 
 pub const backend: types.Multiplexer = .{
     .name = "rex",
-    .capabilities = .{ .agent_status = .native, .events = true, .layout_tree = true, .arrange = true, .workspaces = false },
+    .capabilities = .{ .agent_status = .native, .events = true, .layout_tree = true, .arrange = true, .workspaces = false, .float = true, .background = true },
 
     .listAgents = listAgents,
     .getAgent = getAgent,
@@ -1137,6 +1234,11 @@ pub const backend: types.Multiplexer = .{
     .paneMove = paneMove,
     .paneSwap = paneSwap,
     .setSplitRatio = setSplitRatio,
+    .openFloat = openFloat,
+    .screenStyled = screenStyled,
+    .writeInput = writeInput,
+    .createBackground = createBackground,
+    .resizeHidden = resizeHidden,
 };
 
 test "rex ids round trip into herdr shape" {

@@ -12,6 +12,7 @@ const config = @import("../../core/config.zig");
 const leader = @import("../../ui/leader.zig");
 const settings_ui = @import("../../ui/settings.zig");
 const sidebar = @import("../../ui/sidebar.zig");
+const popup = @import("../../ui/popup.zig");
 const skill = @import("../skill.zig");
 
 const Args = args_mod.Args;
@@ -63,6 +64,11 @@ pub fn handle(command: []const u8, a: *const Args, from_action: bool) !void {
     }
 
     if (rt.eql(command, "sidebar")) return sidebar.runSidebar();
+
+    if (rt.eql(command, "popup")) {
+        const pane = a.pos(0) orelse return rt.fail(null, "lodestar popup takes the pane to show", .{});
+        return popup.run(pane, str(a, "name") orelse pane);
+    }
 
     if (rt.eql(command, "sidebar-open")) {
         const h = shared.here();
