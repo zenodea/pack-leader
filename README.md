@@ -13,9 +13,9 @@ answers their questions, reads their reports and merges the results.
 
 A lodestar is the star you steer by. Here it's the leader.
 
-[Website](https://zenodea.github.io/lodestar/) ·
-[Docs](https://zenodea.github.io/lodestar/docs/) ·
-[Commands](https://zenodea.github.io/lodestar/docs/?p=commands) ·
+[Website](https://dea.dev/lodestar/) ·
+[Docs](https://dea.dev/lodestar/docs/) ·
+[Commands](https://dea.dev/lodestar/docs/?p=commands) ·
 [Changelog](docs/CHANGELOG.md)
 
 ## Install
@@ -72,7 +72,7 @@ While it runs:
 - On herdr, a **Crewmates** sidebar shows one box per crewmate, and a second agent,
   the **Navigator**, answers your questions about the run.
 
-[Your first run](https://zenodea.github.io/lodestar/docs/?p=quickstart) walks through
+[Your first run](https://dea.dev/lodestar/docs/?p=quickstart) walks through
 a whole one.
 
 ## What it does and doesn't do
@@ -84,12 +84,12 @@ a whole one.
 | Hold tasks until an approval gate says yes | Merge on its own; the leader merges, or leaves it to you if you ask |
 | Hand the leader to a fresh session when its context fills up | Forget a run when a session or tab goes away |
 
-More in the docs: [tasks and gates](https://zenodea.github.io/lodestar/docs/?p=tasks),
-[worktrees](https://zenodea.github.io/lodestar/docs/?p=worktrees),
-[handoffs and sub-runs](https://zenodea.github.io/lodestar/docs/?p=long-runs),
-[tmux](https://zenodea.github.io/lodestar/docs/?p=tmux),
-[remote crewmates](https://zenodea.github.io/lodestar/docs/?p=remote),
-[model routing](https://zenodea.github.io/lodestar/docs/?p=model-routing).
+More in the docs: [tasks and gates](https://dea.dev/lodestar/docs/?p=tasks),
+[worktrees](https://dea.dev/lodestar/docs/?p=worktrees),
+[handoffs and sub-runs](https://dea.dev/lodestar/docs/?p=long-runs),
+[tmux](https://dea.dev/lodestar/docs/?p=tmux),
+[remote crewmates](https://dea.dev/lodestar/docs/?p=remote),
+[model routing](https://dea.dev/lodestar/docs/?p=model-routing).
 
 ## Coming from Pack Leader
 
