@@ -510,8 +510,8 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     for (shown) |r| label_width = @max(label_width, r.label.len);
     label_width += 4;
 
-    // Roomy: a margin above the title, gaps between sections and below the keys. A pane too short for that (a popup
-    // drawn before the app has sized it is 24 rows) drops them first, so every setting still shows.
+    // Roomy: gaps between sections and around the keys. A pane too short for that (a popup drawn before the app has
+    // sized it is 24 rows) drops them first, so every setting still shows; the margin around the title always stays.
     var sections: usize = 0;
     var last: []const u8 = "";
     for (shown) |r| if (!rt.eql(r.section, last)) {
@@ -545,8 +545,8 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     const hint = std.mem.join(rt.a, ansi.dim("   "), keys.items) catch "";
 
     // Top margin, title, gap; then the rows; then the footer and the keys on the last line.
-    const head: []const []const u8 = if (roomy) &.{ "", ansi.bold("Lodestar settings"), "" } else &.{ansi.bold("Lodestar settings")};
-    const room: usize = rows -| (head.len + foot.items.len + @as(usize, if (roomy) 3 else 2));
+    const head = [_][]const u8{ "", ansi.bold("Lodestar settings"), "" };
+    const room: usize = rows -| (head.len + foot.items.len + @as(usize, if (roomy) 3 else 1));
     const start: usize = if (body.items.len <= room or room == 0) 0 else @min(sel_line -| room / 2, body.items.len - room);
     const end = @min(body.items.len, start + @max(1, room));
 
