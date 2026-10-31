@@ -110,16 +110,19 @@ fn bringUp(agent: []const u8, kind: []const u8, pane_id: []const u8, args: []con
     const st = try mux.agentWait(pane_id, &.{ "idle", "done" }, 30_000);
     if (rt.eql(st, "timeout")) return rt.fail(null, "the agent did not reach its prompt in 30 s", .{});
     const deadline = rt.nowMs() + 30_000;
-    while (true) {
-        var listed = false;
-        for (try mux.listAgents()) |a| {
-            if (rt.eqlOpt(a.str("pane_id"), pane_id) and rt.eqlOpt(a.str("name"), agent)) listed = true;
-        }
-        if (listed) break;
-        if (rt.nowMs() > deadline) return rt.fail(null, "herdr never listed {s} in pane {s}", .{ agent, pane_id });
+    // herdr lists the agent under its name; Rex and tmux only know the pane (its label says "Navigator"), so the
+    // brief goes to the pane there.
+    const target: []const u8 = while (true) {
+        var found: ?[]const u8 = null;
+        for (try mux.listAgents()) |a| if (rt.eqlOpt(a.str("pane_id"), pane_id)) {
+            found = if (rt.eqlOpt(a.str("name"), agent)) agent else pane_id;
+            break;
+        };
+        if (found) |f| break f;
+        if (rt.nowMs() > deadline) return rt.fail(null, "no agent came up in pane {s}", .{pane_id});
         rt.sleepMs(1000);
-    }
-    try crewmates.promptWithRetry(agent, prompt, null, 5, true, null);
+    };
+    try crewmates.promptWithRetry(target, prompt, null, 5, true, null);
 }
 
 pub fn closeNavigator(run: *Obj) !?[]const u8 {
