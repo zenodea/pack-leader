@@ -576,12 +576,15 @@ const Sidebar = struct {
     }
 
     /// Spend and plan limits get their own pane below the crew, `USAGE_ROWS` high. It runs
-    /// `lodestar usage --watch` with this process's pid and leaves when this sidebar is gone.
+    /// `lodestar usage --watch` with this process's pid and leaves when this sidebar is gone; given the run, it also
+    /// shows what was used since the run started.
     fn openUsagePane(self: *Sidebar) void {
         const own = self.pane orelse return;
         const height = term.size(30, 24).rows;
         if (height < USAGE_ROWS * 2) return;
         const env = json.object(.{.{ "LODESTAR_USAGE_PARENT_PID", rt.fmt("{d}", .{rt.pid}) }});
+        const runs = self.mine();
+        if (runs.len > 0) if (runs[0].str("id")) |id| env.putStr("LODESTAR_USAGE_RUN", id);
         const p = json.object(.{ .{ "entrypoint", "usage" }, .{ "target_pane_id", own }, .{ "direction", "down" }, .{ "env", env }, .{ "rows", USAGE_ROWS }, .{ "target_rows", height } });
         const pane = mux.openToolPane(p) catch |err| {
             mux.logMuxError("usage.open", err, json.object(.{.{ "pane", own }}));

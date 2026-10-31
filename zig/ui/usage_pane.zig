@@ -1,5 +1,6 @@
 //! `lodestar usage --watch`: the usage box on its own, live. The sidebar opens it in a pane below the crew and
-//! passes its pid; the pane leaves when the sidebar is gone, so closing the sidebar closes both.
+//! passes its pid and its run; the pane leaves when the sidebar is gone, so closing the sidebar closes both. The
+//! run's mark (run_mark.zig) is taken from the first summary written after the pane starts.
 
 const std = @import("std");
 const rt = @import("../rt.zig");
@@ -8,6 +9,7 @@ const fs = @import("../core/fs.zig");
 const proc = @import("../core/proc.zig");
 const paths = @import("../core/paths.zig");
 const usage_scan = @import("../usage/scan.zig");
+const run_mark = @import("../usage/run_mark.zig");
 const ansi = @import("ansi.zig");
 const term = @import("term.zig");
 const usage_box = @import("usage_box.zig");
@@ -24,6 +26,9 @@ const Pane = struct {
     usage_mtime: i64 = 0,
     raw: term.Raw = .{},
     accent: ansi.Paint = ansi.Paint.of(&ansi.fg.cyan),
+    run: ?[]const u8 = null,
+    started: i64 = 0,
+    mark: ?*json.Obj = null,
 
     /// Picks up the summary a background `lodestar usage` wrote.
     fn load(self: *Pane) void {
@@ -43,12 +48,25 @@ const Pane = struct {
         self.usage_arena = next;
         self.usage = obj;
         self.usage_mtime = st.mtime_ms;
+        if (self.run) |id| self.loadMark(id, obj.?);
+    }
+
+    /// Lives in the usage arena with the summary it is read beside.
+    fn loadMark(self: *Pane, id: []const u8, s: *json.Obj) void {
+        const path = run_mark.file(id);
+        const old = if (fs.readFileOpt(path)) |text| if (json.parse(text) catch null) |v| v.asObj() else null else null;
+        self.mark = old;
+        // A summary from before this pane started may be from before the run did.
+        if (old == null and (s.int("updated_at") orelse 0) < self.started) return;
+        const next = run_mark.update(old, s) orelse return;
+        fs.writeAtomic(path, json.stringifyObj(next, false), 0o600) catch {};
+        self.mark = next;
     }
 
     fn draw(self: *Pane) void {
         const sz = term.size(40, 10);
         const now = rt.nowMs();
-        const shown = usage_box.fit(self.usage, @intCast(sz.cols), sz.rows, now, self.accent);
+        const shown = usage_box.fit(self.usage, @intCast(sz.cols), sz.rows, now, self.accent, self.mark);
         var buf: std.ArrayListUnmanaged(u8) = .empty;
         buf.appendSlice(rt.a, ansi.screen.home) catch {};
         for (0..sz.rows) |row| {
@@ -74,7 +92,7 @@ fn scan() void {
 pub fn run() !void {
     const tty = term.isTty(0);
     const parent: ?i64 = if (rt.getenvNonEmpty("LODESTAR_USAGE_PARENT_PID")) |s| std.fmt.parseInt(i64, s, 10) catch null else null;
-    var pane: Pane = .{};
+    var pane: Pane = .{ .run = rt.getenvNonEmpty("LODESTAR_USAGE_RUN"), .started = rt.nowMs() };
     if (theme.loadTheme().accent) |hex| pane.accent = .{ .color = ansi.rgb(hex) };
     var frame = Arena.init(std.heap.page_allocator);
     rt.a = frame.allocator();

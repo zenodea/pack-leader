@@ -6,6 +6,9 @@
   how long until it resets (`5h/3h32`), a bar, and the share used. The bar turns yellow
   when the rate so far would use the limit up before the reset. Below that, what each
   agent (Claude Code, Codex, pi) spent over the last day and week, and a total row.
+  What was used since the run started shows in blue: the end of each bar, and a
+  "session" column. Plan limits are per account, so other use of the account meanwhile
+  counts too.
   Claude Code's plan limits come from the same server as its `/usage` screen, using
   Claude Code's own login, so they show without any setup. The pane keeps a margin and
   gaps when there is room and gives them up when it is short. The sidebar opens it and it

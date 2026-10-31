@@ -9,6 +9,8 @@ const inbox = @import("../../messaging/inbox.zig");
 const navigator = @import("../../agents/navigator.zig");
 const crewmates = @import("../../agents/crewmates.zig");
 const shared_worktree = @import("../../agents/shared_worktree.zig");
+const fs = @import("../../core/fs.zig");
+const run_mark = @import("../../usage/run_mark.zig");
 const args_mod = @import("../args.zig");
 const shared = @import("../shared.zig");
 
@@ -90,6 +92,7 @@ fn collectGarbage(opts: runs.PruneRunsOpts) !*Obj {
     var ids: std.ArrayListUnmanaged([]const u8) = .empty;
     for (r.arr("runs").?.objs()) |x| ids.append(rt.a, x.str("id") orelse "") catch {};
     const archives = runs.removeArchives(ids.items);
+    for (ids.items) |id| fs.unlink(run_mark.file(id)) catch {};
     if (ids.items.len > 0) state.log(json.object(.{ .{ "event", "run.pruned" }, .{ "runs", json.strArr(ids.items) }, .{ "removed", r.get("removed").? }, .{ "archives", archives.len } }));
     const out = json.object(.{ .{ "pruned", r.get("runs").? }, .{ "removed", r.get("removed").? }, .{ "archives_removed", json.strArr(archives) }, .{ "worktrees", worktrees } });
     out.putIf("skipped", r.get("skipped"));

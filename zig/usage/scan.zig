@@ -94,6 +94,18 @@ const Cache = struct {
         const xs = cell.slice();
         if (cost) |d| xs[0] = json.number((xs[0].asNum() orelse 0) + d) else xs[2] = .{ .int = (xs[2].asInt() orelse 0) + tokens };
         xs[1] = .{ .int = (xs[1].asInt() orelse 0) + tokens };
+        // [dollars, tokens] since `totals.since`, never trimmed: what a run spent is how much these grew since it began.
+        const totals = c.root.obj("totals") orelse blk: {
+            const t = json.newObj();
+            t.putInt("since", c.now);
+            c.root.put("totals", t.val());
+            break :blk t;
+        };
+        const sum = totals.ensureArr(agent);
+        while (sum.slice().len < 2) sum.push(.{ .int = 0 });
+        const ys = sum.slice();
+        ys[0] = json.number((ys[0].asNum() orelse 0) + (cost orelse 0));
+        ys[1] = .{ .int = (ys[1].asInt() orelse 0) + tokens };
     }
 
     fn putLimits(c: *Cache, agent: []const u8, r: Record) void {
@@ -233,7 +245,8 @@ fn liveWindows(limits: *Obj, now: i64) *json.Arr {
     return out;
 }
 
-/// `{ updated_at, agents: [{ agent, cost_24h, cost_7d, tokens_24h, tokens_7d, unpriced_7d, plan?, limits_at?, windows }] }`
+/// `{ updated_at, totals_since?, agents: [{ agent, cost_24h, cost_7d, tokens_24h, tokens_7d, unpriced_7d, total_cost?,
+/// total_tokens?, plan?, limits_at?, windows }] }`
 pub fn summarize(root: *Obj, now: i64) *Obj {
     const agents = json.newArr();
     const hours = root.obj("hours");
@@ -271,6 +284,10 @@ pub fn summarize(root: *Obj, now: i64) *Obj {
             .{ "tokens_7d", tokens_7d },
             .{ "unpriced_7d", unpriced },
         });
+        if (root.obj("totals")) |t| if (t.arr(r.agent)) |sum| if (sum.slice().len >= 2) {
+            a.put("total_cost", json.number(sum.slice()[0].asNum() orelse 0));
+            a.putInt("total_tokens", sum.slice()[1].asInt() orelse 0);
+        };
         if (limits) |l| {
             a.putStrIf("plan", l.str("plan"));
             if (l.int("at")) |at| a.putInt("limits_at", at);
@@ -278,7 +295,9 @@ pub fn summarize(root: *Obj, now: i64) *Obj {
         }
         agents.push(a.val());
     }
-    return json.object(.{ .{ "updated_at", now }, .{ "agents", agents } });
+    const out = json.object(.{ .{ "updated_at", now }, .{ "agents", agents } });
+    if (root.obj("totals")) |t| if (t.int("since")) |since| out.putInt("totals_since", since);
+    return out;
 }
 
 /// Claude Code hands its status line command the session's state, plan limits included (claude.ai plans only).
