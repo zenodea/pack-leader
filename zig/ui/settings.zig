@@ -510,13 +510,24 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     for (shown) |r| label_width = @max(label_width, r.label.len);
     label_width += 4;
 
+    // Roomy: a margin above the title, gaps between sections and below the keys. A pane too short for that (a popup
+    // drawn before the app has sized it is 24 rows) drops them first, so every setting still shows.
+    var sections: usize = 0;
+    var last: []const u8 = "";
+    for (shown) |r| if (!rt.eql(r.section, last)) {
+        last = r.section;
+        sections += 1;
+    };
+    const extra: usize = if (notice.len > 0) 2 else 0;
+    const roomy = rows >= 3 + shown.len + 2 * sections - 1 + extra + 3;
+
     var body: std.ArrayListUnmanaged([]const u8) = .empty;
     var sel_line: usize = 0;
     var section: []const u8 = "";
     for (shown, 0..) |row, i| {
         if (!rt.eql(row.section, section)) {
             section = row.section;
-            if (body.items.len > 0) body.append(rt.a, "") catch {};
+            if (body.items.len > 0 and roomy) body.append(rt.a, "") catch {};
             body.append(rt.a, ansi.dim(std.ascii.allocUpperString(rt.a, section) catch section)) catch {};
         }
         if (i == sel) sel_line = body.items.len;
@@ -534,8 +545,8 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     const hint = std.mem.join(rt.a, ansi.dim("   "), keys.items) catch "";
 
     // Top margin, title, gap; then the rows; then the footer and the keys on the last line.
-    const head = [_][]const u8{ "", ansi.bold("Lodestar settings"), "" };
-    const room: usize = rows -| (head.len + foot.items.len + 3);
+    const head: []const []const u8 = if (roomy) &.{ "", ansi.bold("Lodestar settings"), "" } else &.{ansi.bold("Lodestar settings")};
+    const room: usize = rows -| (head.len + foot.items.len + @as(usize, if (roomy) 3 else 2));
     const start: usize = if (body.items.len <= room or room == 0) 0 else @min(sel_line -| room / 2, body.items.len - room);
     const end = @min(body.items.len, start + @max(1, room));
 
@@ -543,8 +554,9 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     for (head) |l| out.append(rt.a, l) catch {};
     for (body.items[start..end]) |l| out.append(rt.a, l) catch {};
     for (foot.items) |l| out.append(rt.a, l) catch {};
-    while (out.items.len + 2 < rows) out.append(rt.a, "") catch {};
-    out.appendSlice(rt.a, &.{ hint, "" }) catch {};
+    while (out.items.len + @as(usize, if (roomy) 2 else 1) < rows) out.append(rt.a, "") catch {};
+    out.append(rt.a, hint) catch {};
+    if (roomy) out.append(rt.a, "") catch {};
     for (out.items) |*l| l.* = if (l.len == 0) "" else rt.concat(&.{ margin, ansi.truncate(l.*, @intCast(w)) });
     return out.items[0..@min(out.items.len, rows)];
 }
