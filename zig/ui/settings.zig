@@ -1,6 +1,8 @@
 const std = @import("std");
 const rt = @import("../rt.zig");
 const json = @import("../core/json.zig");
+const fs = @import("../core/fs.zig");
+const paths = @import("../core/paths.zig");
 const proc = @import("../core/proc.zig");
 const config = @import("../core/config.zig");
 const crewmates = @import("../agents/crewmates.zig");
@@ -65,7 +67,36 @@ pub fn fxModels() []const PickItem {
     return out.items;
 }
 
+const MODELS_KEPT_MS: i64 = 24 * 3_600_000;
+
+fn modelsFile(kind: []const u8) []const u8 {
+    return fs.join(&.{ paths.state_dir, "models", rt.concat(&.{ kind, ".json" }) });
+}
+
+/// `pi --list-models` takes about two seconds and `fx models` half of one, so a harness's list is kept for a day.
 pub fn modelsFor(kind: []const u8) []const PickItem {
+    if (rt.eql(kind, "claude")) return listModels(kind);
+    const file = modelsFile(kind);
+    if (keptModels(file)) |kept| return kept;
+    const fresh = listModels(kind);
+    if (fresh.len == 0) return fresh;
+    const arr = json.newArr();
+    for (fresh) |m| arr.push(json.object(.{ .{ "value", m.value }, .{ "description", m.description } }).val());
+    _ = paths.ensureDir(fs.join(&.{ paths.state_dir, "models" }));
+    fs.writeAtomic(file, json.stringify(arr.val(), false), 0o600) catch {};
+    return fresh;
+}
+
+fn keptModels(file: []const u8) ?[]const PickItem {
+    const st = fs.stat(file) catch return null;
+    if (rt.nowMs() - st.mtime_ms >= MODELS_KEPT_MS) return null;
+    const v = json.parse(fs.readFileOpt(file) orelse return null) catch return null;
+    var out: std.ArrayListUnmanaged(PickItem) = .empty;
+    for ((v.asArr() orelse return null).objs()) |o| out.append(rt.a, .{ .value = o.str("value") orelse continue, .description = o.str("description") }) catch {};
+    return if (out.items.len > 0) out.items else null;
+}
+
+fn listModels(kind: []const u8) []const PickItem {
     if (rt.eql(kind, "claude")) return &.{ .{ .value = "opus" }, .{ .value = "sonnet" }, .{ .value = "haiku" } };
     if (rt.eql(kind, "fx")) return fxModels();
     const models = piModels();

@@ -217,13 +217,14 @@ fn trailingPartial(data: []const u8) usize {
     return 0;
 }
 
-/// Node's `escapeCodeTimeout`: a lone ESC (or a partial escape sequence) waits up to 500ms for what follows.
+/// A lone ESC (or a partial escape sequence) waits up to `ESCAPE_TIMEOUT_MS` for what follows. Terminals send a
+/// sequence in one burst, so a short wait tells Esc from an arrow key without making Esc feel slow.
 pub const KeyReader = struct {
     pending: [16]u8 = undefined,
     pending_len: usize = 0,
     deadline: i64 = 0,
 
-    pub const ESCAPE_TIMEOUT_MS: i64 = 500;
+    pub const ESCAPE_TIMEOUT_MS: i64 = 40;
 
     pub fn feed(self: *KeyReader, data: []const u8) []Key {
         const joined = if (self.pending_len > 0) rt.concat(&.{ self.pending[0..self.pending_len], data }) else data;
