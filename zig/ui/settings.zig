@@ -553,6 +553,8 @@ fn drawSettings(c: Config, sel: usize, notice: []const u8, accent: ansi.Paint) v
     rt.writeStdout(buf.items);
 }
 
+const RESIZE_CHECK_MS: i64 = 200;
+
 fn isKey(key: term.Key, ch: []const u8) bool {
     return !key.ctrl and !key.meta and key.ch != null and rt.eql(key.ch.?, ch);
 }
@@ -574,10 +576,13 @@ pub fn runSettings() !Config {
     }
     const shown = visibleRows();
     const n = shown.len;
+    // A popup is often sized after the page has drawn once; redraw when it is.
+    term.installWinch();
     drawSettings(c, sel, notice, accent);
     var reader: term.KeyReader = .{};
     while (true) {
-        const data = term.readStdin(reader.timeoutMs() orelse -1) orelse return c;
+        const data = term.readStdin(reader.timeoutMs() orelse RESIZE_CHECK_MS) orelse return c;
+        if (term.got_winch.swap(false, .seq_cst)) drawSettings(c, sel, notice, accent);
         const keys = if (data.len == 0) reader.expire() else reader.feed(data);
         for (keys) |key| {
             const name = key.name orelse "";
