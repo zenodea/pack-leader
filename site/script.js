@@ -741,15 +741,14 @@ function docsLines(root, selDelay = 0) {
   const side = box(root.querySelector(".side"));
   if (side.left >= -1 && side.width) col("side", side.right - 1.5, side.top, Math.min(side.bottom, H));
   // The page you're on: a ball of crewmates under its name in the page list. It appears once the
-  // page has loaded: keyed by page, so a new page's ball fades in while the old one fades out.
+  // page has loaded, and on a new page the same ball glides down or up the list to it.
   const cur = root.querySelector('.side a[aria-current="page"]');
-  const page = cur && cur.getAttribute("href");
   if (cur && side.left >= -1 && side.width) {
     const r = cur.getBoundingClientRect(), n = 120;
     for (let j = 0; j < n; j++) {
       const ang = j * 2.39996, rr = Math.sqrt((j + .5) / n);
       pts.push({ x: r.left + r.width / 2 + Math.cos(ang) * rr * r.width * .5, y: r.top + r.height / 2 + Math.sin(ang) * rr * r.height * .55,
-        key: `sel:${page}:${j}`, c: C.work, s: 1.1, a: .55, jit: .5, pop: true, delay: selDelay });
+        key: `sel:${j}`, c: C.work, s: 1.1, a: .55, jit: .5, pop: true, delay: selDelay });
     }
   }
   const toc = box(root.querySelector(".toc ul"));
