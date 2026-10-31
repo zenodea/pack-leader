@@ -91,6 +91,12 @@ pub fn loadTheme() Theme {
     return resolve(rt.getenv("LODESTAR_ACCENT"), setting, herdr);
 }
 
+/// What the "theme" accent comes out as: herdr's accent under herdr, else the terminal's cyan.
+pub fn themeAccent() Theme {
+    const herdr = if (rt.eql(mux.mux().name, "herdr")) if (fs.readFileOpt(herdrConfigFile())) |t| parseTheme(t).accent else null else null;
+    return resolve(null, "theme", herdr);
+}
+
 pub fn paint(t: Theme) ansi.Paint {
     const a = t.accent orelse return ansi.Paint.of(&ansi.fg.cyan);
     if (a[0] == '#') return .{ .color = ansi.rgb(a) };

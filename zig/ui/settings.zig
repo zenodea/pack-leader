@@ -68,6 +68,8 @@ pub fn fxModels() []const PickItem {
 }
 
 const MODELS_KEPT_MS: i64 = 24 * 3_600_000;
+/// Set while the page lists a row's choices beside it: a list nobody has kept yet is left out rather than awaited.
+var kept_models_only = false;
 
 fn modelsFile(kind: []const u8) []const u8 {
     return fs.join(&.{ paths.state_dir, "models", rt.concat(&.{ kind, ".json" }) });
@@ -78,6 +80,7 @@ pub fn modelsFor(kind: []const u8) []const PickItem {
     if (rt.eql(kind, "claude")) return listModels(kind);
     const file = modelsFile(kind);
     if (keptModels(file)) |kept| return kept;
+    if (kept_models_only) return &.{};
     const fresh = listModels(kind);
     if (fresh.len == 0) return fresh;
     const arr = json.newArr();
@@ -140,6 +143,9 @@ pub const SettingsRow = struct {
     change: *const fn (c: Config, ask: Ask) anyerror!void,
     /// Whether the row applies under the multiplexer Lodestar runs in; rows without one always do.
     shown: ?*const fn () bool = null,
+    /// The `lodestar config set` flag that sets the row, and the one that clears it back to the harness default.
+    flag: []const u8,
+    clear: ?[]const u8 = null,
 };
 
 const HARNESS_DEFAULT: PickItem = .{ .value = "", .label = "harness default", .description = "pass nothing; the harness picks" };
@@ -410,23 +416,23 @@ fn cRetries(c: Config, ask: Ask) anyerror!void {
 }
 
 pub const SETTINGS_ROWS = [_]SettingsRow{
-    .{ .section = "Crew", .label = "Harness", .value = vHarness, .change = cHarness },
-    .{ .section = "Crew", .label = "Model", .value = modelOrDefault, .change = cModel },
-    .{ .section = "Crew", .label = "Effort", .value = thinkingOrDefault, .change = cEffort },
-    .{ .section = "Crew", .label = "Routing", .value = vRouting, .change = cRouting },
-    .{ .section = "Crew", .label = "Placement", .value = vPlacement, .change = cPlacement },
-    .{ .section = "Crew", .label = "Popup", .value = vPopup, .change = cPopup, .shown = canFloat },
-    .{ .section = "Crew", .label = "Worktrees", .value = vWorktree, .change = cWorktree },
-    .{ .section = "Orchestrator", .label = "Navigator", .value = vNavigator, .change = cNavigator },
-    .{ .section = "Orchestrator", .label = "Review", .value = vReview, .change = cReview },
-    .{ .section = "Orchestrator", .label = "Retry limit", .value = vRetries, .change = cRetries },
-    .{ .section = "Orchestrator", .label = "Stall alert", .value = vStall, .change = cStall },
-    .{ .section = "Orchestrator", .label = "Handoff", .value = vHandoff, .change = cHandoff },
-    .{ .section = "Orchestrator", .label = "Handoff at", .value = vHandoffAt, .change = cHandoffAt },
-    .{ .section = "Display", .label = "Sidebar side", .value = vSide, .change = cSide },
-    .{ .section = "Display", .label = "Usage pane", .value = vUsagePane, .change = cUsagePane },
-    .{ .section = "Display", .label = "Crewmate bar", .value = vCrewBar, .change = cCrewBar },
-    .{ .section = "Display", .label = "Accent", .value = vAccent, .change = cAccent },
+    .{ .section = "Crew", .label = "Harness", .value = vHarness, .change = cHarness, .flag = "--kind" },
+    .{ .section = "Crew", .label = "Model", .value = modelOrDefault, .change = cModel, .flag = "--model", .clear = "--clear-model" },
+    .{ .section = "Crew", .label = "Effort", .value = thinkingOrDefault, .change = cEffort, .flag = "--thinking", .clear = "--clear-thinking" },
+    .{ .section = "Crew", .label = "Routing", .value = vRouting, .change = cRouting, .flag = "--router" },
+    .{ .section = "Crew", .label = "Placement", .value = vPlacement, .change = cPlacement, .flag = "--placement" },
+    .{ .section = "Crew", .label = "Popup", .value = vPopup, .change = cPopup, .shown = canFloat, .flag = "--popup" },
+    .{ .section = "Crew", .label = "Worktrees", .value = vWorktree, .change = cWorktree, .flag = "--worktree-mode" },
+    .{ .section = "Orchestrator", .label = "Navigator", .value = vNavigator, .change = cNavigator, .flag = "--navigator" },
+    .{ .section = "Orchestrator", .label = "Review", .value = vReview, .change = cReview, .flag = "--review" },
+    .{ .section = "Orchestrator", .label = "Retry limit", .value = vRetries, .change = cRetries, .flag = "--retry-limit" },
+    .{ .section = "Orchestrator", .label = "Stall alert", .value = vStall, .change = cStall, .flag = "--stall-minutes" },
+    .{ .section = "Orchestrator", .label = "Handoff", .value = vHandoff, .change = cHandoff, .flag = "--handoff" },
+    .{ .section = "Orchestrator", .label = "Handoff at", .value = vHandoffAt, .change = cHandoffAt, .flag = "--handoff-at" },
+    .{ .section = "Display", .label = "Sidebar side", .value = vSide, .change = cSide, .flag = "--sidebar-side" },
+    .{ .section = "Display", .label = "Usage pane", .value = vUsagePane, .change = cUsagePane, .flag = "--usage-pane" },
+    .{ .section = "Display", .label = "Crewmate bar", .value = vCrewBar, .change = cCrewBar, .flag = "--crew-bar" },
+    .{ .section = "Display", .label = "Accent", .value = vAccent, .change = cAccent, .flag = "--accent" },
 };
 
 fn joinNonEmpty(parts: []const ?[]const u8, sep: []const u8) []const u8 {
@@ -499,6 +505,74 @@ fn shownValue(v: []const u8, accent: ansi.Paint) []const u8 {
     return v;
 }
 
+var captured: ?PickOptions = null;
+
+fn askCapture(o: PickOptions) anyerror!?[]const u8 {
+    captured = o;
+    return null;
+}
+
+const Choices = struct { items: []const PickItem, current: []const u8 };
+
+/// What a row can be set to and which it is now: the list `enter` would open, or on and off for a toggle. The row's
+/// own change function asks for the list, on a copy of the configuration so a toggle flips nothing.
+fn choicesOf(row: SettingsRow, c: Config) Choices {
+    captured = null;
+    kept_models_only = true;
+    row.change(c.deepClone(), askCapture) catch {};
+    kept_models_only = false;
+    const o = captured orelse return .{ .items = &.{ .{ .value = "on" }, .{ .value = "off" } }, .current = row.value(c) };
+    const cur = o.current orelse "";
+    for (o.items) |it| if (rt.eql(it.value, cur)) return .{ .items = o.items, .current = cur };
+    // A value typed in rather than picked from the list: shown after it, as the row shows it.
+    const now = ansi.stripSgr(row.value(c));
+    var items: std.ArrayListUnmanaged(PickItem) = .empty;
+    items.appendSlice(rt.a, o.items) catch {};
+    items.append(rt.a, .{ .value = cur, .label = if (rt.startsWith(now, "● ")) now["● ".len..] else now }) catch {};
+    return .{ .items = items.items, .current = cur };
+}
+
+/// The command that sets the row to `current`, quoted where a shell would split or drop it.
+fn commandFor(row: SettingsRow, current: []const u8) []const u8 {
+    if (current.len == 0) return rt.concat(&.{ "lodestar config set ", row.clear orelse return "" });
+    const arg = if (std.mem.indexOfAny(u8, current, " #'\"$") != null) rt.concat(&.{ "'", current, "'" }) else current;
+    return rt.concat(&.{ "lodestar config set ", row.flag, " ", arg });
+}
+
+fn accentSwatch(value: []const u8) []const u8 {
+    const look = if (rt.eql(value, "theme")) theme.themeAccent() else theme.Theme{ .accent = value };
+    return theme.paint(look).apply("■");
+}
+
+/// Beside the rows: the selected row's choices with the current one marked, and the command that sets it. A long
+/// list shows the part around the current value.
+fn choicesPanel(row: SettingsRow, c: Config, height: usize, accent: ansi.Paint) []const []const u8 {
+    const ch = choicesOf(row, c);
+    const cmd = commandFor(row, ch.current);
+    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    out.appendSlice(rt.a, &.{ ansi.bold(row.label), "" }) catch {};
+    const room = height -| (out.items.len + @as(usize, if (cmd.len > 0) 2 else 0));
+    const n = ch.items.len;
+    var at: usize = 0;
+    for (ch.items, 0..) |it, i| if (rt.eql(it.value, ch.current)) {
+        at = i;
+        break;
+    };
+    const count = if (n <= room) n else room -| 1;
+    const start = if (count == 0) 0 else @min(at -| count / 2, n - count);
+    const swatch = rt.eql(row.flag, "--accent");
+    for (ch.items[start .. start + count], start..) |it, i| {
+        const label = if (swatch) rt.concat(&.{ accentSwatch(it.value), " ", it.label orelse it.value }) else it.label orelse it.value;
+        out.append(rt.a, if (i == at) rt.concat(&.{ accent.apply("● "), accent.apply(label) }) else rt.concat(&.{ ansi.dim("○ "), label })) catch {};
+    }
+    if (count < n and room > 0) out.append(rt.a, ansi.dim(rt.fmt("  {d} more", .{n - count}))) catch {};
+    if (cmd.len > 0 and height >= out.items.len + 2) out.appendSlice(rt.a, &.{ "", ansi.dim(cmd) }) catch {};
+    return out.items;
+}
+
+/// The panel needs this many columns to be worth drawing.
+const PANEL_MIN: usize = 18;
+
 const KEYS = [_][2][]const u8{ .{ "j/k", "move" }, .{ "h/l", "change" }, .{ "enter", "pick" }, .{ "q", "close" } };
 
 /// The page: a margin, rows by section with values in one column, and the keys at the bottom. When the rows don't fit, they scroll to keep the selected one in view.
@@ -524,6 +598,7 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     var body: std.ArrayListUnmanaged([]const u8) = .empty;
     var sel_line: usize = 0;
     var section: []const u8 = "";
+    var value_width: usize = 0;
     for (shown, 0..) |row, i| {
         if (!rt.eql(row.section, section)) {
             section = row.section;
@@ -532,6 +607,7 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
         }
         if (i == sel) sel_line = body.items.len;
         const value = row.value(c);
+        value_width = @max(value_width, ansi.width(shownValue(value, accent)));
         body.append(rt.a, if (i == sel)
             rt.concat(&.{ accent.apply("❯ "), accent.apply(ansi.bold(ansi.pad(row.label, label_width))), if (rt.eql(value, "on") or rt.eql(value, "off")) shownValue(value, accent) else accent.apply(value) })
         else
@@ -557,6 +633,20 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     while (out.items.len + @as(usize, if (roomy) 2 else 1) < rows) out.append(rt.a, "") catch {};
     out.append(rt.a, hint) catch {};
     if (roomy) out.append(rt.a, "") catch {};
+
+    // The selected row's choices to the right of the rows, past a rule, from the first section down to the keys.
+    const left_w = 2 + label_width + value_width;
+    const hint_at = out.items.len - @as(usize, if (roomy) 2 else 1);
+    const region_end = @min(hint_at -| @as(usize, if (roomy) 1 else 0), rows);
+    if (sel < shown.len and w >= left_w + 6 + PANEL_MIN and region_end > head.len) {
+        const lines = choicesPanel(shown[sel], c, region_end - head.len, accent);
+        const foot_at = head.len + (end - start);
+        for (head.len..region_end) |r| {
+            if (r >= foot_at and r < foot_at + foot.items.len) continue;
+            const p = r - head.len;
+            out.items[r] = rt.concat(&.{ ansi.pad(out.items[r], left_w), "   ", ansi.dim("│"), "  ", if (p < lines.len) lines[p] else "" });
+        }
+    }
     for (out.items) |*l| l.* = if (l.len == 0) "" else rt.concat(&.{ margin, ansi.truncate(l.*, @intCast(w)) });
     return out.items[0..@min(out.items.len, rows)];
 }
@@ -714,4 +804,34 @@ test "h and l step through a row's values, and a short page scrolls to the selec
     for (page) |l| found = found or std.mem.indexOf(u8, ansi.stripSgr(l), "❯ Accent") != null;
     try std.testing.expect(found);
     try std.testing.expectEqualStrings("  j/k move   h/l change   enter pick   q close", ansi.stripSgr(page[15]));
+}
+
+test "a wide page lists the selected row's choices beside it, with the command that sets the current one" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var map = std.process.Environ.Map.init(arena.allocator());
+    rt.initForTest(arena.allocator(), &map);
+    defer mux.useMux(null);
+    mux.useMux(&@import("../mux/rex.zig").backend);
+    const c = json.newObj();
+    c.putStr("kind", "claude");
+    const page = renderSettings(c, 0, 120, 34, "", .{});
+    var text: std.ArrayListUnmanaged(u8) = .empty;
+    for (page) |l| try text.appendSlice(rt.a, rt.concat(&.{ ansi.stripSgr(l), "\n" }));
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "│  ● claude") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "│  ○ codex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "lodestar config set --kind claude") != null);
+    // A toggle shows on and off; a stall time typed in is listed after the presets.
+    c.putInt("stall_minutes", 45);
+    var found = false;
+    for (choicesPanel(SETTINGS_ROWS[10], c, 20, .{})) |l| found = found or rt.eql(ansi.stripSgr(l), "● 45 min");
+    try std.testing.expect(found);
+    try std.testing.expectEqual(@as(usize, 2), choicesOf(SETTINGS_ROWS[7], c).items.len);
+    try std.testing.expectEqualStrings("lodestar config set --accent '#89b482'", commandFor(SETTINGS_ROWS[16], "#89b482"));
+    try std.testing.expectEqualStrings("lodestar config set --clear-model", commandFor(SETTINGS_ROWS[1], ""));
+    // A list longer than the room shows the part around the current value and how many it left out.
+    const short = choicesPanel(SETTINGS_ROWS[16], c, 6, .{});
+    try std.testing.expectEqualStrings("  6 more", ansi.stripSgr(short[3]));
+    // Too narrow for it: no panel.
+    for (renderSettings(c, 0, 60, 34, "", .{})) |l| try std.testing.expect(std.mem.indexOf(u8, l, "│") == null);
 }

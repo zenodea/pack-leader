@@ -17,7 +17,8 @@
 - The **settings page** moves with vim keys: `j`/`k`, `g`/`G`, and `h`/`l` to step a value
   without opening its list. In a list, `ctrl-j`/`ctrl-k` move, `ctrl-l` picks and `ctrl-h`
   backs out; `ctrl-j` used to pick, since terminals send it as a newline. On/off settings show as a dot, the page keeps a margin, and
-  long pages scroll. New rows: **Routing** (model routing's provider) and **Usage pane**
+  long pages scroll. On a wide pane the selected row's choices show beside it, with the current one marked and the
+  `config set` command for it. New rows: **Routing** (model routing's provider) and **Usage pane**
   (`config set --usage-pane on|off`), **Sidebar side**, **Crewmate bar**, **Retry limit**
   and **Accent**. The accent follows herdr's under herdr and the terminal's palette elsewhere,
   so it matches the terminal's theme.

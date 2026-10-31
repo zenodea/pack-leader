@@ -39,6 +39,8 @@ Keys:
 | Enter or Space | Open the full list of values, where you can type to search; flips an on/off setting |
 | `q` or Esc | Close |
 
+On a wide pane, the selected setting's choices show to the right of the rows, with the current one marked and the `lodestar config set` command that sets it. `h` / `l` move the mark.
+
 In a list, letters search, so the keys take ctrl: `ctrl-j` / `ctrl-k` move (as do `ctrl-n` / `ctrl-p` and the arrows), `ctrl-l` picks and `ctrl-h` backs out.
 
 The page only lists what the multiplexer you're in can do. Popup and the "no tabs" placement show under Rex and stay hidden under herdr and tmux.
