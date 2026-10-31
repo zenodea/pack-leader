@@ -512,7 +512,7 @@ fn askCapture(o: PickOptions) anyerror!?[]const u8 {
     return null;
 }
 
-const Choices = struct { items: []const PickItem, current: []const u8 };
+const Choices = struct { items: []const PickItem, current: []const u8, toggle: bool = false };
 
 /// What a row can be set to and which it is now: the list `enter` would open, or on and off for a toggle. The row's
 /// own change function asks for the list, on a copy of the configuration so a toggle flips nothing.
@@ -521,7 +521,7 @@ fn choicesOf(row: SettingsRow, c: Config) Choices {
     kept_models_only = true;
     row.change(c.deepClone(), askCapture) catch {};
     kept_models_only = false;
-    const o = captured orelse return .{ .items = &.{ .{ .value = "on" }, .{ .value = "off" } }, .current = row.value(c) };
+    const o = captured orelse return .{ .items = &.{ .{ .value = "on" }, .{ .value = "off" } }, .current = row.value(c), .toggle = true };
     const cur = o.current orelse "";
     for (o.items) |it| if (rt.eql(it.value, cur)) return .{ .items = o.items, .current = cur };
     // A value typed in rather than picked from the list: shown after it, as the row shows it.
@@ -544,9 +544,10 @@ fn accentSwatch(value: []const u8) []const u8 {
     return theme.paint(look).apply("■");
 }
 
-/// Beside the rows: the selected row's choices with the current one marked, and the command that sets it. A long
-/// list shows the part around the current value.
-fn choicesPanel(row: SettingsRow, c: Config, height: usize, accent: ansi.Paint) []const []const u8 {
+/// Beside the rows: the selected row's choices with the current one marked, and the command that sets it. With
+/// `cursor`, the list has the keys and that item is the one under them. A long list shows the part around the cursor,
+/// or else the current value.
+fn choicesPanel(row: SettingsRow, c: Config, height: usize, accent: ansi.Paint, cursor: ?usize) []const []const u8 {
     const ch = choicesOf(row, c);
     const cmd = commandFor(row, ch.current);
     var out: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -559,13 +560,16 @@ fn choicesPanel(row: SettingsRow, c: Config, height: usize, accent: ansi.Paint) 
         break;
     };
     const count = if (n <= room) n else room -| 1;
-    const start = if (count == 0) 0 else @min(at -| count / 2, n - count);
+    const start = if (count == 0) 0 else @min((cursor orelse at) -| count / 2, n - count);
     const swatch = rt.eql(row.flag, "--accent");
     for (ch.items[start .. start + count], start..) |it, i| {
         const label = if (swatch) rt.concat(&.{ accentSwatch(it.value), " ", it.label orelse it.value }) else it.label orelse it.value;
-        out.append(rt.a, if (i == at) rt.concat(&.{ accent.apply("● "), accent.apply(label) }) else rt.concat(&.{ ansi.dim("○ "), label })) catch {};
+        const under = cursor != null and cursor.? == i;
+        const dot = if (i == at) accent.apply("● ") else ansi.dim("○ ");
+        const text = if (under) accent.apply(ansi.bold(label)) else if (i == at) accent.apply(label) else label;
+        out.append(rt.a, rt.concat(&.{ if (under) accent.apply("❯ ") else "  ", dot, text })) catch {};
     }
-    if (count < n and room > 0) out.append(rt.a, ansi.dim(rt.fmt("  {d} more", .{n - count}))) catch {};
+    if (count < n and room > 0) out.append(rt.a, ansi.dim(rt.fmt("    {d} more", .{n - count}))) catch {};
     if (cmd.len > 0 and height >= out.items.len + 2) out.appendSlice(rt.a, &.{ "", ansi.dim(cmd) }) catch {};
     return out.items;
 }
@@ -574,9 +578,15 @@ fn choicesPanel(row: SettingsRow, c: Config, height: usize, accent: ansi.Paint) 
 const PANEL_MIN: usize = 18;
 
 const KEYS = [_][2][]const u8{ .{ "j/k", "move" }, .{ "h/l", "change" }, .{ "enter", "pick" }, .{ "q", "close" } };
+/// The keys while the choices beside the rows have them.
+const LIST_KEYS = [_][2][]const u8{ .{ "j/k", "move" }, .{ "enter", "pick" }, .{ "/", "search" }, .{ "h", "back" } };
+
+/// Whether the last page drawn had the choices beside the rows; without them, `enter` opens the full list.
+var panel_drawn = false;
 
 /// The page: a margin, rows by section with values in one column, and the keys at the bottom. When the rows don't fit, they scroll to keep the selected one in view.
-pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: []const u8, accent: ansi.Paint) []const []const u8 {
+/// With `list`, the choices beside the rows have the keys, the cursor on item `list`, and the selected row is greyed.
+pub fn renderSettings(c: Config, sel: usize, list: ?usize, cols: usize, rows: usize, notice: []const u8, accent: ansi.Paint) []const []const u8 {
     const shown = visibleRows();
     const margin = if (cols >= 40) "  " else " ";
     const w: usize = @max(10, cols -| 2 * margin.len);
@@ -608,7 +618,9 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
         if (i == sel) sel_line = body.items.len;
         const value = row.value(c);
         value_width = @max(value_width, ansi.width(shownValue(value, accent)));
-        body.append(rt.a, if (i == sel)
+        body.append(rt.a, if (i == sel and list != null)
+            ansi.dim(rt.concat(&.{ "❯ ", ansi.pad(row.label, label_width), ansi.stripSgr(shownValue(value, accent)) }))
+        else if (i == sel)
             rt.concat(&.{ accent.apply("❯ "), accent.apply(ansi.bold(ansi.pad(row.label, label_width))), if (rt.eql(value, "on") or rt.eql(value, "off")) shownValue(value, accent) else accent.apply(value) })
         else
             rt.concat(&.{ "  ", ansi.pad(row.label, label_width), shownValue(value, accent) })) catch {};
@@ -617,7 +629,7 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     var foot: std.ArrayListUnmanaged([]const u8) = .empty;
     if (notice.len > 0) foot.appendSlice(rt.a, &.{ "", ansi.fg.yellow(notice) }) catch {};
     var keys: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (KEYS) |k| keys.append(rt.a, rt.concat(&.{ k[0], " ", ansi.dim(k[1]) })) catch {};
+    for (if (list != null) LIST_KEYS[0..] else KEYS[0..]) |k| keys.append(rt.a, rt.concat(&.{ k[0], " ", ansi.dim(k[1]) })) catch {};
     const hint = std.mem.join(rt.a, ansi.dim("   "), keys.items) catch "";
 
     // Top margin, title, gap; then the rows; then the footer and the keys on the last line.
@@ -638,8 +650,9 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     const left_w = 2 + label_width + value_width;
     const hint_at = out.items.len - @as(usize, if (roomy) 2 else 1);
     const region_end = @min(hint_at -| @as(usize, if (roomy) 1 else 0), rows);
-    if (sel < shown.len and w >= left_w + 6 + PANEL_MIN and region_end > head.len) {
-        const lines = choicesPanel(shown[sel], c, region_end - head.len, accent);
+    panel_drawn = sel < shown.len and w >= left_w + 6 + PANEL_MIN and region_end > head.len;
+    if (panel_drawn) {
+        const lines = choicesPanel(shown[sel], c, region_end - head.len, accent, list);
         const foot_at = head.len + (end - start);
         for (head.len..region_end) |r| {
             if (r >= foot_at and r < foot_at + foot.items.len) continue;
@@ -673,11 +686,19 @@ fn askCycle(o: PickOptions) anyerror!?[]const u8 {
     return o.items[@intCast(@mod(at + cycle_by, n))].value;
 }
 
-fn drawSettings(c: Config, sel: usize, notice: []const u8, accent: ansi.Paint) void {
+/// The value picked from the choices beside the rows, handed to the row's change function as its answer.
+var chosen: []const u8 = "";
+
+fn askChosen(o: PickOptions) anyerror!?[]const u8 {
+    _ = o;
+    return chosen;
+}
+
+fn drawSettings(c: Config, sel: usize, list: ?usize, notice: []const u8, accent: ansi.Paint) void {
     const sz = term.size(80, 24);
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     buf.appendSlice(rt.a, ansi.screen.home) catch {};
-    const lines = renderSettings(c, sel, sz.cols, sz.rows, notice, accent);
+    const lines = renderSettings(c, sel, list, sz.cols, sz.rows, notice, accent);
     for (0..sz.rows) |r| {
         buf.appendSlice(rt.a, ansi.screen.at(r + 1, 1)) catch {};
         buf.appendSlice(rt.a, ansi.screen.clearLine) catch {};
@@ -693,12 +714,17 @@ fn isKey(key: term.Key, ch: []const u8) bool {
 }
 
 /// The interactive settings page; returns the (saved) configuration when closed. Vim keys: j/k move, g/G jump to the
-/// first or last row, h/l step the value back or on, enter (or space) opens the full list or flips a toggle.
+/// first or last row, h/l step the value back or on, enter (or space) flips a toggle or moves into the row's choices
+/// beside it (the full list when the pane is too narrow for them). There j/k move, enter or l picks, / opens the full
+/// list to search or type a value, and h or esc goes back to the rows.
 pub fn runSettings() !Config {
     if (!term.isTty(0) or !term.isTty(1)) return rt.fail(null, "lodestar settings needs a terminal", .{});
     const c = try config.loadConfig();
     const accent = theme.paint(theme.loadTheme());
     var sel: usize = 0;
+    // The cursor in the choices beside the rows while they have the keys, and those choices.
+    var list: ?usize = null;
+    var list_items: []const PickItem = &.{};
     var notice: []const u8 = "";
     var raw: term.Raw = .{};
     raw.enable();
@@ -711,18 +737,41 @@ pub fn runSettings() !Config {
     const n = shown.len;
     // A popup is often sized after the page has drawn once; redraw when it is.
     term.installWinch();
-    drawSettings(c, sel, notice, accent);
+    drawSettings(c, sel, list, notice, accent);
     var reader: term.KeyReader = .{};
     while (true) {
         const data = term.readStdin(reader.timeoutMs() orelse RESIZE_CHECK_MS) orelse return c;
-        if (term.got_winch.swap(false, .seq_cst)) drawSettings(c, sel, notice, accent);
+        if (term.got_winch.swap(false, .seq_cst)) drawSettings(c, sel, list, notice, accent);
         const keys = if (data.len == 0) reader.expire() else reader.feed(data);
         for (keys) |key| {
             const name = key.name orelse "";
-            if ((key.ctrl and rt.eql(name, "c")) or rt.eql(name, "escape") or isKey(key, "q")) return c;
+            if (key.ctrl and rt.eql(name, "c")) return c;
             var ask: ?Ask = null;
             const chord = term.ctrlOf(key);
-            if (chord == 'k') {
+            const enter = rt.eql(name, "return") or rt.eql(name, "enter") or rt.eql(name, "space");
+            if (list) |at| {
+                const m = list_items.len;
+                if (rt.eql(name, "escape") or isKey(key, "q") or isKey(key, "h") or rt.eql(name, "left") or chord == 'h') {
+                    list = null;
+                } else if (rt.eql(name, "up") or isKey(key, "k") or chord == 'k' or chord == 'p') {
+                    list = (at + m - 1) % m;
+                } else if (rt.eql(name, "down") or isKey(key, "j") or chord == 'j' or chord == 'n') {
+                    list = (at + 1) % m;
+                } else if (isKey(key, "g") or rt.eql(name, "home")) {
+                    list = 0;
+                } else if (isKey(key, "G") or rt.eql(name, "end")) {
+                    list = m - 1;
+                } else if (enter or isKey(key, "l") or rt.eql(name, "right") or chord == 'l') {
+                    chosen = list_items[at].value;
+                    ask = askChosen;
+                    list = null;
+                } else if (isKey(key, "/")) {
+                    ask = askNested;
+                    list = null;
+                } else continue;
+            } else if (rt.eql(name, "escape") or isKey(key, "q")) {
+                return c;
+            } else if (chord == 'k') {
                 sel = (sel + n - 1) % n;
             } else if (chord == 'j') {
                 sel = (sel + 1) % n;
@@ -746,8 +795,18 @@ pub fn runSettings() !Config {
             } else if (isKey(key, "h") or rt.eql(name, "left")) {
                 cycle_by = -1;
                 ask = askCycle;
-            } else if (rt.eql(name, "return") or rt.eql(name, "enter") or rt.eql(name, "space")) {
-                ask = askNested;
+            } else if (enter) {
+                const ch = if (panel_drawn) choicesOf(shown[sel], c) else null;
+                if (ch == null or ch.?.toggle or ch.?.items.len == 0) {
+                    ask = askNested;
+                } else {
+                    list_items = ch.?.items;
+                    list = 0;
+                    for (list_items, 0..) |it, i| if (rt.eql(it.value, ch.?.current)) {
+                        list = i;
+                        break;
+                    };
+                }
             } else continue;
             notice = "";
             if (ask) |f| {
@@ -756,7 +815,7 @@ pub fn runSettings() !Config {
                 } else |err| notice = rt.dupe(rt.errMessage(err));
                 raw.enable();
             }
-            drawSettings(c, sel, notice, accent);
+            drawSettings(c, sel, list, notice, accent);
         }
     }
 }
@@ -798,7 +857,7 @@ test "h and l step through a row's values, and a short page scrolls to the selec
     try cUsagePane(c, askCycle);
     try std.testing.expectEqualStrings("off", vUsagePane(c));
     const last = visibleRows().len - 1;
-    const page = renderSettings(c, last, 50, 16, "", .{});
+    const page = renderSettings(c, last, null, 50, 16, "", .{});
     try std.testing.expectEqual(@as(usize, 16), page.len);
     var found = false;
     for (page) |l| found = found or std.mem.indexOf(u8, ansi.stripSgr(l), "❯ Accent") != null;
@@ -815,23 +874,45 @@ test "a wide page lists the selected row's choices beside it, with the command t
     mux.useMux(&@import("../mux/rex.zig").backend);
     const c = json.newObj();
     c.putStr("kind", "claude");
-    const page = renderSettings(c, 0, 120, 34, "", .{});
+    const page = renderSettings(c, 0, null, 120, 34, "", .{});
     var text: std.ArrayListUnmanaged(u8) = .empty;
     for (page) |l| try text.appendSlice(rt.a, rt.concat(&.{ ansi.stripSgr(l), "\n" }));
-    try std.testing.expect(std.mem.indexOf(u8, text.items, "│  ● claude") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text.items, "│  ○ codex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "│    ● claude") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "│    ○ codex") != null);
     try std.testing.expect(std.mem.indexOf(u8, text.items, "lodestar config set --kind claude") != null);
     // A toggle shows on and off; a stall time typed in is listed after the presets.
     c.putInt("stall_minutes", 45);
     var found = false;
-    for (choicesPanel(SETTINGS_ROWS[10], c, 20, .{})) |l| found = found or rt.eql(ansi.stripSgr(l), "● 45 min");
+    for (choicesPanel(SETTINGS_ROWS[10], c, 20, .{}, null)) |l| found = found or rt.eql(ansi.stripSgr(l), "  ● 45 min");
     try std.testing.expect(found);
     try std.testing.expectEqual(@as(usize, 2), choicesOf(SETTINGS_ROWS[7], c).items.len);
     try std.testing.expectEqualStrings("lodestar config set --accent '#89b482'", commandFor(SETTINGS_ROWS[16], "#89b482"));
     try std.testing.expectEqualStrings("lodestar config set --clear-model", commandFor(SETTINGS_ROWS[1], ""));
     // A list longer than the room shows the part around the current value and how many it left out.
-    const short = choicesPanel(SETTINGS_ROWS[16], c, 6, .{});
-    try std.testing.expectEqualStrings("  6 more", ansi.stripSgr(short[3]));
+    const short = choicesPanel(SETTINGS_ROWS[16], c, 6, .{}, null);
+    try std.testing.expectEqualStrings("    6 more", ansi.stripSgr(short[3]));
     // Too narrow for it: no panel.
-    for (renderSettings(c, 0, 60, 34, "", .{})) |l| try std.testing.expect(std.mem.indexOf(u8, l, "│") == null);
+    for (renderSettings(c, 0, null, 60, 34, "", .{})) |l| try std.testing.expect(std.mem.indexOf(u8, l, "│") == null);
+}
+
+test "with the choices holding the keys, the row is greyed and the cursor shows in the list" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var map = std.process.Environ.Map.init(arena.allocator());
+    rt.initForTest(arena.allocator(), &map);
+    defer mux.useMux(null);
+    mux.useMux(&@import("../mux/rex.zig").backend);
+    const c = json.newObj();
+    c.putStr("kind", "claude");
+    const page = renderSettings(c, 0, 1, 120, 34, "", .{});
+    var text: std.ArrayListUnmanaged(u8) = .empty;
+    for (page) |l| try text.appendSlice(rt.a, rt.concat(&.{ ansi.stripSgr(l), "\n" }));
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "│  ❯ ○ codex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "│    ● claude") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text.items, "/ search") != null);
+    try std.testing.expect(std.mem.indexOf(u8, page[4], "\x1b[2m❯ Harness") != null);
+    // Picking hands the row's change function the value.
+    chosen = "codex";
+    try cHarness(c, askChosen);
+    try std.testing.expectEqualStrings("codex", kindOf(c));
 }

@@ -36,12 +36,12 @@ Keys:
 | `j` / `k` (or ↓ / ↑, `ctrl-j` / `ctrl-k`) | Move down or up |
 | `g` / `G` | First or last setting |
 | `l` / `h` (or → / ←, `ctrl-l` / `ctrl-h`) | Step the value on or back; flips an on/off setting |
-| Enter or Space | Open the full list of values, where you can type to search; flips an on/off setting |
+| Enter or Space | Move into the setting's choices on the right (the full list on a narrow pane); flips an on/off setting |
 | `q` or Esc | Close |
 
-On a wide pane, the selected setting's choices show to the right of the rows, with the current one marked and the `lodestar config set` command that sets it. `h` / `l` move the mark.
+On a wide pane, the selected setting's choices show to the right of the rows, with the current one marked and the `lodestar config set` command that sets it. `h` / `l` move the mark. Enter moves into those choices and greys the setting out: `j` / `k` move, Enter or `l` picks, `/` opens the full list to search or type a value, and `h` or Esc goes back.
 
-In a list, letters search, so the keys take ctrl: `ctrl-j` / `ctrl-k` move (as do `ctrl-n` / `ctrl-p` and the arrows), `ctrl-l` picks and `ctrl-h` backs out.
+In the full list, letters search, so the keys take ctrl: `ctrl-j` / `ctrl-k` move (as do `ctrl-n` / `ctrl-p` and the arrows), `ctrl-l` picks and `ctrl-h` backs out.
 
 The page only lists what the multiplexer you're in can do. Popup and the "no tabs" placement show under Rex and stay hidden under herdr and tmux.
 
