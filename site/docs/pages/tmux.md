@@ -18,7 +18,7 @@ herdr can see whether an agent is working or idle. tmux can't, so Lodestar start
 
 pi has no hooks, so Lodestar loads a small pi extension (`pi -e`) that reports the same way: idle when a session starts, working while it runs, idle once pi won't continue on its own. pi doesn't ask for permission, so it never shows as blocked. fx has no hooks, so under tmux its status stays `unknown`.
 
-Rex needs none of this: Claude Code, Codex and fx tell Rex their status themselves, and Lodestar reads it from Rex. Only pi gets its extension there, which reports to Rex the same way.
+Rex needs none of this: Claude Code, Codex and fx tell Rex their status themselves, and Lodestar reads it from Rex. Only pi gets its extension there, which reports to Rex the same way. See [Running under Rex](?p=rex).
 
 ## What's different from herdr
 

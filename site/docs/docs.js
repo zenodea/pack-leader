@@ -17,6 +17,7 @@ const NAV = [
   ]],
   ["Where it runs", [
     ["tmux", "Running under tmux"],
+    ["rex", "Running under Rex"],
     ["remote", "Remote crewmates"],
     ["model-routing", "Model routing"],
   ]],

@@ -14,12 +14,15 @@ It opens in your terminal and covers:
 | --- | --- | --- |
 | Harness | Which agent new crewmates run: Claude Code, Codex, pi or fx | Claude Code |
 | Model and effort | The model and thinking level for each harness | The harness's own default |
-| Placement | Crewmates in hidden tabs, or split beside the leader | Hidden tabs |
+| Placement | Crewmates in hidden tabs, split beside the leader, or (Rex) in no tab at all | Hidden tabs |
+| Popup (Rex) | `p` in the crew pane opens the selected crewmate in a window floating over your tab | On |
 | Worktrees | Always give crewmates a worktree, never, or let the leader decide | Leader decides |
 | Navigator | Open the Navigator with every run | On |
 | Stall alert | Minutes of silence before a crewmate that owes a report is flagged. `0` is off | 20 |
 | Handoff | Hand the leader over to a fresh session when its context fills | Off |
 | Handoff at | The context size, in tokens, that triggers it | 200,000 |
+
+The page only lists what the multiplexer you're in can do. Popup and the "no tabs" placement show under Rex and stay hidden under herdr and tmux.
 
 On herdr you can bind it to a key as a popup. See [Keyboard shortcuts](#keyboard-shortcuts-herdr).
 
@@ -33,6 +36,7 @@ lodestar config set --kind claude --model sonnet --thinking high
 lodestar config set --placement split
 lodestar config set --worktree-mode on
 lodestar config set --navigator off
+lodestar config set --popup off
 lodestar config set --stall-minutes 30
 lodestar config set --handoff on --handoff-at 180000
 ```
@@ -57,6 +61,7 @@ Automatic model choice per task is covered in [Model routing](?p=model-routing).
 
 - **Hidden tabs** (the default): each crewmate gets a tab of its own, and the sidebar shows them all.
 - **Beside the leader**: no sidebar. The leader keeps the top left, the Navigator the bottom left, and crewmates fill the right half of the tab, each new one splitting the biggest crewmate the other way. When a crewmate is released, its neighbour takes the space.
+- **No tabs** (Rex only, `--placement background`): crewmates run in no tab. The crew pane lists them, and Enter opens one as a [popup](?p=rex#the-popup). On herdr and tmux this setting gives hidden tabs.
 
 Under tmux, new crewmates always split beside the leader.
 

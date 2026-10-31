@@ -239,7 +239,7 @@ Starts a new agent, hands it a task and supervises it. With `--spec`, a task is 
 ```sh
 lodestar crew start NAME --spec "..." | --task ID [--retry]
     [--kind K] [--model M] [--thinking L] [--router off|openai|jev]
-    [--cwd D] [--host NAME] [--placement tab|split] [--direction right|down]
+    [--cwd D] [--host NAME] [--placement tab|split|background] [--direction right|down]
     [--target-pane P] [--ratio R] [--title T]
     [--worktree new|PATH [--base REF] [--branch B]]
     [--setup-command STRING [--setup-timeout MS]]
@@ -257,7 +257,7 @@ lodestar crew start NAME --spec "..." | --task ID [--retry]
 | `--router off\|openai\|jev` | Override [model routing](?p=model-routing) for this crewmate only. An explicit model skips routing. |
 | `--cwd D` | Working directory. |
 | `--host NAME` | Start on a remote host (herdr only). Needs `--cwd` with a directory that already exists there; tab placement only. |
-| `--placement tab\|split` | `tab` (default) puts the crewmate in a hidden tab of its own. `split` puts it beside the leader. |
+| `--placement tab\|split\|background` | `tab` (default) puts the crewmate in a hidden tab of its own. `split` puts it beside the leader. `background` (Rex only) runs it in no tab; open it from the crew pane as a popup. |
 | `--direction right\|down` | With `split`: which way to split. An error with `tab`. |
 | `--target-pane P` | With `split`: split this pane instead of the crewmate area. |
 | `--ratio R` | With `split`: size of the new pane. |
@@ -671,7 +671,7 @@ lodestar host remove NAME
 
 ### settings
 
-Opens the settings page in your terminal: agent, model, effort, placement, worktrees, Navigator, stall alert and handoff. `config pick` is the old name for the same page.
+Opens the settings page in your terminal: agent, model, effort, placement, popup, worktrees, Navigator, stall alert and handoff. Rows the multiplexer can't use are hidden. `config pick` is the old name for the same page.
 
 ```sh
 lodestar settings
@@ -684,7 +684,7 @@ Prints the settings as JSON, or changes them from a script. Flags on a command (
 ```sh
 lodestar config [show]
 lodestar config set [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
-    [--placement tab|split] [--worktree-mode on|off|leader] [--navigator on|off]
+    [--placement tab|split|background] [--popup on|off] [--worktree-mode on|off|leader] [--navigator on|off]
     [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
     [--routing-config FILE] [--router off|openai|jev]
 ```
@@ -695,7 +695,8 @@ lodestar config set [--kind K] [--model M] [--thinking L] [--clear-model] [--cle
 | `--model M`, `--thinking L` | Default model and effort for that agent. |
 | `--clear-model`, `--clear-thinking` | Remove them. |
 | `--default` | Make the selected agent the default. |
-| `--placement tab\|split` | Where new crewmates go. |
+| `--placement tab\|split\|background` | Where new crewmates go. `background` (no tabs) needs Rex; elsewhere it gives hidden tabs. |
+| `--popup on\|off` | Rex: whether `p` in the crew pane opens a crewmate as a popup. |
 | `--worktree-mode on\|off\|leader` | Always give crewmates a worktree, never, or let the leader decide. |
 | `--navigator on\|off` | Whether `run create` opens the Navigator. |
 | `--stall-minutes N` | Alert when a crewmate owes a report and shows no sign of life for this long. `0` is off. `LODESTAR_STALL_MS` wins over it. |
@@ -742,10 +743,18 @@ lodestar leader [--run ID]
 
 ### sidebar
 
-Draws the Crewmates sidebar. herdr runs this in a pane for you; you won't normally call it.
+Draws the Crew pane. Lodestar opens it in a pane for you; you won't normally call it.
 
 ```sh
 lodestar sidebar
+```
+
+### popup
+
+Shows a crewmate's screen and types what you type into it; ctrl-] closes it. On Rex, `p` in the Crew pane runs it in a window floating over your tab.
+
+```sh
+lodestar popup PANE [--name NAME]
 ```
 
 ### help

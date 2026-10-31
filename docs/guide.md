@@ -108,7 +108,10 @@ leader" in the settings (or `--placement split`), there is no sidebar: you keep
 the top left, the navigator the bottom left, and crewmates fill the right half of
 your tab, each new one splitting the biggest crewmate the other way; a released
 crewmate's neighbour takes its space. Pass `--placement split` yourself only when
-the user wants to watch a crewmate next to you.
+the user wants to watch a crewmate next to you. Under Rex, placement "no tabs"
+(`--placement background`) runs crewmates in no tab at all; the user opens one
+from the sidebar as a popup (Enter, or `p` for any crewmate). Pass it yourself
+only when the user asks.
 Never open, focus, or close crewmate tabs yourself; `lodestar crew focus <name>`
 shows one when the user asks.
 
@@ -625,7 +628,7 @@ lodestar gate resolve ID --decision approve|reject | --choice OPTION [--reason T
 # full handoff (no run)
 lodestar spawn NAME --prompt "..." [--kind K] [--model M] [--thinking L] [--cwd D] [--worktree new|PATH [--base REF] [--branch B]] [--no-default-args] [--timeout MS] [-- agent args]
 # crewmates
-lodestar crew start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--router off|openai|jev] [--cwd D] [--placement tab|split] [--host NAME]
+lodestar crew start NAME --spec "..." | --task ID [--retry] [--kind claude] [--model M] [--thinking L] [--router off|openai|jev] [--cwd D] [--placement tab|split|background] [--host NAME]
                          [--direction right|down] [--worktree new|PATH [--base REF] [--branch B]] [--setup-command STRING [--setup-timeout MS]] [--title T] [--target-pane P]
                          [--ratio R] [--no-default-args] [--timeout MS] [-- agent args]
 lodestar crew adopt NAME --task ID | --spec TEXT [--title TEXT] [--target-pane P]
@@ -652,7 +655,7 @@ lodestar note "text" | --body "..." | escalate "text" | --body "..." | send CREW
 lodestar CREWMATE-COMMAND ... [--crewmate NAME] [--run ID] [--task ID] [--dispatch ID]
 # either
 lodestar config [show] | pick | set [--routing-config FILE] [--router off|openai|jev] [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
-                   [--placement tab|split] [--worktree-mode on|off|leader|shared] [--navigator on|off] [--review on|off] [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
+                   [--placement tab|split|background] [--popup on|off] [--worktree-mode on|off|leader|shared] [--navigator on|off] [--review on|off] [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
 lodestar settings | skill [--install] | sidebar | leader [--run ID] | survey [--turns N] | navigator [--close] | help
 ```
 

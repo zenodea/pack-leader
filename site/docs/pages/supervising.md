@@ -83,12 +83,14 @@ Idle isn't done. A crewmate sitting quietly at its prompt hasn't finished until 
 
 ## The sidebar
 
-On herdr, the **Crewmates** pane shows the run's goal and one box per crewmate: agent, runtime, state, task, and the last thing it said. An open question shows its choices.
+On herdr and Rex, the **Crew** pane shows the run's goal and one box per crewmate: agent, runtime, state, task, and the last thing it said. An open question shows its choices.
 
 | Key | Does |
 | --- | --- |
 | Click | Select a crewmate |
-| Enter, or click again | Open its tab |
+| Enter, or click again | Open its tab. A crewmate with no tab (Rex) opens as a popup |
+| `p` | Rex: open it in a [popup](?p=rex#the-popup) over your tab, to read and answer it. ctrl-] closes it |
+| `r` | Preview: its last lines under the crewmates. `r` again hides them |
 | `o` | Back to the leader |
 | `u` | Unread: reports, questions, notes and alerts the leader hasn't handled |
 | `y` | From you: your messages the leader hasn't picked up |
