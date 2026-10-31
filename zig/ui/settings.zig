@@ -105,7 +105,6 @@ pub const Ask = *const fn (o: PickOptions) anyerror!?[]const u8;
 pub const SettingsRow = struct {
     section: []const u8,
     label: []const u8,
-    help: []const u8,
     value: *const fn (c: Config) []const u8,
     change: *const fn (c: Config, ask: Ask) anyerror!void,
     /// Whether the row applies under the multiplexer Lodestar runs in; rows without one always do.
@@ -321,19 +320,19 @@ fn cUsagePane(c: Config, ask: Ask) anyerror!void {
 }
 
 pub const SETTINGS_ROWS = [_]SettingsRow{
-    .{ .section = "Crew", .label = "Harness", .help = "The agent new crewmates run in. Model and effort below belong to this harness.", .value = vHarness, .change = cHarness },
-    .{ .section = "Crew", .label = "Model", .help = "The model new crewmates get. Type a name that is not listed and press enter to use it.", .value = modelOrDefault, .change = cModel },
-    .{ .section = "Crew", .label = "Effort", .help = "The thinking level new crewmates get.", .value = thinkingOrDefault, .change = cEffort },
-    .{ .section = "Crew", .label = "Routing", .help = "openai or jev: that provider picks each new crewmate's model and effort from profiles you approve. Needs a profiles file (lodestar config set --routing-config FILE; see Model routing in the docs) and the provider's API key where Lodestar runs.", .value = vRouting, .change = cRouting },
-    .{ .section = "Crew", .label = "Placement", .help = "hidden tabs: each crewmate in its own tab, shown in the sidebar. beside the leader: leader top left, navigator below it, crewmates fill the right half; each new one splits the biggest crewmate the other way. no tabs (Rex): crewmates run in no tab; enter in the crew pane opens one as a popup. Remote crewmates always get a tab.", .value = vPlacement, .change = cPlacement },
-    .{ .section = "Crew", .label = "Popup", .help = "on: p in the crew pane opens the selected crewmate in a window floating over your tab; type to answer it, ctrl-] closes it. Crewmates without a tab always open this way.", .value = vPopup, .change = cPopup, .shown = canFloat },
-    .{ .section = "Crew", .label = "Worktrees", .help = "on: every crewmate in a git repo gets its own worktree. off: no crewmate gets one. leader decides: the orchestrator picks per crewmate. one shared worktree: all crewmates of a run edit one checkout on branch lodestar/<run>/shared; each `done` commits that crewmate's files (retrying while git is busy) and `lodestar run merge` merges the branch back.", .value = vWorktree, .change = cWorktree },
-    .{ .section = "Orchestrator", .label = "Navigator", .help = "The second agent under the leader that you can ask about the run. It never acts on the run.", .value = vNavigator, .change = cNavigator },
-    .{ .section = "Orchestrator", .label = "Review", .help = "on: the leader checks each crewmate's work before accepting its report. off: the leader only assigns work, answers questions and unsticks crewmates; it accepts reports without reviewing the code, and crewmates are told to verify their own work.", .value = vReview, .change = cReview },
-    .{ .section = "Orchestrator", .label = "Stall alert", .help = "How long a crewmate that owes a report can stay silent before the leader is told. LODESTAR_STALL_MS still wins when set.", .value = vStall, .change = cStall },
-    .{ .section = "Orchestrator", .label = "Handoff", .help = "Past the limit below, the leader writes a note, its session is cleared, and it resumes the run from the note and `lodestar status`.", .value = vHandoff, .change = cHandoff },
-    .{ .section = "Orchestrator", .label = "Handoff at", .help = "The leader's context size that triggers a handoff. Keep it below the harness's own auto-compact point.", .value = vHandoffAt, .change = cHandoffAt },
-    .{ .section = "Sidebar", .label = "Usage pane", .help = "on: the sidebar opens a pane below the crew with each plan limit and what each agent spent. Applies to sidebars opened from now on.", .value = vUsagePane, .change = cUsagePane },
+    .{ .section = "Crew", .label = "Harness", .value = vHarness, .change = cHarness },
+    .{ .section = "Crew", .label = "Model", .value = modelOrDefault, .change = cModel },
+    .{ .section = "Crew", .label = "Effort", .value = thinkingOrDefault, .change = cEffort },
+    .{ .section = "Crew", .label = "Routing", .value = vRouting, .change = cRouting },
+    .{ .section = "Crew", .label = "Placement", .value = vPlacement, .change = cPlacement },
+    .{ .section = "Crew", .label = "Popup", .value = vPopup, .change = cPopup, .shown = canFloat },
+    .{ .section = "Crew", .label = "Worktrees", .value = vWorktree, .change = cWorktree },
+    .{ .section = "Orchestrator", .label = "Navigator", .value = vNavigator, .change = cNavigator },
+    .{ .section = "Orchestrator", .label = "Review", .value = vReview, .change = cReview },
+    .{ .section = "Orchestrator", .label = "Stall alert", .value = vStall, .change = cStall },
+    .{ .section = "Orchestrator", .label = "Handoff", .value = vHandoff, .change = cHandoff },
+    .{ .section = "Orchestrator", .label = "Handoff at", .value = vHandoffAt, .change = cHandoffAt },
+    .{ .section = "Sidebar", .label = "Usage pane", .value = vUsagePane, .change = cUsagePane },
 };
 
 fn joinNonEmpty(parts: []const ?[]const u8, sep: []const u8) []const u8 {
@@ -408,8 +407,7 @@ fn shownValue(v: []const u8, accent: ansi.Paint) []const u8 {
 
 const KEYS = [_][2][]const u8{ .{ "j/k", "move" }, .{ "h/l", "change" }, .{ "enter", "pick" }, .{ "q", "close" } };
 
-/// The page: a margin, rows by section with values in one column, the selected row's help under a rule, and the keys
-/// at the bottom. When the rows don't fit, they scroll to keep the selected one in view.
+/// The page: a margin, rows by section with values in one column, and the keys at the bottom. When the rows don't fit, they scroll to keep the selected one in view.
 pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: []const u8, accent: ansi.Paint) []const []const u8 {
     const shown = visibleRows();
     const margin = if (cols >= 40) "  " else " ";
@@ -436,8 +434,6 @@ pub fn renderSettings(c: Config, sel: usize, cols: usize, rows: usize, notice: [
     }
 
     var foot: std.ArrayListUnmanaged([]const u8) = .empty;
-    foot.appendSlice(rt.a, &.{ "", ansi.dim(ansi.repeat("─", w)) }) catch {};
-    for (ansi.wrap(shown[sel].help, w)) |l| foot.append(rt.a, ansi.dim(l)) catch {};
     if (notice.len > 0) foot.appendSlice(rt.a, &.{ "", ansi.fg.yellow(notice) }) catch {};
     var keys: std.ArrayListUnmanaged([]const u8) = .empty;
     for (KEYS) |k| keys.append(rt.a, rt.concat(&.{ k[0], " ", ansi.dim(k[1]) })) catch {};
