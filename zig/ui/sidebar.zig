@@ -226,6 +226,21 @@ pub fn boxLines(w: Crewmate, t: ?Task, last: ?Message, st: []const u8, cols: i64
     return out.items;
 }
 
+const PENDING_SHOWN: usize = 3;
+
+/// Tasks no crewmate has taken yet: a dashed yellow box shaped like a crewmate's, titled with the count.
+pub fn pendingBox(titles: []const []const u8, cols: i64) []const []const u8 {
+    const inner: usize = @intCast(@max(1, cols - 4));
+    const head = rt.fmt(" {d} pending ", .{titles.len});
+    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    out.append(rt.a, fg.yellow(rt.concat(&.{ "┌╌", head, ansi.repeat("╌", (inner + 1) -| ansi.width(head)), "┐" }))) catch {};
+    const shown = titles[0..@min(titles.len, PENDING_SHOWN)];
+    for (shown) |t| out.append(rt.a, rt.concat(&.{ fg.yellow("╎ "), pad(truncate(t, @intCast(inner)), inner), fg.yellow(" ╎") })) catch {};
+    if (titles.len > shown.len) out.append(rt.a, rt.concat(&.{ fg.yellow("╎ "), pad(dim(rt.fmt("+{d} more", .{titles.len - shown.len})), inner), fg.yellow(" ╎") })) catch {};
+    out.append(rt.a, fg.yellow(rt.concat(&.{ "└", ansi.repeat("╌", inner + 2), "┘" }))) catch {};
+    return out.items;
+}
+
 pub fn boundRunFor(s: State, pane: ?[]const u8) ?Run {
     const p = pane orelse return null;
     if (p.len == 0) return null;
@@ -680,11 +695,15 @@ const Sidebar = struct {
                     if (i == self.sel) sel_end = @intCast(lines.items.len);
                     i += 1;
                 }
-                var pending: usize = 0;
+                var pending: std.ArrayListUnmanaged([]const u8) = .empty;
                 for (state.runTasks(self.state, run_id)) |t| {
-                    if (rt.eqlOpt(t.str("status"), "pending")) pending += 1;
+                    if (rt.eqlOpt(t.str("status"), "pending")) pending.append(rt.a, oneLine(t.str("title") orelse t.str("spec") orelse "")) catch {};
                 }
-                if (pending > 0) lines.append(rt.a, dim(rt.fmt("  {d} pending task{s}", .{ pending, if (pending == 1) "" else "s" }))) catch {};
+                if (pending.items.len > 0) {
+                    lines.append(rt.a, "") catch {};
+                    appendAll(&lines, pendingBox(pending.items, cols));
+                    lines.append(rt.a, "") catch {};
+                }
             }
         }
 
@@ -1087,6 +1106,11 @@ test "boxLines, goalLines and statusOf" {
     const w = json.object(.{ .{ "name", "parser" }, .{ "kind", "claude" }, .{ "model", "opus" }, .{ "pane_id", "w1:p2" }, .{ "started_at", "2026-01-01T00:00:00.000Z" }, .{ "dispatch_id", "d1" }, .{ "last_status", "working" } });
     const t = json.object(.{ .{ "title", "Parse the CSV" }, .{ "status", "succeeded" }, .{ "dispatch_id", "d1" }, .{ "updated_at", "2026-01-01T01:02:03.000Z" } });
     const last = json.object(.{ .{ "type", "done" }, .{ "body", "parsed   everything" }, .{ "outcome", "succeeded" } });
+    const pend = pendingBox(&.{ "Electrical drawings pass", "Docs", "Tests", "Lint" }, 30);
+    try std.testing.expectEqualStrings("┌╌ 1 pending ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐", ansi.stripSgr(pendingBox(&.{"x"}, 30)[0]));
+    try std.testing.expectEqualStrings("╎ Electrical drawings pass   ╎", ansi.stripSgr(pend[1]));
+    try std.testing.expectEqualStrings("╎ +1 more                    ╎", ansi.stripSgr(pend[4]));
+    try std.testing.expectEqual(@as(usize, 30), ansi.width(pend[5]));
     const box = boxLines(w, t, last, "done", 40, false, theme_mod.noTheme);
     try testing.expectEqual(@as(usize, 6), box.len);
     try testing.expectEqualStrings(rt.concat(&.{ "┌", ansi.repeat("─", 38), "┐" }), ansi.stripSgr(box[0]));
