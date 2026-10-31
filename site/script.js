@@ -1,4 +1,4 @@
-// The dot field. Every dot is an agent; the orange one is the leader. Each section of the
+// The dot field. Every dot is an agent; the blue-white star is the leader. Each section of the
 // page names a formation (data-scene) and the leader pulls the dots into it.
 // Without JavaScript the page is plain text with a normal heading.
 document.documentElement.classList.add("js");
@@ -19,7 +19,7 @@ const C = {
   pink: [244, 150, 190],
   done: [110, 231, 168],
   ask: [255, 200, 87],
-  leader: [255, 150, 72],
+  leader: [205, 226, 255],
 };
 const TINTS = [C.work, C.violet, C.teal, C.pink];
 
@@ -380,7 +380,7 @@ function drawLeader(now) {
   // A fading trail while it travels.
   leader.trail.forEach((p, i) => {
     const k = i / leader.trail.length;
-    ctx.fillStyle = `rgba(255,140,60,${.22 * k * k * a})`;
+    ctx.fillStyle = `rgba(150,190,255,${.22 * k * k * a})`;
     ctx.beginPath(); ctx.arc(p[0], p[1], s * (.4 + .9 * k), 0, 6.283); ctx.fill();
   });
 
@@ -390,12 +390,12 @@ function drawLeader(now) {
     const u = (now - born) / RING_LIFE;
     if (u < 0 || u > 1) continue;
     const e = 1 - (1 - u) * (1 - u) * (1 - u);
-    ctx.strokeStyle = `rgba(255,170,105,${.45 * (1 - u) * a})`;
+    ctx.strokeStyle = `rgba(180,210,255,${.45 * (1 - u) * a})`;
     ctx.beginPath(); ctx.arc(x, y, s * 2 + e * ringReach(), 0, 6.283); ctx.stroke();
   }
 
   // Bloom.
-  ctx.fillStyle = radial(s * 18, [[0, `rgba(255,120,40,${.2 * a})`], [.35, `rgba(255,100,30,${.06 * a})`], [1, "rgba(255,90,20,0)"]]);
+  ctx.fillStyle = radial(s * 18, [[0, `rgba(120,170,255,${.2 * a})`], [.35, `rgba(100,150,255,${.06 * a})`], [1, "rgba(90,140,255,0)"]]);
   ctx.beginPath(); ctx.arc(x, y, s * 18, 0, 6.283); ctx.fill();
 
   // The North Star's rays: four long ones on the compass points, north the longest, and four short
@@ -403,7 +403,7 @@ function drawLeader(now) {
   const ray = (ang, len, w, alpha) => {
     const dx = Math.cos(ang), dy = Math.sin(ang);
     const g = ctx.createLinearGradient(x, y, x + dx * len, y + dy * len);
-    g.addColorStop(0, `rgba(255,236,205,${alpha * a})`); g.addColorStop(.35, `rgba(255,190,130,${alpha * .55 * a})`); g.addColorStop(1, "rgba(255,160,90,0)");
+    g.addColorStop(0, `rgba(240,247,255,${alpha * a})`); g.addColorStop(.35, `rgba(175,208,255,${alpha * .55 * a})`); g.addColorStop(1, "rgba(130,180,255,0)");
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.moveTo(x - dy * w, y + dx * w);
@@ -429,13 +429,13 @@ function drawLeader(now) {
       i ? ctx.lineTo(x + Math.cos(ang) * r, y + Math.sin(ang) * r) : ctx.moveTo(x + Math.cos(ang) * r, y + Math.sin(ang) * r);
     }
     ctx.fillStyle = radial(base * 1.2, layer
-      ? [[0, `rgba(255,120,45,${.32 * a})`], [1, "rgba(255,90,30,0)"]]
-      : [[0, `rgba(255,170,90,${.75 * a})`], [.55, `rgba(255,120,45,${.35 * a})`], [1, "rgba(255,100,40,0)"]]);
+      ? [[0, `rgba(120,170,255,${.32 * a})`], [1, "rgba(90,140,255,0)"]]
+      : [[0, `rgba(185,215,255,${.75 * a})`], [.55, `rgba(125,170,255,${.35 * a})`], [1, "rgba(100,150,255,0)"]]);
     ctx.fill();
   }
 
   // The hot core.
-  ctx.fillStyle = radial(s * 1.15, [[0, `rgba(255,255,248,${a})`], [.45, `rgba(255,226,180,${a})`], [.8, `rgba(255,170,95,${a})`], [1, `rgba(255,140,60,${.0})`]]);
+  ctx.fillStyle = radial(s * 1.15, [[0, `rgba(255,255,255,${a})`], [.45, `rgba(232,242,255,${a})`], [.8, `rgba(170,205,255,${a})`], [1, "rgba(130,180,255,0)"]]);
   ctx.beginPath(); ctx.arc(x, y, s * 1.15, 0, 6.283); ctx.fill();
 }
 function ringReach() { return narrow ? 260 : 420; }
@@ -463,15 +463,16 @@ function frame(now) {
   // The leader's warm light (not over the docs' text).
   if (leader.a > .01 && scene !== "docs") {
     const g = ctx.createRadialGradient(leader.x, leader.y, 0, leader.x, leader.y, 340);
-    g.addColorStop(0, `rgba(255,140,60,${.16 * leader.a})`);
-    g.addColorStop(1, "rgba(255,140,60,0)");
+    g.addColorStop(0, `rgba(120,165,255,${.16 * leader.a})`);
+    g.addColorStop(.4, `rgba(120,165,255,${.05 * leader.a})`);
+    g.addColorStop(1, "rgba(120,165,255,0)");
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
 
   const fade = still ? 1 : Math.min(1, Math.max(0, (since - 450) / 500));
   if (form && form.lines && fade > 0) {
     ctx.setLineDash([3, 5]); ctx.lineWidth = 1;
-    ctx.strokeStyle = `rgba(255,170,110,${.32 * fade})`;
+    ctx.strokeStyle = `rgba(170,200,255,${.32 * fade})`;
     for (const [a, b, c, d] of form.lines) { ctx.beginPath(); ctx.moveTo(a, b - off); ctx.lineTo(c, d - off); ctx.stroke(); }
     ctx.setLineDash([]);
   }
@@ -539,7 +540,7 @@ function frame(now) {
         const band = Math.abs(dist - r);
         if (band < 16) { const f = (1 - band / 16) * left; warm = Math.max(warm, f); a = Math.min(1, a + f * .8); size += f * 1.1; }
       }
-      if (warm > .01) col = [d.c[0] + (255 - d.c[0]) * warm, d.c[1] + (178 - d.c[1]) * warm, d.c[2] + (110 - d.c[2]) * warm];
+      if (warm > .01) col = [d.c[0] + (225 - d.c[0]) * warm, d.c[1] + (238 - d.c[1]) * warm, d.c[2] + (255 - d.c[2]) * warm];
     }
     if (d.y < -6 || d.y > H + 6 || (hide.length && hide.some((r) => d.x > r.left && d.x < r.right && d.y > r.top && d.y < r.bottom))) continue;
     if (size > 2) glow(d.x, d.y, size, col, a);
@@ -588,11 +589,15 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-// A section's formation takes over once its text reaches the upper fifth of the screen, where you start
-// reading it, not when the section itself crosses the middle while its text is still coming in.
-// Scrolling either way gives the same answer: the last section whose text is at or above that line.
-const SCENE_LINE = .2;
-const sceneText = (s) => s.querySelector(".step-text, .install-text") || s;
+// Formations hand over halfway between two sections' texts: once the middle of the gap between them passes
+// the reading line, a little above the middle of the screen. By then the last lines of the old text are near
+// the top and the new heading is where your eye goes next. Scrolling either way gives the same answer.
+const SCENE_LINE = .42;
+// Where a section's text starts and ends (the hero's ends at its last line, not at the bottom of the screen).
+function sceneText(s) {
+  const r = (s.querySelector(".step-text, .install-text") || s).getBoundingClientRect();
+  return s.lastElementChild && !s.querySelector(".step-text, .install-text") ? { top: r.top, bottom: s.lastElementChild.getBoundingClientRect().bottom } : r;
+}
 let sceneQueued = false;
 function followScroll() {
   if (sceneQueued || !document.querySelector("[data-scene]")) return;
@@ -720,7 +725,7 @@ async function goDocs(url, push = true) {
   savedY = scrollY;
   introDone = true;
   document.body.classList.add("to-docs");
-  await Promise.all([load("link", "docs-css", { rel: "stylesheet", href: new URL("docs.css?v=9", DOCS).href }), wait(320)]);
+  await Promise.all([load("link", "docs-css", { rel: "stylesheet", href: new URL("docs.css?v=10", DOCS).href }), wait(320)]);
   const root = document.createElement("div");
   root.id = "docs-root"; root.className = "ghost";
   const parsed = new DOMParser().parseFromString(html, "text/html");
@@ -761,15 +766,17 @@ function occluders() {
   return out;
 }
 
-// The last section whose text has reached the scene line (see followScroll).
-// At the bottom of the page the last section wins, even if its text can't scroll up that far.
+// The section that owns the scene line (see followScroll): each one owns from the middle of the gap above
+// its text to the middle of the gap below. At the bottom of the page the last section wins.
 function sectionInView() {
   if (pinned) return pinned;
-  const all = document.querySelectorAll("[data-scene]");
-  if (all.length && innerHeight + scrollY >= document.documentElement.scrollHeight - 2) return all[all.length - 1].dataset.scene;
-  let last = "title";
-  for (const el of all) {
-    if (sceneText(el).getBoundingClientRect().top <= H * SCENE_LINE) last = el.dataset.scene;
+  const all = [...document.querySelectorAll("[data-scene]")];
+  if (!all.length) return "title";
+  if (innerHeight + scrollY >= document.documentElement.scrollHeight - 2) return all[all.length - 1].dataset.scene;
+  const boxes = all.map(sceneText);
+  let last = all[0].dataset.scene;
+  for (let i = 1; i < all.length; i++) {
+    if ((boxes[i - 1].bottom + boxes[i].top) / 2 <= H * SCENE_LINE) last = all[i].dataset.scene;
   }
   return last;
 }
