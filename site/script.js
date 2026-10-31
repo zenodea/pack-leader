@@ -381,14 +381,16 @@ function setScene(name, force) {
       if (p.pop && !stays) Object.assign(d, { x: p.x, y: p.y, vx: 0, vy: 0, a: 0, c: p.c.slice() });
       // A wave out from the leader's new place: the nearest dots set off first, and each glides in.
       else if (glide) {
-        const far = Math.hypot(p.x - form.leader.x, p.y - form.leader.y) / Math.hypot(W, H);
-        d.fly = { x: d.x, y: d.y, at: sceneAt + far * FLY_WAVE };
+        // A docs page change starts at once and at full speed, easing only as it lands.
+        const far = again ? 0 : Math.hypot(p.x - form.leader.x, p.y - form.leader.y) / Math.hypot(W, H);
+        d.fly = { x: d.x, y: d.y, at: sceneAt + far * FLY_WAVE, out: again };
       }
     } else {
       if (!again) Object.assign(d, { hx: Math.random() * W, hy: Math.random() * H });
       Object.assign(d, { free: true, key: null, tc: C.dim, ts: 1, ta: form.hideRest ? 0 : .16, jit: 0, pulse: false, delay: 0, orbit: null, anchor: false });
     }
-    if (!glide || !p || p.pop) d.fly = null;
+    // A docs refresh (the page list scrolled, a resize) lets a glide in progress finish on the new place.
+    if (!p || (p.pop && !stays) || (!glide && !again)) d.fly = null;
     if (still) { d.x = d.tx; d.y = d.ty; }
   });
   leader.tx = form.leader.x; leader.ty = form.leader.y; leader.ts = form.leader.s; leader.ta = 1;
@@ -557,7 +559,7 @@ function frame(now) {
     if (d.jit && !still) { tx += Math.sin(now * .011 + d.ph * 9) * d.jit; ty += Math.cos(now * .013 + d.ph * 7) * d.jit; }
     const shown = since >= d.delay;
     if (d.fly) {
-      const u = Math.min(1, Math.max(0, (now - d.fly.at) / FLY_TIME)), e = ease(u);
+      const u = Math.min(1, Math.max(0, (now - d.fly.at) / FLY_TIME)), e = d.fly.out ? 1 - (1 - u) ** 3 : ease(u);
       d.x = d.fly.x + (tx - d.fly.x) * e; d.y = d.fly.y + (ty - d.fly.y) * e; d.vx = d.vy = 0;
       if (u >= 1) d.fly = null;
     } else if (!still) {
