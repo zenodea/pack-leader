@@ -1,4 +1,4 @@
-<img src="site/assets/og.png" alt="The word LODESTAR spelled in small white dots, with a blue-white North Star as its full stop. Under it: Lodestar lets one coding agent run a team of others.">
+<img src="site/assets/readme.png" alt="The word LODESTAR spelled in small white dots, with a blue-white North Star as its full stop. Under it: Lodestar lets one coding agent run a team of others.">
 
 # Lodestar
 
