@@ -15,7 +15,8 @@
   closes with the sidebar. `lodestar usage --watch` shows the same anywhere; `lodestar
   usage` prints it as JSON.
 - The **settings page** moves with vim keys: `j`/`k`, `g`/`G`, and `h`/`l` to step a value
-  without opening its list. On/off settings show as a dot, the page keeps a margin, and
+  without opening its list. In a list, `ctrl-j`/`ctrl-k` move, `ctrl-l` picks and `ctrl-h`
+  backs out; `ctrl-j` used to pick, since terminals send it as a newline. On/off settings show as a dot, the page keeps a margin, and
   long pages scroll. New rows: **Routing** (model routing's provider) and **Usage pane**
   (`config set --usage-pane on|off`).
 - **Rex** works as a multiplexer next to herdr and tmux: inside a Rex terminal Lodestar

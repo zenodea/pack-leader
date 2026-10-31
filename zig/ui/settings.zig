@@ -190,7 +190,7 @@ fn cModel(c: Config, ask: Ask) anyerror!void {
     var items: std.ArrayListUnmanaged(PickItem) = .empty;
     try items.append(rt.a, HARNESS_DEFAULT);
     try items.appendSlice(rt.a, modelsFor(kindOf(c)));
-    const v = try ask(.{ .title = rt.concat(&.{ "Model for ", kindOf(c) }), .items = items.items, .current = kindDefaults(c).str("model") orelse "", .allowCustom = true, .hint = "type to search · enter picks, or takes what you typed · esc cancels" });
+    const v = try ask(.{ .title = rt.concat(&.{ "Model for ", kindOf(c) }), .items = items.items, .current = kindDefaults(c).str("model") orelse "", .allowCustom = true, .hint = "type to search · ^j/^k move · enter picks, or takes what you typed · ^h or esc cancels" });
     if (v) |x| setKindDefault(c, "model", if (x.len > 0) x else null);
 }
 
@@ -254,7 +254,7 @@ fn vStall(c: Config) []const u8 {
 fn cStall(c: Config, ask: Ask) anyerror!void {
     var items: std.ArrayListUnmanaged(PickItem) = .empty;
     for ([_]i64{ 10, 20, 30, 60, 0 }) |n| try items.append(rt.a, .{ .value = rt.fmt("{d}", .{n}), .label = minutes(n) });
-    const v = try ask(.{ .title = "Stall alert after", .items = items.items, .current = rt.fmt("{d}", .{sStall(c)}), .allowCustom = true, .hint = "type minutes and press enter · esc cancels" });
+    const v = try ask(.{ .title = "Stall alert after", .items = items.items, .current = rt.fmt("{d}", .{sStall(c)}), .allowCustom = true, .hint = "^j/^k move · or type minutes and press enter · ^h or esc cancels" });
     if (v) |x| c.putInt("stall_minutes", try parseMinutes(x));
 }
 
@@ -281,7 +281,7 @@ fn vHandoffAt(c: Config) []const u8 {
 fn cHandoffAt(c: Config, ask: Ask) anyerror!void {
     var items: std.ArrayListUnmanaged(PickItem) = .empty;
     for ([_]i64{ 100, 150, 200, 300, 400, 600 }) |k| try items.append(rt.a, .{ .value = rt.fmt("{d}k", .{k}), .label = rt.fmt("{d}k tokens", .{k}) });
-    const v = try ask(.{ .title = "Hand off once the leader's context passes", .items = items.items, .current = config.formatTokens(atTokens(c)), .allowCustom = true, .hint = "type a size like 250k and press enter · esc cancels" });
+    const v = try ask(.{ .title = "Hand off once the leader's context passes", .items = items.items, .current = config.formatTokens(atTokens(c)), .allowCustom = true, .hint = "^j/^k move · or type a size like 250k and press enter · ^h or esc cancels" });
     if (v) |x| handoffWith(c, "at_tokens", json.i(try config.parseTokens(x)));
 }
 
@@ -524,7 +524,18 @@ pub fn runSettings() !Config {
             const name = key.name orelse "";
             if ((key.ctrl and rt.eql(name, "c")) or rt.eql(name, "escape") or isKey(key, "q")) return c;
             var ask: ?Ask = null;
-            if (rt.eql(name, "up") or isKey(key, "k") or (key.ctrl and rt.eql(name, "p"))) {
+            const chord = term.ctrlOf(key);
+            if (chord == 'k') {
+                sel = (sel + n - 1) % n;
+            } else if (chord == 'j') {
+                sel = (sel + 1) % n;
+            } else if (chord == 'l') {
+                cycle_by = 1;
+                ask = askCycle;
+            } else if (chord == 'h') {
+                cycle_by = -1;
+                ask = askCycle;
+            } else if (rt.eql(name, "up") or isKey(key, "k") or (key.ctrl and rt.eql(name, "p"))) {
                 sel = (sel + n - 1) % n;
             } else if (rt.eql(name, "down") or isKey(key, "j") or (key.ctrl and rt.eql(name, "n"))) {
                 sel = (sel + 1) % n;

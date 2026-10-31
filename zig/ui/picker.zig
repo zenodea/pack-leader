@@ -88,7 +88,7 @@ fn draw(o: PickOptions, query: []const u8, sel: usize, visible: []const PickItem
         lines.append(rt.a, if (index == sel) rt.concat(&.{ ansi.fg.cyan("❯"), " ", ansi.fg.cyan(text) }) else rt.concat(&.{ "  ", text })) catch {};
     }
     if (visible.len == 0) lines.append(rt.a, ansi.dim(if (o.allowCustom) rt.fmt("  no match, enter uses \"{s}\"", .{query}) else "  no match")) catch {};
-    const hint = o.hint orelse "type to search · ctrl-j/k move · enter picks · esc cancels";
+    const hint = o.hint orelse "type to search · ^j/^k move · ^l or enter picks · ^h or esc cancels";
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     buf.appendSlice(rt.a, ansi.screen.home) catch {};
     for (0..rows) |r| {
@@ -133,6 +133,22 @@ pub fn pick(o: PickOptions) !?[]const u8 {
         for (keys) |key| {
             const name = key.name orelse "";
             if (key.ctrl and rt.eql(name, "c")) return null;
+            // ctrl-j/k move, ctrl-l picks, ctrl-h backs out (ctrl-n/p move too).
+            if (term.ctrlOf(key)) |c| switch (c) {
+                'j', 'n' => {
+                    sel = step(sel, 1, visible.len);
+                    draw(o, query, sel, visible);
+                    continue;
+                },
+                'k', 'p' => {
+                    sel = step(sel, -1, visible.len);
+                    draw(o, query, sel, visible);
+                    continue;
+                },
+                'l' => if (sel < visible.len) return visible[sel].value,
+                'h' => return null,
+                else => {},
+            };
             if (rt.eql(name, "escape")) return null;
             if (rt.eql(name, "return") or rt.eql(name, "enter")) {
                 if (sel < visible.len) return visible[sel].value;
@@ -147,10 +163,6 @@ pub fn pick(o: PickOptions) !?[]const u8 {
                 query = sliceUnits(query, true);
                 visible = fuzzyFilter(query, o.items);
                 sel = 0;
-            } else if (key.ctrl and (rt.eql(name, "k") or rt.eql(name, "p"))) {
-                sel = step(sel, -1, visible.len);
-            } else if (key.ctrl and (rt.eql(name, "j") or rt.eql(name, "n"))) {
-                sel = step(sel, 1, visible.len);
             } else if (key.ctrl and rt.eql(name, "u")) {
                 query = "";
                 visible = fuzzyFilter(query, o.items);

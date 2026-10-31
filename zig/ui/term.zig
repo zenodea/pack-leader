@@ -80,6 +80,14 @@ pub const Key = struct {
     sequence: []const u8 = "",
 };
 
+/// The letter of a ctrl chord, ctrl-h and ctrl-j included: they arrive as the backspace and newline bytes.
+pub fn ctrlOf(key: Key) ?u8 {
+    if (rt.eql(key.sequence, "\x08")) return 'h';
+    if (rt.eql(key.sequence, "\n")) return 'j';
+    if (key.ctrl) if (key.name) |n| if (n.len == 1) return n[0];
+    return null;
+}
+
 const letters = "abcdefghijklmnopqrstuvwxyz";
 
 fn letterName(ch: u8) []const u8 {

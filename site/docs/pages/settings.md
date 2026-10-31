@@ -29,13 +29,13 @@ Keys:
 
 | Key | Does |
 | --- | --- |
-| `j` / `k` (or ↓ / ↑) | Move down or up |
+| `j` / `k` (or ↓ / ↑, `ctrl-j` / `ctrl-k`) | Move down or up |
 | `g` / `G` | First or last setting |
-| `l` / `h` (or → / ←) | Step the value on or back; flips an on/off setting |
+| `l` / `h` (or → / ←, `ctrl-l` / `ctrl-h`) | Step the value on or back; flips an on/off setting |
 | Enter or Space | Open the full list of values, where you can type to search; flips an on/off setting |
 | `q` or Esc | Close |
 
-In a list, `ctrl-j` / `ctrl-k` (or `ctrl-n` / `ctrl-p`, or the arrows) move, since letters search.
+In a list, letters search, so the keys take ctrl: `ctrl-j` / `ctrl-k` move (as do `ctrl-n` / `ctrl-p` and the arrows), `ctrl-l` picks and `ctrl-h` backs out.
 
 The page only lists what the multiplexer you're in can do. Popup and the "no tabs" placement show under Rex and stay hidden under herdr and tmux.
 
