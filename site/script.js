@@ -822,9 +822,9 @@ addEventListener("popstate", () => {
   else if (!there && inDocs) goHome(false);
 });
 // Fetch the docs early, so the transition doesn't wait on the network.
-const prefetch = () => { loadShell().catch(() => {}); if (landing) loadScripts().then(() => window.packDocs.prefetch("introduction")).catch(() => {}); };
-document.addEventListener("pointerover", (e) => { if (e.target.closest?.('a[href^="docs/"]')) prefetch(); }, { passive: true });
-setTimeout(prefetch, 4000);
+const warmDocs = () => { loadShell().catch(() => {}); if (landing) loadScripts().then(() => window.packDocs.prefetch("introduction")).catch(() => {}); };
+document.addEventListener("pointerover", (e) => { if (e.target.closest?.('a[href^="docs/"]')) warmDocs(); }, { passive: true });
+setTimeout(warmDocs, 4000);
 
 // Copy buttons.
 const status = document.querySelector(".copy-status");
