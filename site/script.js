@@ -373,9 +373,8 @@ function setScene(name, force) {
     order.push(...src.slice(plan.length));
   }
   order.forEach((di, i) => {
-    const d = dots[di], p = plan[i];
+    const d = dots[di], p = plan[i], stays = !!(p && kept && kept.has(p));
     if (p) {
-      const stays = kept && kept.has(p);
       Object.assign(d, { free: false, tx: p.x, ty: p.y, tc: p.c, ts: p.s, ta: p.a ?? (form.faint ? .45 : .95), jit: p.jit || 0, pulse: !!p.pulse, delay: stays ? 0 : p.delay || 0, orbit: p.orbit || null, anchor: !!(form.doc || p.anchor), key: p.key || null });
       // A dot that only shows once something has loaded starts out there, unseen, and fades in.
       if (p.pop && !stays) Object.assign(d, { x: p.x, y: p.y, vx: 0, vy: 0, a: 0, c: p.c.slice() });
