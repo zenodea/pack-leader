@@ -1,5 +1,5 @@
 //! The usage box (the pane below the crew): how much of each plan limit is used and whether it lasts until the
-//! reset, then each agent's spend with its last 24 hours as a sparkline.
+//! reset, then each agent's spend.
 
 const std = @import("std");
 const rt = @import("../rt.zig");
@@ -110,39 +110,17 @@ fn priced(a: *Obj) bool {
     return (a.int("tokens_7d") orelse 0) > (a.int("unpriced_7d") orelse 0);
 }
 
-const SPARK = [_][]const u8{ "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" };
-
-/// The last 24 hours of tokens, `w` cells (24 or 12) wide, scaled to the agent's own busiest hour.
-fn spark(a: *Obj, w: usize, accent: Paint) []const u8 {
-    const hours = (a.arr("tokens_hourly") orelse return "").slice();
-    if (hours.len != 24 or w == 0) return "";
-    const per = 24 / w;
-    var sums: [24]i64 = @splat(0);
-    var max: i64 = 0;
-    for (hours, 0..) |h, i| {
-        sums[i / per] += h.asInt() orelse 0;
-        max = @max(max, sums[i / per]);
-    }
-    var out: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (sums[0..w]) |v| {
-        const level: usize = if (v == 0) 0 else @intFromFloat(@ceil(@as(f64, @floatFromInt(v)) / @as(f64, @floatFromInt(max)) * 7));
-        out.append(rt.a, if (v == 0) dim(SPARK[0]) else accent.apply(SPARK[@min(7, @max(1, level))])) catch {};
-    }
-    return rt.concat(out.items);
-}
-
 const NAME_W: usize = 8;
 const LABEL_W: usize = 9;
 const CELL_W: usize = 11;
 
-/// What a shorter pane gives up, in order: the hint, the top margin and reset lines, then the gaps and the total.
-pub const Room = struct { top: bool = true, gaps: bool = true, detail: bool = true, total: bool = true, hint: bool = true };
+/// What a shorter pane gives up, in order: the top margin and reset lines, then the gaps and the total.
+pub const Room = struct { top: bool = true, gaps: bool = true, detail: bool = true, total: bool = true };
 
 const ROOMS = [_]Room{
     .{},
-    .{ .hint = false },
-    .{ .hint = false, .top = false, .detail = false },
-    .{ .hint = false, .top = false, .detail = false, .gaps = false, .total = false },
+    .{ .top = false, .detail = false },
+    .{ .top = false, .detail = false, .gaps = false, .total = false },
 };
 
 /// The roomiest layout that fits, else one line per agent.
@@ -194,12 +172,9 @@ pub fn lines(s: ?*Obj, cols_: i64, now: i64, accent: Paint, room: Room) []const 
         return out.list.items;
     }
     var limits = false;
-    var unset = false;
     for (agents) |a| {
         const name = a.str("agent") orelse "?";
-        const windows = windowsOf(a);
-        if (rt.eql(name, "claude") and windows.len == 0) unset = true;
-        for (windows, 0..) |win, i| {
+        for (windowsOf(a), 0..) |win, i| {
             if (!limits and room.gaps) out.blank();
             limits = true;
             out.add(windowLine(if (i == 0) name else "", win, out.w, now, accent, !room.detail));
@@ -213,11 +188,7 @@ pub fn lines(s: ?*Obj, cols_: i64, now: i64, accent: Paint, room: Room) []const 
     }
     if (agents.len > 0) {
         if (room.gaps) out.blank();
-        spendTable(&out, agents, accent, room.total);
-    }
-    if (room.hint and unset) {
-        out.blank();
-        out.add(dim("claude's plan limits: lodestar usage --help"));
+        spendTable(&out, agents, room.total);
     }
     return out.list.items;
 }
@@ -234,15 +205,13 @@ fn windowLine(name: []const u8, win: *Obj, w: usize, now: i64, accent: Paint, wi
     return rt.concat(&.{ bold(ansi.pad(name, NAME_W)), dim(label), bar(pct, bw, mark, accent), paint(pct, right(rt.fmt("{d:.0}%", .{pct}), 5), accent), dim(reset) });
 }
 
-/// Spend over 24 hours and 7 days (tokens where there is no price), the last day hour by hour, and a total.
 fn cash(d: f64) []const u8 {
     return if (d < 0.005) dim("$0") else money(d);
 }
 
-fn spendTable(out: *Lines, agents: []const *Obj, accent: Paint, total: bool) void {
-    const cells = NAME_W + 2 * CELL_W + 2;
-    const sw: usize = if (out.w >= cells + 24) 24 else if (out.w >= cells + 12) 12 else 0;
-    out.add(dim(rt.concat(&.{ ansi.repeat(" ", NAME_W), right("24h", CELL_W), right("7d", CELL_W), if (sw > 0) "  trend" else "" })));
+/// Spend over 24 hours and 7 days (tokens where there is no price), and a total.
+fn spendTable(out: *Lines, agents: []const *Obj, total: bool) void {
+    out.add(dim(rt.concat(&.{ ansi.repeat(" ", NAME_W), right("24h", CELL_W), right("7d", CELL_W) })));
     var c24: f64 = 0;
     var c7: f64 = 0;
     for (agents) |a| {
@@ -253,7 +222,7 @@ fn spendTable(out: *Lines, agents: []const *Obj, accent: Paint, total: bool) voi
         }
         const day = if (ok) cash(a.num("cost_24h") orelse 0) else rt.concat(&.{ count(a.int("tokens_24h") orelse 0), dim(" tok") });
         const week = if (ok) cash(a.num("cost_7d") orelse 0) else rt.concat(&.{ count(a.int("tokens_7d") orelse 0), dim(" tok") });
-        out.add(rt.concat(&.{ bold(ansi.pad(a.str("agent") orelse "?", NAME_W)), right(day, CELL_W), right(week, CELL_W), if (sw > 0) "  " else "", spark(a, sw, accent) }));
+        out.add(rt.concat(&.{ bold(ansi.pad(a.str("agent") orelse "?", NAME_W)), right(day, CELL_W), right(week, CELL_W) }));
     }
     if (total and agents.len > 1) out.add(rt.concat(&.{ dim(ansi.pad("all", NAME_W)), right(money(c24), CELL_W), right(money(c7), CELL_W) }));
 }
@@ -284,7 +253,7 @@ test "lines puts limits with a pace warning above spend, and fit gives up room a
     rt.initForTest(arena.allocator(), &map);
     const now: i64 = 1_800_000_000_000;
     const s = (try json.parse(
-        \\{"updated_at":1799999880000,"agents":[{"agent":"claude","cost_24h":12.4,"cost_7d":81,"tokens_24h":5,"tokens_7d":10,"unpriced_7d":0,"tokens_hourly":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,4],"windows":[{"minutes":300,"used_pct":62,"resets_at":1800004320000}]},{"agent":"codex","cost_24h":0,"cost_7d":0,"tokens_24h":2100000,"tokens_7d":9000000,"unpriced_7d":9000000,"windows":[]}]}
+        \\{"updated_at":1799999880000,"agents":[{"agent":"claude","cost_24h":12.4,"cost_7d":81,"tokens_24h":5,"tokens_7d":10,"unpriced_7d":0,"windows":[{"minutes":300,"used_pct":62,"resets_at":1800004320000}]},{"agent":"codex","cost_24h":0,"cost_7d":0,"tokens_24h":2100000,"tokens_7d":9000000,"unpriced_7d":9000000,"windows":[]}]}
     )).asObj().?;
     const plain = Paint{};
     const l = lines(s, 48, now, plain, .{});
@@ -293,9 +262,9 @@ test "lines puts limits with a pace warning above spend, and fit gives up room a
     // 1h12 left of 5 hours: 76% of the way through and 62% used lasts, so no warning.
     try testing.expectEqualStrings("  claude  5 hours  ━━━━━━━━━━━━━━──┼─────  62%", ansi.stripSgr(l[3]));
     try testing.expectEqualStrings("          resets in 1h12", ansi.stripSgr(l[4]));
-    try testing.expectEqualStrings("                  24h         7d  trend", ansi.stripSgr(l[6]));
-    try testing.expectEqualStrings("  claude          $12        $81  ▁▁▁▁▁▁▁▁▁▁▁█", ansi.stripSgr(l[7]));
-    try testing.expectEqualStrings("  codex      2.1M tok   9.0M tok  ", ansi.stripSgr(l[8]));
+    try testing.expectEqualStrings("                  24h         7d", ansi.stripSgr(l[6]));
+    try testing.expectEqualStrings("  claude          $12        $81", ansi.stripSgr(l[7]));
+    try testing.expectEqualStrings("  codex      2.1M tok   9.0M tok", ansi.stripSgr(l[8]));
     try testing.expectEqual(@as(usize, 10), l.len);
     const tight = fit(s, 48, 7, now, plain);
     try testing.expectEqualStrings("  claude  5 hours  ━━━━━━━━━──┼───  62%  ↻1h12", ansi.stripSgr(tight[1]));

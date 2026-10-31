@@ -229,8 +229,7 @@ fn liveWindows(limits: *Obj, now: i64) *json.Arr {
     return out;
 }
 
-/// `{ updated_at, agents: [{ agent, cost_24h, cost_7d, tokens_24h, tokens_7d, unpriced_7d, tokens_hourly, plan?, limits_at?,
-/// windows }] }`; `tokens_hourly` is the last 24 hours, oldest first.
+/// `{ updated_at, agents: [{ agent, cost_24h, cost_7d, tokens_24h, tokens_7d, unpriced_7d, plan?, limits_at?, windows }] }`
 pub fn summarize(root: *Obj, now: i64) *Obj {
     const agents = json.newArr();
     const hours = root.obj("hours");
@@ -241,7 +240,6 @@ pub fn summarize(root: *Obj, now: i64) *Obj {
         var tokens_24h: i64 = 0;
         var tokens_7d: i64 = 0;
         var unpriced: i64 = 0;
-        var hourly: [24]i64 = @splat(0);
         if (hours) |hs| if (hs.obj(r.agent)) |h| for (h.keys()) |k| {
             const at = std.fmt.parseInt(i64, k, 10) catch continue;
             const xs = (h.arr(k) orelse continue).slice();
@@ -254,7 +252,6 @@ pub fn summarize(root: *Obj, now: i64) *Obj {
             if (at >= now - DAY) {
                 cost_24h += d;
                 tokens_24h += t;
-                hourly[@intCast(@min(23, @divFloor(at - (now - DAY), HOUR)))] += t;
             }
         };
         var limits: ?*Obj = if (cached_limits) |l| l.obj(r.agent) else null;
@@ -270,9 +267,6 @@ pub fn summarize(root: *Obj, now: i64) *Obj {
             .{ "tokens_7d", tokens_7d },
             .{ "unpriced_7d", unpriced },
         });
-        const by_hour = json.newArr();
-        for (hourly) |t| by_hour.push(.{ .int = t });
-        a.put("tokens_hourly", by_hour.val());
         if (limits) |l| {
             a.putStrIf("plan", l.str("plan"));
             if (l.int("at")) |at| a.putInt("limits_at", at);
