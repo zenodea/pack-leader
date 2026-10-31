@@ -137,7 +137,7 @@ const FORMS = {
     const S = stage(), names = ["parser", "validator", "tests", "docs"];
     const r = Math.min(S.w / 10, 50), m = narrow ? 50 : 90;
     const lx = S.x + S.w / 2, ly = S.y + S.h * .12;
-    const pts = [], lines = [], labels = [{ x: lx, y: ly - 34, text: "leader", color: C.leader }];
+    const pts = [], lines = [], labels = [{ x: lx + 24, y: ly - 24, text: "leader", color: C.leader, align: "left" }];
     names.forEach((name, i) => {
       const cx = S.x + S.w * (i + .5) / names.length, cy = S.y + S.h * .64;
       pts.push(...disc(cx, cy, m, r, { c: TINTS[i], s: 1.6 }));
@@ -181,7 +181,7 @@ const FORMS = {
       { name: "validator", state: "working", c: C.work, jit: 2.2 },
       { name: "tests", state: "asking", c: C.ask, pulse: true, note: "reject or skip?" },
     ];
-    const pts = [], lines = [], labels = [{ x: lx, y: ly - 34, text: "leader", color: C.leader }];
+    const pts = [], lines = [], labels = [{ x: lx + 24, y: ly - 24, text: "leader", color: C.leader, align: "left" }];
     const centres = kinds.map((k, i) => {
       const cx = S.x + S.w * (i + .5) / 3, cy = S.y + S.h * .66;
       pts.push(...disc(cx, cy, m, r, { c: k.c, s: 1.6, jit: k.jit || 0, pulse: !!k.pulse }));
@@ -271,7 +271,7 @@ const FORMS = {
     const labels = [
       { x: you.x, y: you.y + 30, text: "you" },
       { x: adv.x, y: adv.y + 38, text: "navigator", color: C.violet },
-      { x: lx, y: ly - 32, text: "leader", color: C.leader },
+      { x: lx + 24, y: ly - 24, text: "leader", color: C.leader, align: "left" },
       { x: (adv.x + lx) / 2, y: cy + 18, text: "reads", dim: true },
     ];
     const lines = [[you.x + 12, you.y, adv.x - 20, adv.y], [adv.x + 20, adv.y, lx - 16, ly]];
@@ -292,16 +292,21 @@ const FORMS = {
     };
   },
 
-  // The crew at rest: slow orbits around the leader.
+  // The crew at rest: star trails, the long-exposure photo of the sky turning around the North Star.
+  // Each trail is a crewmate, bright at its head and fading behind it, and they all turn together.
   rest() {
-    const S = stage(), cx = S.x + S.w / 2, cy = S.y + S.h / 2, R = Math.min(S.w, S.h) / 2;
-    const rings = [[.28, .14], [.5, .22], [.74, .3], [.96, .34]];
-    const pts = [];
-    const n = Math.floor(dots.length * .8);
-    rings.forEach(([rr, share], ri) => {
-      const m = Math.floor(n * share);
-      for (let k = 0; k < m; k++) pts.push({ orbit: [cx, cy, R * rr, k / m * 6.283, (ri % 2 ? -1 : 1) * (.00006 + .00003 * ri)], c: ri === 0 ? C.leader : C.agent, s: ri === 0 ? 1.3 : 1.2, x: cx, y: cy });
-    });
+    const S = stage(), cx = S.x + S.w / 2, cy = S.y + S.h / 2, R = Math.min(S.w, S.h) * .52;
+    const tints = [C.agent, C.agent, C.agent, C.work, C.violet, C.teal, C.ask];
+    const pts = [], n = Math.floor(dots.length * .8);
+    while (pts.length < n) {
+      const r = R * (.1 + .9 * Math.sqrt(Math.random())), span = .35 + Math.random() * 1.1;
+      const m = Math.max(4, Math.floor(span * r / 4.5)), head = Math.random() * 6.283;
+      const c = tints[Math.floor(Math.random() * tints.length)];
+      for (let k = 0; k < m && pts.length < n; k++) {
+        const u = k / m; // 0 at the head
+        pts.push({ orbit: [cx, cy, r, head + span * u, -.00007, 1], c, s: u < .05 ? 1.6 : 1.1, a: (.95 * (1 - u) ** 1.6 + .05) * (narrow ? .5 : 1), x: cx, y: cy });
+      }
+    }
     return { pts, leader: { x: cx, y: cy, s: 11 }, faint: narrow };
   },
 };
@@ -355,6 +360,9 @@ function setScene(name, force) {
   if (still) { leader.x = leader.tx; leader.y = leader.ty - (form.doc ? scrollY : 0); }
 }
 
+// How fast the sky turns around the North Star, in radians per millisecond (about half a degree a second).
+const SKY_TURN = .0000095;
+
 // The leader calls the crew: a ring of light goes out, and the dots it passes flare.
 const RING_LIFE = 1800;
 function call(at) { leader.rings.push(at); leader.lastRing = at; }
@@ -390,28 +398,30 @@ function drawLeader(now) {
   ctx.fillStyle = radial(s * 18, [[0, `rgba(255,120,40,${.2 * a})`], [.35, `rgba(255,100,30,${.06 * a})`], [1, "rgba(255,90,20,0)"]]);
   ctx.beginPath(); ctx.arc(x, y, s * 18, 0, 6.283); ctx.fill();
 
-  // A soft horizontal lens streak.
-  ctx.save();
-  ctx.translate(x, y); ctx.scale(1, .07);
-  const streak = ctx.createRadialGradient(0, 0, 0, 0, 0, s * 7);
-  streak.addColorStop(0, `rgba(255,200,150,${.42 * a})`);
-  streak.addColorStop(1, "rgba(255,160,90,0)");
-  ctx.fillStyle = streak; ctx.beginPath(); ctx.arc(0, 0, s * 7, 0, 6.283); ctx.fill();
-  ctx.restore();
-
-  // Two slow-turning spikes.
-  for (let i = 0; i < 2; i++) {
-    const ang = t * .00012 * (i ? -1 : 1) + i * 1.1, len = s * (3.6 + .6 * leader.idle * Math.sin(t * .0017 + i));
-    const dx = Math.cos(ang) * len, dy = Math.sin(ang) * len;
-    const g = ctx.createLinearGradient(x - dx, y - dy, x + dx, y + dy);
-    g.addColorStop(0, "rgba(255,170,100,0)"); g.addColorStop(.5, `rgba(255,190,130,${.32 * a})`); g.addColorStop(1, "rgba(255,170,100,0)");
-    ctx.strokeStyle = g; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x - dx, y - dy); ctx.lineTo(x + dx, y + dy); ctx.stroke();
+  // The North Star's rays: four long ones on the compass points, north the longest, and four short
+  // ones between them. They breathe a little, the way a star twinkles.
+  const ray = (ang, len, w, alpha) => {
+    const dx = Math.cos(ang), dy = Math.sin(ang);
+    const g = ctx.createLinearGradient(x, y, x + dx * len, y + dy * len);
+    g.addColorStop(0, `rgba(255,236,205,${alpha * a})`); g.addColorStop(.35, `rgba(255,190,130,${alpha * .55 * a})`); g.addColorStop(1, "rgba(255,160,90,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(x - dy * w, y + dx * w);
+    ctx.lineTo(x + dx * len, y + dy * len);
+    ctx.lineTo(x + dy * w, y - dx * w);
+    ctx.closePath(); ctx.fill();
+  };
+  // A small star (the docs' logo) keeps short rays, so they don't run into the text beside it.
+  const reach = Math.min(1, Math.max(.3, (s - 3) / 5));
+  for (let i = 0; i < 8; i++) {
+    const long = i % 2 === 0, tw = 1 + .12 * Math.sin(t * .0021 + i * 1.7) * (.4 + .6 * leader.idle);
+    const len = s * (long ? (i === 6 ? 8.5 : 6.2) * reach : 2.8) * tw;
+    ray(i * Math.PI / 4, len, s * (long ? .34 : .22), long ? .9 : .55);
   }
 
   // The corona: a wobbling edge, so it never sits still like a picture.
   for (let layer = 0; layer < 2; layer++) {
-    const base = s * (layer ? 3.1 : 2.2), sp = layer ? -.0011 : .0016;
+    const base = s * (layer ? 2.4 : 1.7), sp = layer ? -.0011 : .0016;
     ctx.beginPath();
     for (let i = 0; i <= 48; i++) {
       const ang = i / 48 * 6.283;
@@ -488,11 +498,20 @@ function frame(now) {
     }
     let tx = d.tx, ty = d.ty - (d.anchor ? scrollY : 0);
     if (d.free) {
-      tx = d.hx + Math.sin(now * .00023 + d.ph) * 60;
-      ty = d.hy + Math.cos(now * .00019 + d.ph * 1.3) * 60;
+      // The sky turns around the North Star, counterclockwise, as it does over the pole. A star the turn
+      // carries off the screen comes back somewhere on it, fading in.
+      const px = leader.tx, py = leader.ty - off, ang = -SKY_TURN * (still ? 0 : since), cos = Math.cos(ang), sin = Math.sin(ang);
+      tx = px + (d.hx - px) * cos - (d.hy - py) * sin;
+      ty = py + (d.hx - px) * sin + (d.hy - py) * cos;
+      if (tx < -30 || tx > W + 30 || ty < -30 || ty > H + 30) {
+        tx = Math.random() * W; ty = Math.random() * H;
+        d.hx = px + (tx - px) * cos + (ty - py) * sin;
+        d.hy = py - (tx - px) * sin + (ty - py) * cos;
+        Object.assign(d, { x: tx, y: ty, vx: 0, vy: 0, a: 0 });
+      }
     } else if (d.orbit) {
-      const [cx, cy, r, a0, sp] = d.orbit, a = a0 + now * sp * (still ? 0 : 1);
-      tx = cx + Math.cos(a) * r; ty = cy + Math.sin(a) * r * .62;
+      const [cx, cy, r, a0, sp, squash = .62] = d.orbit, a = a0 + now * sp * (still ? 0 : 1);
+      tx = cx + Math.cos(a) * r; ty = cy + Math.sin(a) * r * squash;
     }
     if (d.jit && !still) { tx += Math.sin(now * .011 + d.ph * 9) * d.jit; ty += Math.cos(now * .013 + d.ph * 7) * d.jit; }
     const shown = since >= d.delay;
@@ -509,6 +528,7 @@ function frame(now) {
     d.s += (d.ts - d.s) * .08;
     let a = d.a;
     if (d.pulse && !still) a *= .55 + .45 * Math.sin(now * .005 + d.ph * .3);
+    if (d.free && !still) a *= .7 + .3 * Math.sin(now * .0023 + d.ph * 7);
     if (a < .01) continue;
     // Warm light from the leader on the dots close to it, and a flare where a ring passes.
     let col = d.c, size = d.s;
@@ -638,7 +658,7 @@ const loadShell = () => (shell ||= fetch(DOCS).then((r) => { if (!r.ok) throw ne
 // The renderer and the docs' script: neither does anything on the landing until mounted.
 let scripts = null;
 const loadScripts = () => (scripts ||= load("script", "marked-js", { src: "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" })
-  .then(() => window.packDocs || load("script", "docs-js", { src: new URL("docs.js?v=6", DOCS).href })));
+  .then(() => window.packDocs || load("script", "docs-js", { src: new URL("docs.js?v=7", DOCS).href })));
 const REVEAL = 450;
 
 function load(tag, id, attrs) {
@@ -700,7 +720,7 @@ async function goDocs(url, push = true) {
   savedY = scrollY;
   introDone = true;
   document.body.classList.add("to-docs");
-  await Promise.all([load("link", "docs-css", { rel: "stylesheet", href: new URL("docs.css?v=8", DOCS).href }), wait(320)]);
+  await Promise.all([load("link", "docs-css", { rel: "stylesheet", href: new URL("docs.css?v=9", DOCS).href }), wait(320)]);
   const root = document.createElement("div");
   root.id = "docs-root"; root.className = "ghost";
   const parsed = new DOMParser().parseFromString(html, "text/html");
