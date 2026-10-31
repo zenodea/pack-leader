@@ -2,15 +2,15 @@
 
 ## Unreleased: usage pane and Rex
 
-- A **Usage** pane below the sidebar shows how much of each plan limit is used, with a
-  cross on the bar for how far through the window the clock is, when it resets, and a
-  warning ("runs out in ~23h") when the rate so far would use it up before then. Below
-  that, what each agent (Claude Code, Codex, pi) spent over the last day and week, and a
-  total row. Claude Code's plan limits come from the same server as its `/usage` screen,
-  using Claude Code's own login, so they show without any setup. It keeps a margin and gaps when there
-  is room and gives them up when the pane is short. The sidebar opens it and it closes
-  with the sidebar. `lodestar usage --watch` shows the same anywhere; `lodestar usage`
-  prints it as JSON.
+- A **Usage** pane below the sidebar shows each plan limit on one line: the window and
+  how long until it resets (`5h/3h32`), a bar, and the share used. The bar turns yellow
+  when the rate so far would use the limit up before the reset. Below that, what each
+  agent (Claude Code, Codex, pi) spent over the last day and week, and a total row.
+  Claude Code's plan limits come from the same server as its `/usage` screen, using
+  Claude Code's own login, so they show without any setup. The pane keeps a margin and
+  gaps when there is room and gives them up when it is short. The sidebar opens it and it
+  closes with the sidebar. `lodestar usage --watch` shows the same anywhere; `lodestar
+  usage` prints it as JSON.
 - **Rex** works as a multiplexer next to herdr and tmux: inside a Rex terminal Lodestar
   uses Rex (or set `LODESTAR_MUX=rex`). The skill now accepts herdr, tmux or Rex.
 - On Rex, agent status comes from Rex itself: Claude Code, Codex and fx report it to Rex,
