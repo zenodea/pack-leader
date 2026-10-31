@@ -568,11 +568,31 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-// Which section is in the middle of the screen decides the formation.
-const watcher = new IntersectionObserver((entries) => {
-  for (const e of entries) if (e.isIntersecting) setScene(e.target.dataset.scene);
-}, { rootMargin: "-50% 0px -50% 0px" });
-document.querySelectorAll("[data-scene]").forEach((s) => watcher.observe(s));
+// A section's formation takes over once its text reaches the upper fifth of the screen, where you start
+// reading it, not when the section itself crosses the middle while its text is still coming in.
+// Scrolling either way gives the same answer: the last section whose text is at or above that line.
+const SCENE_LINE = .2;
+const sceneText = (s) => s.querySelector(".step-text, .install-text") || s;
+let sceneQueued = false;
+function followScroll() {
+  if (sceneQueued || !document.querySelector("[data-scene]")) return;
+  sceneQueued = true;
+  requestAnimationFrame(() => {
+    sceneQueued = false;
+    if (!inDocs) setScene(sectionInView());
+  });
+}
+addEventListener("scroll", followScroll, { passive: true });
+followScroll();
+// A link such as "Install" jumps to a section whose text may stop short of the line on a tall screen: its
+// formation holds until you scroll yourself.
+let pinned = null;
+document.addEventListener("click", (e) => {
+  const a = e.target.closest?.('a[href^="#"]');
+  const to = a && document.getElementById(a.getAttribute("href").slice(1));
+  if (to?.dataset.scene) { pinned = to.dataset.scene; followScroll(); }
+});
+for (const t of ["wheel", "touchmove", "keydown"]) addEventListener(t, () => { pinned = null; }, { passive: true });
 
 addEventListener("pointermove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; }, { passive: true });
 addEventListener("pointerleave", () => { mouse.x = mouse.y = -1e4; });
@@ -721,12 +741,17 @@ function occluders() {
   return out;
 }
 
+// The last section whose text has reached the scene line (see followScroll).
+// At the bottom of the page the last section wins, even if its text can't scroll up that far.
 function sectionInView() {
-  for (const el of document.querySelectorAll("[data-scene]")) {
-    const r = el.getBoundingClientRect();
-    if (r.top <= H / 2 && r.bottom >= H / 2) return el.dataset.scene;
+  if (pinned) return pinned;
+  const all = document.querySelectorAll("[data-scene]");
+  if (all.length && innerHeight + scrollY >= document.documentElement.scrollHeight - 2) return all[all.length - 1].dataset.scene;
+  let last = "title";
+  for (const el of all) {
+    if (sceneText(el).getBoundingClientRect().top <= H * SCENE_LINE) last = el.dataset.scene;
   }
-  return "title";
+  return last;
 }
 
 // Back out of the docs: the lines turn back into dots, which go back to whatever section you left.

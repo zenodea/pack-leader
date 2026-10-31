@@ -4,9 +4,9 @@ Lodestar is a single native binary plus a skill that teaches your agent how to u
 
 | You need | |
 | --- | --- |
-| A multiplexer | [herdr](https://herdr.dev/docs/install/) 0.9 or later, or tmux 3.x |
+| A multiplexer | [herdr](https://herdr.dev/docs/install/) 0.9 or later, tmux 3.x, or Rex |
 | Zig 0.17 | Builds the binary on first run |
-| An agent CLI | Claude Code, Codex or pi, installed and logged in |
+| An agent CLI | Claude Code, Codex, pi or fx, installed and logged in |
 | An OS | Linux or macOS |
 
 ## On herdr
@@ -22,9 +22,9 @@ The second command installs the skill for every Claude Code, Codex and pi setup 
 
 The first time you run `lodestar`, it builds the binary with `zig build -Drelease`. That takes a moment. After that it only rebuilds when a source file changes.
 
-## On tmux
+## On tmux or Rex
 
-There's no plugin manager on tmux, so clone the repository and install the skill from the checkout:
+There's no plugin manager on tmux or Rex, so clone the repository and install the skill from the checkout:
 
 ```sh
 git clone https://github.com/zenodea/lodestar
@@ -32,7 +32,7 @@ cd lodestar
 bin/lodestar skill --install
 ```
 
-`bin/lodestar` builds the binary the first time you run it. Inside a tmux session Lodestar picks tmux on its own; see [Running under tmux](?p=tmux) for what's different there.
+`bin/lodestar` builds the binary the first time you run it. Inside a tmux session Lodestar picks tmux on its own, and inside a Rex terminal it picks Rex. See [Running under tmux](?p=tmux) and [Running under Rex](?p=rex) for what's different there.
 
 ## Check it works
 
