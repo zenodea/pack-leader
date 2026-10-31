@@ -839,7 +839,8 @@ fn isDetached(pane_id: []const u8) bool {
 
 /// The sidebar column's share of the window: the leader and navigator keep 70%.
 /// The sidebar column: wide enough for the crew boxes, and never more than 30% of the window.
-const SIDEBAR_COLS: i64 = 48;
+/// The sidebar column's part of the leader's width.
+const SIDEBAR_SHARE: f64 = 0.3;
 
 fn toolCommand(entrypoint: []const u8) []const []const u8 {
     if (rt.eql(entrypoint, "bar")) return rt.a.dupe([]const u8, &.{ "bash", rt.concat(&.{ paths.plugin_root, "/bin/leader-bar" }) }) catch @panic("out of memory");
@@ -847,7 +848,7 @@ fn toolCommand(entrypoint: []const u8) []const []const u8 {
     return rt.a.dupe([]const u8, &.{ paths.lodestar_bin, entrypoint }) catch @panic("out of memory");
 }
 
-/// Lodestar's own UI in a split: "sidebar" (a column `SIDEBAR_COLS` wide), "bar" (a thin strip, above with `before`) or
+/// Lodestar's own UI in a split: "sidebar" (a column `SIDEBAR_SHARE` of the width), "bar" (a thin strip, above with `before`) or
 /// "usage" (`rows` rows below the target). Sizes come from the target's size on the server, which is the app's
 /// real size once a client shows it. Extra keys: `before` (bool) opens it left of/above the target.
 fn openToolPane(p: *Obj) anyerror!*Obj {
@@ -865,8 +866,7 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
     }
     const down = rt.eqlOpt(p.str("direction"), "down");
     const side = if (p.truthy("before")) (if (down) "above" else "left") else (if (down) "below" else "right");
-    const cols = if (blockSize(target)) |o| o.int("columns") else null;
-    return paneRecord(try split(target, side, cellsShare(SIDEBAR_COLS, cols, 0.2, 0.3), null, p.obj("env"), toolCommand(entrypoint)));
+    return paneRecord(try split(target, side, SIDEBAR_SHARE, null, p.obj("env"), toolCommand(entrypoint)));
 }
 
 fn tabCreate(p: *Obj) anyerror!types.TabCreated {

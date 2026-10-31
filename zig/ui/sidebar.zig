@@ -591,18 +591,18 @@ const Sidebar = struct {
         }
     }
 
-    /// Spend and plan limits get their own pane below the crew, `USAGE_ROWS` high. It runs
+    /// Spend and plan limits get their own pane below the crew, `USAGE_SHARE` of its height. It runs
     /// `lodestar usage --watch` with this process's pid and leaves when this sidebar is gone; given the run, it also
     /// shows what was used since the run started.
     fn openUsagePane(self: *Sidebar) void {
         const own = self.pane orelse return;
         const height = term.size(30, 24).rows;
-        if (height < USAGE_ROWS * 2) return;
+        if (height < USAGE_MIN_HEIGHT) return;
         if (!config.settingsOf(config.loadConfig() catch return).usage_pane) return;
         const env = json.object(.{.{ "LODESTAR_USAGE_PARENT_PID", rt.fmt("{d}", .{rt.pid}) }});
         const runs = self.mine();
         if (runs.len > 0) if (runs[0].str("id")) |id| env.putStr("LODESTAR_USAGE_RUN", id);
-        const p = json.object(.{ .{ "entrypoint", "usage" }, .{ "target_pane_id", own }, .{ "direction", "down" }, .{ "env", env }, .{ "rows", USAGE_ROWS }, .{ "target_rows", height } });
+        const p = json.object(.{ .{ "entrypoint", "usage" }, .{ "target_pane_id", own }, .{ "direction", "down" }, .{ "env", env }, .{ "rows", height * USAGE_SHARE / 10 }, .{ "target_rows", height } });
         const pane = mux.openToolPane(p) catch |err| {
             mux.logMuxError("usage.open", err, json.object(.{.{ "pane", own }}));
             return;
@@ -962,7 +962,9 @@ const CLOCK_MS: i64 = 1000;
 const STATE_POLL_MS: i64 = 150;
 const SUB_RECYCLE_MS: i64 = 60_000;
 /// Enough for the usage table: header, column titles, three agents, the total and two plan limits.
-const USAGE_ROWS: usize = 12;
+/// Tenths of the crew pane's height that the usage pane takes, and the height below which it opens none.
+const USAGE_SHARE: usize = 3;
+const USAGE_MIN_HEIGHT: usize = 24;
 /// A new pane may start at a default size until the multiplexer's client sizes it; wait this long for that.
 const USAGE_OPEN_MS: i64 = 1000;
 

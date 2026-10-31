@@ -363,7 +363,7 @@ fn toolCommand(entrypoint: []const u8) []const u8 {
     return rt.concat(&.{ "exec ", shellQuote(paths.lodestar_bin), " ", shellQuote(entrypoint) });
 }
 
-/// Lodestar's own UI in a split: "sidebar" (a quarter-width column), "bar" (two rows above the target) or
+/// Lodestar's own UI in a split: "sidebar" (a column 30% wide), "bar" (two rows above the target) or
 /// "usage" (`rows` rows below the target). Extra keys: `before` (bool) opens it left of/above the target.
 fn openToolPane(p: *Obj) anyerror!*Obj {
     try refuseRemote();
@@ -377,7 +377,7 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
     } else if (rt.eql(entrypoint, "usage")) {
         try argv.appendSlice(rt.a, &.{ "-v", "-l", rt.fmt("{d}", .{p.int("rows") orelse 10}) });
     } else {
-        try argv.appendSlice(rt.a, &.{ if (rt.eqlOpt(p.str("direction"), "down")) "-v" else "-h", "-l", "25%" });
+        try argv.appendSlice(rt.a, &.{ if (rt.eqlOpt(p.str("direction"), "down")) "-v" else "-h", "-l", "30%" });
         if (p.truthy("before")) try argv.append(rt.a, "-b");
     }
     appendEnv(&argv, p.obj("env"));

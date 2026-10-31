@@ -85,7 +85,7 @@ pub fn startNavigator(run: *Obj, o: StartNavigatorOpts) !*Obj {
     const d = config.defaultsFor(cfg, kind);
     const model = orNull(d, "model");
     const env = json.object(.{ .{ "LODESTAR_ROLE", "navigator" }, .{ "LODESTAR_RUN_ID", run_id }, .{ "HERDR_PLUGIN_STATE_DIR", paths.state_dir } });
-    const pane = try mux.paneSplit(json.object(.{ .{ "target_pane_id", orch_pane }, .{ "direction", "down" }, .{ "cwd", orch.get("cwd") }, .{ "env", env }, .{ "ratio", 0.5 } }));
+    const pane = try mux.paneSplit(json.object(.{ .{ "target_pane_id", orch_pane }, .{ "direction", "down" }, .{ "cwd", orch.get("cwd") }, .{ "env", env }, .{ "ratio", 0.7 } }));
     const pane_id = pane.str("pane_id") orelse "";
     mux.renamePane(pane_id, "Navigator");
     const agent = rt.concat(&.{ "navigator-", run_id });
