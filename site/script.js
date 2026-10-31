@@ -140,7 +140,7 @@ const FORMS = {
     const S = stage(), names = ["parser", "validator", "tests", "docs"];
     const r = Math.min(S.w / 10, 50), m = narrow ? 50 : 90;
     const lx = S.x + S.w / 2, ly = S.y + S.h * .12;
-    const pts = [], lines = [], labels = [{ x: lx + 24, y: ly - 24, text: "leader", color: C.leader, align: "left" }];
+    const pts = [], lines = [], labels = [];
     names.forEach((name, i) => {
       const cx = S.x + S.w * (i + .5) / names.length, cy = S.y + S.h * .64;
       pts.push(...disc(cx, cy, m, r, { c: TINTS[i], s: 1.6 }));
@@ -164,7 +164,7 @@ const FORMS = {
     const rows = [.72, .48, .84, .3, .6, .76, .4, .66];
     panes.forEach((p, i) => {
       pts.push(...rectDots(p, gap, { c: C.dim, s: 1.1 }));
-      labels.push({ x: p.x + 12, y: p.y + 22, text: p.name, align: "left", color: i ? p.c : C.leader });
+      if (i) labels.push({ x: p.x + 12, y: p.y + 22, text: p.name, align: "left", color: p.c });
       const lines = Math.max(1, Math.min(i ? 3 : 8, Math.floor((p.h - 46) / 16)));
       for (let k = 0; k < lines; k++) {
         const y = p.y + 42 + k * 16, x0 = p.x + 14, len = (p.w - 28) * rows[(k + i * 3) % rows.length];
@@ -184,7 +184,7 @@ const FORMS = {
       { name: "validator", state: "working", c: C.work, jit: 2.2 },
       { name: "tests", state: "asking", c: C.ask, pulse: true, note: "reject or skip?" },
     ];
-    const pts = [], lines = [], labels = [{ x: lx + 24, y: ly - 24, text: "leader", color: C.leader, align: "left" }];
+    const pts = [], lines = [], labels = [];
     const centres = kinds.map((k, i) => {
       const cx = S.x + S.w * (i + .5) / 3, cy = S.y + S.h * .66;
       pts.push(...disc(cx, cy, m, r, { c: k.c, s: 1.6, jit: k.jit || 0, pulse: !!k.pulse }));
@@ -274,7 +274,6 @@ const FORMS = {
     const labels = [
       { x: you.x, y: you.y + 30, text: "you" },
       { x: adv.x, y: adv.y + 38, text: "navigator", color: C.violet },
-      { x: lx + 24, y: ly - 24, text: "leader", color: C.leader, align: "left" },
       { x: (adv.x + lx) / 2, y: cy + 18, text: "reads", dim: true },
     ];
     const lines = [[you.x + 12, you.y, adv.x - 20, adv.y], [adv.x + 20, adv.y, lx - 16, ly]];
@@ -343,13 +342,20 @@ function setScene(name, force) {
       taken.add(i); kept.add(p); order.push(i); plan.push(p);
     }
     const spare = dots.map((_, i) => i).filter((i) => !taken.has(i)).sort((a, b) => dots[a].free - dots[b].free);
+    // A new page: its new places are filled in reading order too, by the spare dots in reading order.
+    if (glideNext) {
+      fresh.sort((a, b) => a.y - b.y || a.x - b.x);
+      spare.unshift(...spare.splice(0, fresh.length).sort((a, b) => dots[a].y - dots[b].y || dots[a].x - dots[b].x));
+    }
     for (const p of fresh) { order.push(spare.shift()); plan.push(p); }
     for (const i of spare) { order.push(i); Object.assign(dots[i], { hx: dots[i].x, hy: dots[i].y }); }
   }
   // Into the docs from somewhere else: no shuffle. The dots go in reading order, so the highest ones on
   // the screen take the highest lines and, along a line, the leftmost take its left end; nobody crosses.
-  // Back out of the docs (glideNext) works the same way.
-  const orderly = ((name === "docs" && !again) || glideNext) && !still;
+  // The first formation and the way back out of the docs (glideNext) work the same way. Moving between docs
+  // pages keeps each dot's line (above) but glides too.
+  const orderly = ((name === "docs" || glideNext) && !again) && !still;
+  const glide = orderly || (again && glideNext && !still);
   glideNext = false;
   if (orderly) {
     plan = [...pts].sort((a, b) => a.y - b.y || a.x - b.x);
@@ -374,7 +380,7 @@ function setScene(name, force) {
       // A dot that only shows once something has loaded starts out there, unseen, and fades in.
       if (p.pop && !stays) Object.assign(d, { x: p.x, y: p.y, vx: 0, vy: 0, a: 0, c: p.c.slice() });
       // A wave out from the leader's new place: the nearest dots set off first, and each glides in.
-      else if (orderly) {
+      else if (glide) {
         const far = Math.hypot(p.x - form.leader.x, p.y - form.leader.y) / Math.hypot(W, H);
         d.fly = { x: d.x, y: d.y, at: sceneAt + far * FLY_WAVE };
       }
@@ -382,16 +388,16 @@ function setScene(name, force) {
       if (!again) Object.assign(d, { hx: Math.random() * W, hy: Math.random() * H });
       Object.assign(d, { free: true, key: null, tc: C.dim, ts: 1, ta: form.hideRest ? 0 : .16, jit: 0, pulse: false, delay: 0, orbit: null, anchor: false });
     }
-    if (!orderly || !p || p.pop) d.fly = null;
+    if (!glide || !p || p.pop) d.fly = null;
     if (still) { d.x = d.tx; d.y = d.ty; }
   });
   leader.tx = form.leader.x; leader.ty = form.leader.y; leader.ts = form.leader.s; leader.ta = 1;
-  leader.fly = orderly ? { x: leader.x, y: leader.y, at: sceneAt } : null;
+  leader.fly = glide ? { x: leader.x, y: leader.y, at: sceneAt } : null;
   if (still) { leader.x = leader.tx; leader.y = leader.ty - (form.doc ? scrollY : 0); }
 }
 
 // Into the docs, each dot glides to its line in FLY_TIME, setting off up to FLY_WAVE after the first.
-const FLY_TIME = 900, FLY_WAVE = 700;
+const FLY_TIME = 650, FLY_WAVE = 450;
 const ease = (u) => (u < .5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
 
 // How fast the sky turns around the North Star, in radians per millisecond (about half a degree a second).
@@ -688,9 +694,11 @@ requestAnimationFrame(frame);
 document.fonts.load('800 100px "Inter Tight"').catch(() => {}).finally(() => {
   setTimeout(() => {
     introDone = true;
+    // The first formation glides into place in order, like the way into the docs.
+    glideNext = landing || !!docsForm;
     if (landing) setScene(wanted, true);
     else if (docsForm) setScene("docs", true);
-  }, still ? 0 : landing ? 1500 : 250);
+  }, still ? 0 : landing ? 800 : 250);
 });
 
 // Into the docs without a reload: the landing fades, the dots fly onto the docs' lines
@@ -708,7 +716,7 @@ let scripts = null;
 const loadScripts = () => (scripts ||= load("script", "marked-js", { src: "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" })
   .then(() => window.lodestarDocs || load("script", "docs-js", { src: new URL("docs.js?v=8", DOCS).href })));
 // The docs page shows once the dots are on its lines.
-const REVEAL = FLY_TIME + FLY_WAVE + 100;
+const REVEAL = FLY_TIME + FLY_WAVE;
 
 function load(tag, id, attrs) {
   const old = document.getElementById(id);
@@ -789,12 +797,15 @@ async function goDocs(url, push = true) {
 }
 
 // A new docs page (or a resize): the dots move to its dividers.
-function onDocsShown() {
+// A new page glides; a resize or a scroll of the page list follows at once.
+function onDocsShown(glide = false) {
   if (!inDocs || busy) return;
   docsForm = docsLines(document.getElementById("docs-root") || document);
-  if (introDone) setScene("docs", true);
+  if (!introDone) return;
+  glideNext = glide;
+  setScene("docs", true);
 }
-document.addEventListener("docs:shown", onDocsShown);
+document.addEventListener("docs:shown", () => onDocsShown(true));
 let sideFrame = 0;
 document.addEventListener("scroll", (e) => {
   if (e.target.id !== "side" || sideFrame) return;

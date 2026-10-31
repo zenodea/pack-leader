@@ -57,10 +57,6 @@ main, .top, .foot { position: relative; z-index: 1; }
 .lede { max-width: 640px; margin: 34px 0 0; font-size: clamp(19px, 2vw, 23px); line-height: 1.45; color: #c3cad8; }
 .platforms { margin: 16px 0 0; font-family: var(--mono); font-size: 13px; color: var(--faint); }
 .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 34px; }
-.legend { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 8px; margin: 44px 0 0; font-size: 14px; color: var(--faint); }
-.swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
-.swatch-agent { background: #cfdeff; box-shadow: 0 0 8px rgba(207, 222, 255, .7); }
-.swatch-leader { margin-left: 8px; background: var(--leader); box-shadow: 0 0 10px rgba(140, 190, 255, .95); }
 
 /* Scroll steps: text on the left, the dots form on the right */
 .wrap { width: 100%; max-width: 1200px; margin: 0 auto; padding: 0 40px; }
