@@ -713,5 +713,5 @@ test "h and l step through a row's values, and a short page scrolls to the selec
     var found = false;
     for (page) |l| found = found or std.mem.indexOf(u8, ansi.stripSgr(l), "❯ Accent") != null;
     try std.testing.expect(found);
-    try std.testing.expectEqualStrings("  j/k move   h/l change   enter pick   q close", ansi.stripSgr(page[14]));
+    try std.testing.expectEqualStrings("  j/k move   h/l change   enter pick   q close", ansi.stripSgr(page[15]));
 }
