@@ -92,7 +92,6 @@ fn priced(a: *Obj) bool {
 
 const NAME_W: usize = 8;
 const LABEL_W: usize = 9;
-const CELL_W: usize = 11;
 
 /// What a shorter pane gives up, in order: the top margin, then the gaps and the total.
 pub const Room = struct { top: bool = true, gaps: bool = true, total: bool = true };
@@ -185,11 +184,11 @@ fn amount(ok: bool, cost: f64, tokens: i64) []const u8 {
     return if (tokens == 0) dim("0 tok") else rt.concat(&.{ count(tokens), dim(" tok") });
 }
 
-/// Spend over 24 hours and 7 days (tokens where there is no price), since the run started when there is a mark and
-/// room for it (headed in the blue of the bars), and a total.
+/// Spend over 24 hours and 7 days (tokens where there is no price), since the run started when there is a mark (headed
+/// in the blue of the bars), and a total. The columns spread across the width with even gaps, the last one flush right.
 fn spendTable(out: *Lines, agents: []const *Obj, mark: ?*Obj, total: bool) void {
-    const with_run = mark != null and out.w >= NAME_W + 3 * CELL_W;
-    out.add(rt.concat(&.{ dim(rt.concat(&.{ ansi.repeat(" ", NAME_W), right("24h", CELL_W), right("7d", CELL_W) })), if (with_run) fg.blue(right("session", CELL_W)) else "" }));
+    var rows: std.ArrayListUnmanaged([4][]const u8) = .empty;
+    rows.append(rt.a, .{ "", dim("24h"), dim("7d"), fg.blue("session") }) catch {};
     var c24: f64 = 0;
     var c7: f64 = 0;
     var crun: f64 = 0;
@@ -201,12 +200,32 @@ fn spendTable(out: *Lines, agents: []const *Obj, mark: ?*Obj, total: bool) void 
             c7 += a.num("cost_7d") orelse 0;
             if (run) |r| crun += r.cost;
         }
-        const day = amount(ok, a.num("cost_24h") orelse 0, a.int("tokens_24h") orelse 0);
-        const week = amount(ok, a.num("cost_7d") orelse 0, a.int("tokens_7d") orelse 0);
-        const since = if (!with_run) "" else if (run) |r| right(amount(ok, r.cost, r.tokens), CELL_W) else right(dim("–"), CELL_W);
-        out.add(rt.concat(&.{ bold(ansi.pad(a.str("agent") orelse "?", NAME_W)), right(day, CELL_W), right(week, CELL_W), since }));
+        rows.append(rt.a, .{
+            bold(a.str("agent") orelse "?"),
+            amount(ok, a.num("cost_24h") orelse 0, a.int("tokens_24h") orelse 0),
+            amount(ok, a.num("cost_7d") orelse 0, a.int("tokens_7d") orelse 0),
+            if (run) |r| amount(ok, r.cost, r.tokens) else dim("–"),
+        }) catch {};
     }
-    if (total and agents.len > 1) out.add(rt.concat(&.{ dim(ansi.pad("all", NAME_W)), right(money(c24), CELL_W), right(money(c7), CELL_W), if (with_run) right(money(crun), CELL_W) else "" }));
+    if (total and agents.len > 1) rows.append(rt.a, .{ dim("all"), money(c24), money(c7), money(crun) }) catch {};
+
+    var widths: [4]usize = .{ 0, 0, 0, 0 };
+    for (rows.items) |r| for (r, 0..) |cell, k| {
+        widths[k] = @max(widths[k], ansi.width(cell));
+    };
+    // The session column only with a mark, and only when every column still gets a gap of two.
+    var cols: usize = if (mark != null) 4 else 3;
+    if (cols == 4 and widths[0] + widths[1] + widths[2] + widths[3] + 3 * 2 > out.w) cols = 3;
+    var used: usize = 0;
+    for (widths[0..cols]) |x| used += x;
+    const gap = (out.w -| used) / (cols - 1);
+    const extra = (out.w -| used) % (cols - 1);
+    for (rows.items) |r| {
+        var parts: std.ArrayListUnmanaged([]const u8) = .empty;
+        parts.append(rt.a, ansi.pad(r[0], widths[0])) catch {};
+        for (1..cols) |k| parts.append(rt.a, right(r[k], widths[k] + gap + (if (k == 1) extra else 0))) catch {};
+        out.add(rt.concat(parts.items));
+    }
 }
 
 /// One line per agent, for a pane only a few rows high.
@@ -242,9 +261,9 @@ test "lines puts each limit on one line above spend, and fit gives up room as th
     try testing.expectEqualStrings("", l[0]);
     try testing.expectEqualStrings("  Usage", ansi.stripSgr(l[1]));
     try testing.expectEqualStrings("  claude  5h/1h12  ━━━━━━━━━━━━━━────────  62%", ansi.stripSgr(l[3]));
-    try testing.expectEqualStrings("                  24h         7d", ansi.stripSgr(l[5]));
-    try testing.expectEqualStrings("  claude          $12        $81", ansi.stripSgr(l[6]));
-    try testing.expectEqualStrings("  codex      2.1M tok   9.0M tok", ansi.stripSgr(l[7]));
+    try testing.expectEqualStrings("                        24h                 7d", ansi.stripSgr(l[5]));
+    try testing.expectEqualStrings("  claude                $12                $81", ansi.stripSgr(l[6]));
+    try testing.expectEqualStrings("  codex            2.1M tok           9.0M tok", ansi.stripSgr(l[7]));
     try testing.expectEqual(@as(usize, 9), l.len);
     try testing.expectEqual(@as(usize, 5), fit(s, 48, 6, now, plain, null).len);
     try testing.expectEqualStrings(" claude $12 24h · $81 7d · 5h 62%", ansi.stripSgr(fit(s, 48, 3, now, plain, null)[1]));
