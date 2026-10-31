@@ -11,6 +11,7 @@ const usage_scan = @import("../usage/scan.zig");
 const ansi = @import("ansi.zig");
 const term = @import("term.zig");
 const usage_box = @import("usage_box.zig");
+const theme = @import("theme.zig");
 
 const Arena = std.heap.ArenaAllocator;
 
@@ -22,6 +23,7 @@ const Pane = struct {
     usage_arena: Arena = Arena.init(std.heap.page_allocator),
     usage_mtime: i64 = 0,
     raw: term.Raw = .{},
+    accent: ansi.Paint = ansi.Paint.of(&ansi.fg.cyan),
 
     /// Picks up the summary a background `lodestar usage` wrote.
     fn load(self: *Pane) void {
@@ -46,7 +48,7 @@ const Pane = struct {
     fn draw(self: *Pane) void {
         const sz = term.size(40, 10);
         const now = rt.nowMs();
-        const shown = usage_box.fit(self.usage, @intCast(sz.cols), sz.rows, now);
+        const shown = usage_box.fit(self.usage, @intCast(sz.cols), sz.rows, now, self.accent);
         var buf: std.ArrayListUnmanaged(u8) = .empty;
         buf.appendSlice(rt.a, ansi.screen.home) catch {};
         for (0..sz.rows) |row| {
@@ -73,6 +75,7 @@ pub fn run() !void {
     const tty = term.isTty(0);
     const parent: ?i64 = if (rt.getenvNonEmpty("LODESTAR_USAGE_PARENT_PID")) |s| std.fmt.parseInt(i64, s, 10) catch null else null;
     var pane: Pane = .{};
+    if (theme.loadTheme().accent) |hex| pane.accent = .{ .color = ansi.rgb(hex) };
     var frame = Arena.init(std.heap.page_allocator);
     rt.a = frame.allocator();
     rt.writeStdout(ansi.screen.alt ++ ansi.screen.hideCursor ++ ansi.screen.clear);
