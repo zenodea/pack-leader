@@ -2,6 +2,8 @@ const std = @import("std");
 const rt = @import("../rt.zig");
 const json = @import("../core/json.zig");
 const h = @import("../herdr/herdr.zig");
+const proc = @import("../core/proc.zig");
+const paths = @import("../core/paths.zig");
 const types = @import("types.zig");
 
 const Obj = json.Obj;
@@ -39,6 +41,52 @@ fn tabCreate(p: *Obj) anyerror!types.TabCreated {
 
 fn listPanes(ws: ?[]const u8) anyerror![]*Obj {
     return h.listPanes(ws);
+}
+
+/// The sidebar opens through `herdr plugin pane open`, a quarter of the target's width; "usage" opens below the
+/// target at `rows` of `target_rows`; "bar" with `before` ends up above the target. herdr then focuses the target
+/// again after the sidebar and usage pane unless `focus` asks for the new pane.
+fn openToolPane(p: *Obj) anyerror!*Obj {
+    const entrypoint = p.str("entrypoint") orelse "sidebar";
+    const target = p.str("target_pane_id") orelse return rt.fail("bad_request", "plugin pane needs target_pane_id", .{});
+    const focus = p.truthy("focus");
+    if (rt.eql(entrypoint, "sidebar")) {
+        const before = p.truthy("before");
+        const plugin_id = rt.getenvNonEmpty("HERDR_PLUGIN_ID") orelse "lodestar";
+        const res = proc.run(&.{ paths.herdr_bin, "plugin", "pane", "open", "--plugin", plugin_id, "--entrypoint", "sidebar", "--placement", "split", "--direction", "right", "--no-focus", "--target-pane", target }, .{});
+        if (!res.ok()) {
+            const msg = rt.trim(res.stderr);
+            return rt.failMsg(null, if (msg.len > 0) msg else "herdr couldn't open the sidebar pane");
+        }
+        const parsed = json.parse(res.stdout) catch return rt.fail(null, "herdr did not report the sidebar pane id", .{});
+        const r = if (parsed.asObj()) |o| o.obj("result") else null;
+        const pane: ?*Obj = blk: {
+            const x = r orelse break :blk null;
+            if (x.obj("pane")) |pn| break :blk pn;
+            if (x.obj("plugin_pane")) |pp| if (pp.obj("pane")) |pn| break :blk pn;
+            break :blk null;
+        };
+        const pane_id = (if (pane) |pn| pn.strNonEmpty("pane_id") else null) orelse return rt.fail(null, "herdr did not report the sidebar pane id", .{});
+        if (before) _ = proc.run(&.{ paths.herdr_bin, "pane", "swap", "--source-pane", pane_id, "--target-pane", target }, .{});
+        _ = proc.run(&.{ paths.herdr_bin, "pane", "resize", "--direction", if (before) "left" else "right", "--amount", "0.25", "--pane", pane_id }, .{});
+        if (!focus) _ = h.paneFocus(target) catch {};
+        return pane.?;
+    }
+    const params = p.clone();
+    for ([_][]const u8{ "rows", "target_rows", "before", "focus" }) |k| params.del(k);
+    const pane = try h.pluginPaneOpen(params);
+    if (rt.eql(entrypoint, "usage")) if (p.int("rows")) |rows| if (p.int("target_rows")) |height| if (height > 0) {
+        const ratio = 1.0 - @as(f64, @floatFromInt(rows)) / @as(f64, @floatFromInt(height));
+        _ = h.setSplitRatio(pane.str("pane_id").?, ratio) catch {};
+    };
+    if (rt.eql(entrypoint, "usage") and !focus) _ = h.paneFocus(target) catch {};
+    // Plugin panes open right of or below the target; the crewmate's bar goes above it, a thin strip.
+    if (rt.eql(entrypoint, "bar") and p.truthy("before")) {
+        const bar_id = pane.str("pane_id").?;
+        _ = try h.paneSwap(bar_id, target);
+        _ = try h.setSplitRatio(bar_id, 0.05);
+    }
+    return pane;
 }
 
 const SubCtx = struct { sub: h.Subscription };
@@ -92,7 +140,7 @@ pub const backend: types.Multiplexer = .{
     .paneFocus = h.paneFocus,
     .renamePane = h.renamePane,
     .labelPane = h.labelPane,
-    .openToolPane = h.pluginPaneOpen,
+    .openToolPane = openToolPane,
 
     .tabCreate = tabCreate,
     .tabClose = h.tabClose,

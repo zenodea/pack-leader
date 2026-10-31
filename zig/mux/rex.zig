@@ -513,6 +513,109 @@ fn splitRatioOf(v: Value, block: []const u8) ?f64 {
     return null;
 }
 
+// ---- arranging ----
+
+/// The tiled layout of `window` in a `session.view`: `{ rect, split: { direction, ratio, before, after } }` or
+/// `{ rect, block_id }`.
+fn windowLayout(view: *Obj, window: []const u8) ?*Obj {
+    const windows = if (view.arr("windows")) |x| x.objs() else return null;
+    for (windows) |w| if (rt.eqlOpt(w.str("window_id"), window)) {
+        const layers = if (w.arr("layers")) |x| x.objs() else return null;
+        for (layers) |l| if (rt.eqlOpt(l.str("kind"), "tiled")) return l.obj("layout");
+    };
+    return null;
+}
+
+/// A Rex layout node in herdr's shape: `{ type: "split", direction: "right"|"down", ratio, first, second }` or
+/// `{ type: "pane", pane_id }`.
+fn herdrLayout(session: []const u8, node: *const Obj) *Obj {
+    if (node.obj("split")) |sp| return json.object(.{
+        .{ "type", "split" },
+        .{ "direction", if (rt.eqlOpt(sp.str("direction"), "vertical")) "down" else "right" },
+        .{ "ratio", sp.num("ratio") orelse 0.5 },
+        .{ "first", herdrLayout(session, sp.obj("before") orelse json.newObj()) },
+        .{ "second", herdrLayout(session, sp.obj("after") orelse json.newObj()) },
+    });
+    if (node.strNonEmpty("block_id")) |b| return json.object(.{ .{ "type", "pane" }, .{ "pane_id", paneId(session, b) } });
+    return json.object(.{.{ "type", "none" }});
+}
+
+fn layoutExport(tab_id: []const u8) anyerror!*Obj {
+    try refuseRemote();
+    const window = windowTarget(tab_id);
+    const session = (try sessionOfWindow(window)) orelse return rt.fail("tab_not_found", "tab {s} not found", .{tab_id});
+    const layout = windowLayout(try call(session, "session.view", json.newObj()), window) orelse return rt.fail("tab_not_found", "tab {s} has no layout", .{tab_id});
+    return herdrLayout(session, layout);
+}
+
+/// `{ type: "new_tab" }` parks the block off every window (Rex keeps it running, detached), which is all
+/// Lodestar needs a holding tab for. `{ type: "tab", target_pane_id, split?: "down"|"right", ratio? }` places it
+/// after the target.
+fn paneMove(pane_id: []const u8, destination: *Obj) anyerror!Value {
+    try refuseRemote();
+    const session = sessionFor(pane_id) orelse return rt.fail("bad_request", "pane {s} names no Rex session", .{pane_id});
+    const block = blockTarget(pane_id);
+    if (rt.eqlOpt(destination.str("type"), "new_tab")) {
+        _ = try call(session, "session.detach_block", json.object(.{.{ "block_id", block }}));
+        return json.newObj().val();
+    }
+    const anchor = destination.strNonEmpty("target_pane_id") orelse return rt.fail("bad_request", "Rex moves a pane only beside another pane (target_pane_id)", .{});
+    _ = try call(session, "session.move_block", json.object(.{
+        .{ "block_id", block },
+        .{ "anchor_block_id", blockTarget(anchor) },
+        .{ "direction", if (rt.eqlOpt(destination.str("split"), "down")) "vertical" else "horizontal" },
+        .{ "side", "after" },
+        .{ "ratio", destination.num("ratio") orelse 0.5 },
+    }));
+    return json.newObj().val();
+}
+
+fn paneSwap(source: []const u8, target: []const u8) anyerror!Value {
+    try refuseRemote();
+    const session = sessionFor(source) orelse return rt.fail("bad_request", "pane {s} names no Rex session", .{source});
+    _ = try call(session, "session.swap_blocks", json.object(.{ .{ "block_id", blockTarget(source) }, .{ "other_block_id", blockTarget(target) } }));
+    return json.newObj().val();
+}
+
+/// Any block inside a layout node.
+fn someBlock(node: *const Obj) ?[]const u8 {
+    if (node.strNonEmpty("block_id")) |b| return b;
+    const sp = node.obj("split") orelse return null;
+    return someBlock(sp.obj("before") orelse return null) orelse someBlock(sp.obj("after") orelse return null);
+}
+
+/// The split whose `before` or `after` is the block itself.
+fn parentSplit(node: *const Obj, block: []const u8) ?*Obj {
+    const sp = node.obj("split") orelse return null;
+    for ([_][]const u8{ "before", "after" }) |side| if (sp.obj(side)) |child| {
+        if (rt.eqlOpt(child.str("block_id"), block)) return sp;
+        if (parentSplit(child, block)) |found| return found;
+    };
+    return null;
+}
+
+/// The split right above the pane gives its first part `ratio` of the space.
+fn setSplitRatio(pane_id: []const u8, ratio: f64) anyerror!Value {
+    try refuseRemote();
+    const session = sessionFor(pane_id) orelse return rt.fail("bad_request", "pane {s} names no Rex session", .{pane_id});
+    const block = blockTarget(pane_id);
+    const view = try call(session, "session.view", json.newObj());
+    const window = for (viewBlocks(session, view)) |r| {
+        if (rt.eql(r.block, block)) break r.window;
+    } else return rt.fail("pane_not_found", "pane {s} is in no window", .{pane_id});
+    const layout = windowLayout(view, window) orelse return rt.fail("pane_not_found", "pane {s} is in no window", .{pane_id});
+    const sp = parentSplit(layout, block) orelse return rt.fail("bad_request", "pane {s} fills its window; there is no split to size", .{pane_id});
+    const before = someBlock(sp.obj("before") orelse json.newObj()) orelse return rt.fail("bad_result", "rex split has no blocks", .{});
+    const after = someBlock(sp.obj("after") orelse json.newObj()) orelse return rt.fail("bad_result", "rex split has no blocks", .{});
+    _ = try call(session, "session.resize_pane", json.object(.{
+        .{ "direction", sp.str("direction") orelse "horizontal" },
+        .{ "before_block_id", before },
+        .{ "after_block_id", after },
+        .{ "ratio", std.math.clamp(ratio, 0.01, 0.99) },
+    }));
+    return json.newObj().val();
+}
+
 /// `rex split`/`rex run --json` print `block_ids` (and `window_id` for `run`).
 fn newBlock(out: *Obj, session: []const u8) !Raw {
     const ids = out.arr("block_ids") orelse return rt.fail("bad_result", "rex did not report the new block", .{});
@@ -597,7 +700,7 @@ fn toolCommand(entrypoint: []const u8) []const []const u8 {
     return rt.a.dupe([]const u8, &.{ paths.lodestar_bin, entrypoint }) catch @panic("out of memory");
 }
 
-/// Lodestar's own UI in a split: "sidebar" (a column `SIDEBAR_COLS` wide), "bar" (a thin strip above the target) or
+/// Lodestar's own UI in a split: "sidebar" (a column `SIDEBAR_COLS` wide), "bar" (a thin strip, above with `before`) or
 /// "usage" (`rows` rows below the target). Sizes come from the target's size on the server, which is the app's
 /// real size once a client shows it. Extra keys: `before` (bool) opens it left of/above the target.
 fn openToolPane(p: *Obj) anyerror!*Obj {
@@ -607,7 +710,7 @@ fn openToolPane(p: *Obj) anyerror!*Obj {
     if (rt.eql(entrypoint, "bar")) {
         // Two rows of the target's height.
         const rows = blockRows(target) orelse 40;
-        return paneRecord(try split(target, "above", 2.0 / @as(f64, @floatFromInt(@max(4, rows))), null, p.obj("env"), toolCommand(entrypoint)));
+        return paneRecord(try split(target, if (p.truthy("before")) "above" else "below", 2.0 / @as(f64, @floatFromInt(@max(4, rows))), null, p.obj("env"), toolCommand(entrypoint)));
     }
     if (rt.eql(entrypoint, "usage")) {
         const share = cellsShare(p.int("rows") orelse 12, blockRows(target), 0.1, 0.5);
@@ -998,7 +1101,7 @@ fn reachable() bool {
 
 pub const backend: types.Multiplexer = .{
     .name = "rex",
-    .capabilities = .{ .agent_status = .native, .events = true, .layout_tree = false, .arrange = false, .workspaces = false },
+    .capabilities = .{ .agent_status = .native, .events = true, .layout_tree = true, .arrange = true, .workspaces = false },
 
     .listAgents = listAgents,
     .getAgent = getAgent,
@@ -1029,6 +1132,11 @@ pub const backend: types.Multiplexer = .{
     .locate = locate,
     .reachable = reachable,
     .unreachable_message = "not inside Rex (REX_SESSION is not set) and no Rex server answered",
+
+    .layoutExport = layoutExport,
+    .paneMove = paneMove,
+    .paneSwap = paneSwap,
+    .setSplitRatio = setSplitRatio,
 };
 
 test "rex ids round trip into herdr shape" {

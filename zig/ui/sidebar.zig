@@ -574,21 +574,13 @@ const Sidebar = struct {
         const height = term.size(30, 24).rows;
         if (height < USAGE_ROWS * 2) return;
         const env = json.object(.{.{ "LODESTAR_USAGE_PARENT_PID", rt.fmt("{d}", .{rt.pid}) }});
-        const p = json.object(.{ .{ "entrypoint", "usage" }, .{ "target_pane_id", own }, .{ "direction", "down" }, .{ "env", env } });
-        const herdr = rt.eql(mux.mux().name, "herdr");
-        if (!herdr) p.putInt("rows", USAGE_ROWS);
+        const p = json.object(.{ .{ "entrypoint", "usage" }, .{ "target_pane_id", own }, .{ "direction", "down" }, .{ "env", env }, .{ "rows", USAGE_ROWS }, .{ "target_rows", height } });
         const pane = mux.openToolPane(p) catch |err| {
             mux.logMuxError("usage.open", err, json.object(.{.{ "pane", own }}));
             return;
         };
         const id = pane.str("pane_id") orelse return;
-        if (herdr and mux.caps().arrange) {
-            const ratio = 1.0 - @as(f64, @floatFromInt(USAGE_ROWS)) / @as(f64, @floatFromInt(height));
-            _ = mux.setSplitRatio(id, ratio) catch |err| mux.logMuxError("usage.open", err, json.object(.{.{ "pane", id }}));
-        }
         mux.renamePane(id, "Usage");
-        // tmux and Rex split without moving focus; on Rex, focusing would also switch the app to this tab.
-        if (herdr) _ = mux.paneFocus(own) catch {};
         self.usage_pane = std.heap.page_allocator.dupe(u8, id) catch null;
     }
 

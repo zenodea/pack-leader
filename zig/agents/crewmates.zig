@@ -369,21 +369,11 @@ fn openLeaderBar(run: Run, name: []const u8, pane_id: []const u8, where: []const
         .{ "LODESTAR_REMOTE_CALLBACK_TARGET", "" },
     });
     if (theme.loadTheme().accent) |accent| env.putStr("LODESTAR_ACCENT", accent);
-    const bar = mux.openToolPane(json.object(.{ .{ "entrypoint", "bar" }, .{ "target_pane_id", pane_id }, .{ "direction", "down" }, .{ "env", env } })) catch |err| {
+    const bar = mux.openToolPane(json.object(.{ .{ "entrypoint", "bar" }, .{ "target_pane_id", pane_id }, .{ "direction", "down" }, .{ "before", true }, .{ "env", env } })) catch |err| {
         mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", pane_id } }));
         return null;
     };
     const bar_id = bar.str("pane_id") orelse "";
-    if (mux.caps().arrange) {
-        _ = mux.paneSwap(bar_id, pane_id) catch |err| {
-            mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", pane_id } }));
-            return null;
-        };
-        _ = mux.setSplitRatio(bar_id, 0.05) catch |err| {
-            mux.logMuxError("bar.open", err, json.object(.{ .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", pane_id } }));
-            return null;
-        };
-    }
     logEvent(.{ .{ "event", "bar.opened" }, .{ "run", runId(run) }, .{ "crewmate", name }, .{ "pane", bar_id } });
     return bar_id;
 }
@@ -1652,8 +1642,8 @@ pub fn releaseCrewmate(run: Run, name: []const u8, opts: ReleaseCrewmateOpts) !*
 
 pub const MaterializeResult = struct { shellTab: ?[]const u8 };
 
-pub fn materializeWorktree(wt: WorktreeInfo, label: []const u8, via_herdr: bool) !MaterializeResult {
-    if (via_herdr and mux.caps().workspaces) {
+pub fn materializeWorktree(wt: WorktreeInfo, label: []const u8, as_workspace: bool) !MaterializeResult {
+    if (as_workspace and mux.caps().workspaces) {
         const repo = wt.str("repo") orelse "";
         const path = wt.str("path") orelse "";
         const res = if (wt.truthy("created_by_pack"))

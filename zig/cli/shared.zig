@@ -2,8 +2,6 @@ const std = @import("std");
 const rt = @import("../rt.zig");
 const json = @import("../core/json.zig");
 const fs = @import("../core/fs.zig");
-const proc = @import("../core/proc.zig");
-const paths = @import("../core/paths.zig");
 const state = @import("../core/state.zig");
 const mux = @import("../mux/index.zig");
 const args_mod = @import("args.zig");
@@ -139,33 +137,11 @@ pub fn openSidebar(target: []const u8, on_left: bool, focus: bool) ![]const u8 {
             }
         } else |_| {}
     };
-    if (!rt.eql(mux.mux().name, "herdr")) {
-        const pane = try mux.openToolPane(json.object(.{ .{ "entrypoint", "sidebar" }, .{ "target_pane_id", target }, .{ "direction", "right" }, .{ "before", on_left } }));
-        const id = pane.str("pane_id") orelse return rt.fail(null, "{s} did not report the sidebar pane id", .{mux.mux().name});
-        if (owner) |o| state.update(void, SidebarCtx{ .run_id = o.str("id").?, .pane = id }, setSidebar) catch {};
-        // The split left focus where it was. Focusing the leader again would make the Rex app switch to its tab
-        // while the user works somewhere else.
-        if (focus) _ = mux.paneFocus(id) catch {};
-        return id;
-    }
-    const plugin_id = rt.getenvNonEmpty("HERDR_PLUGIN_ID") orelse "lodestar";
-    const res = proc.run(&.{ paths.herdr_bin, "plugin", "pane", "open", "--plugin", plugin_id, "--entrypoint", "sidebar", "--placement", "split", "--direction", "right", "--no-focus", "--target-pane", target }, .{});
-    if (!res.ok()) {
-        const msg = rt.trim(res.stderr);
-        return rt.failMsg(null, if (msg.len > 0) msg else "herdr couldn't open the sidebar pane");
-    }
-    const parsed = json.parse(res.stdout) catch return rt.fail(null, "herdr did not report the sidebar pane id", .{});
-    const r = if (parsed.asObj()) |o| o.obj("result") else null;
-    const pane: ?[]const u8 = blk: {
-        const x = r orelse break :blk null;
-        if (x.obj("pane")) |pn| if (pn.str("pane_id")) |id| break :blk id;
-        if (x.obj("plugin_pane")) |pp| if (pp.obj("pane")) |pn| if (pn.str("pane_id")) |id| break :blk id;
-        break :blk null;
-    };
-    const pane_id = pane orelse return rt.fail(null, "herdr did not report the sidebar pane id", .{});
-    if (owner) |o| state.update(void, SidebarCtx{ .run_id = o.str("id").?, .pane = pane_id }, setSidebar) catch {};
-    if (on_left) _ = proc.run(&.{ paths.herdr_bin, "pane", "swap", "--source-pane", pane_id, "--target-pane", target }, .{});
-    _ = proc.run(&.{ paths.herdr_bin, "pane", "resize", "--direction", if (on_left) "left" else "right", "--amount", "0.25", "--pane", pane_id }, .{});
-    _ = mux.paneFocus(if (focus) pane_id else target) catch {};
-    return pane_id;
+    const pane = try mux.openToolPane(json.object(.{ .{ "entrypoint", "sidebar" }, .{ "target_pane_id", target }, .{ "direction", "right" }, .{ "before", on_left }, .{ "focus", focus } }));
+    const id = pane.str("pane_id") orelse return rt.fail(null, "{s} did not report the sidebar pane id", .{mux.mux().name});
+    if (owner) |o| state.update(void, SidebarCtx{ .run_id = o.str("id").?, .pane = id }, setSidebar) catch {};
+    // Without `focus`, focus stays where it was. Focusing the leader again would make the Rex app switch to its
+    // tab while the user works somewhere else.
+    if (focus) _ = mux.paneFocus(id) catch {};
+    return id;
 }
