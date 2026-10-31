@@ -386,6 +386,8 @@ const Sidebar = struct {
     panel_run: IdBuf = .{},
     panel_sel: IdBuf = .{},
     draw_due: ?i64 = null,
+    /// A full agent list asked for by events, gathered so a burst of them costs one.
+    live_due: ?i64 = null,
     theme: Theme,
     mouse_off: []const u8 = "",
     /// A mouse report the last read cut off.
@@ -572,9 +574,8 @@ const Sidebar = struct {
             switch (e) {
                 .pane_updated => |u| self.liveSet(u),
                 .pane_closed, .pane_exited => |p| _ = self.live.remove(p),
-                else => {
-                    self.refreshLive();
-                    self.schedule();
+                else => if (self.live_due == null) {
+                    self.live_due = rt.monoMs() + LIVE_DEBOUNCE_MS;
                 },
             }
             self.schedule();
@@ -955,6 +956,8 @@ const Sidebar = struct {
 };
 
 const TICK_MS: i64 = 5000;
+const LIVE_MS: i64 = 30_000;
+const LIVE_DEBOUNCE_MS: i64 = 1000;
 const CLOCK_MS: i64 = 1000;
 const STATE_POLL_MS: i64 = 150;
 const SUB_RECYCLE_MS: i64 = 60_000;
@@ -1015,6 +1018,7 @@ pub fn runSidebar() !void {
     var next_tick = rt.monoMs() + TICK_MS;
     var next_clock = rt.monoMs() + CLOCK_MS;
     var next_poll = rt.monoMs() + STATE_POLL_MS;
+    var next_live = rt.monoMs() + LIVE_MS;
     while (true) {
         rt.a = sb.frame.allocator();
         defer _ = sb.frame.reset(.retain_capacity);
@@ -1028,6 +1032,7 @@ pub fn runSidebar() !void {
         const now = rt.monoMs();
         var wait = @min(next_tick, @min(next_clock, next_poll)) - now;
         if (sb.draw_due) |d| wait = @min(wait, d - now);
+        if (sb.live_due) |d| wait = @min(wait, d - now);
         if (sb.sub.retryInMs()) |r| wait = @min(wait, r);
         if (sb.keys.timeoutMs()) |k| wait = @min(wait, k);
         if (usage_at) |at| wait = @min(wait, at - now);
@@ -1058,6 +1063,11 @@ pub fn runSidebar() !void {
         if ((sub_i != null and fds[sub_i.?].revents != 0) or (sub_i == null and sb.sub.retryInMs() != null and sb.sub.retryInMs().? == 0)) sb.serviceSubscription();
 
         const t = rt.monoMs();
+        if (sb.live_due) |d| if (t >= d) {
+            sb.live_due = null;
+            sb.refreshLive();
+            sb.schedule();
+        };
         if (t >= next_poll) {
             next_poll = t + STATE_POLL_MS;
             if (sb.statFile()) sb.reload();
@@ -1065,7 +1075,12 @@ pub fn runSidebar() !void {
         if (t >= next_tick) {
             next_tick = t + TICK_MS;
             sb.sync();
-            sb.refreshLive();
+            // Listing every agent blocks keys and the mouse for a moment (longer under Rex); while the event stream
+            // is up it already brings status changes, so the full list is only a backstop.
+            if (!sb.connected or t >= next_live) {
+                next_live = t + LIVE_MS;
+                sb.refreshLive();
+            }
             sb.recordUsagePane();
             sb.schedule();
             if (t - sb.sub_born >= SUB_RECYCLE_MS) sb.recycleSubscription();

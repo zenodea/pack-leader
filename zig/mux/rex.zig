@@ -291,12 +291,33 @@ fn sessionIds() ![]const []const u8 {
 fn sessionBlocks(session: []const u8) ![]Raw {
     var list: std.ArrayListUnmanaged(Raw) = .empty;
     try list.appendSlice(rt.a, try sessionView(session));
-    const listed = call(session, "session.list_blocks", json.newObj()) catch return list.items;
-    const blocks = if (listed.arr("blocks")) |x| x.objs() else return list.items;
+    if (call(session, "session.list_blocks", json.newObj())) |listed| detachedBlocks(&list, session, listed) else |_| {}
+    return list.items;
+}
+
+/// Blocks in no window (crewmates with no tab) appear only in `session.list_blocks`.
+fn detachedBlocks(list: *std.ArrayListUnmanaged(Raw), session: []const u8, listed: *Obj) void {
+    const blocks = if (listed.arr("blocks")) |x| x.objs() else return;
     for (blocks) |b| if (rt.eqlOpt(b.str("placement"), "detached")) {
         const id = b.strNonEmpty("block_id") orelse continue;
-        try list.append(rt.a, .{ .session = session, .window = "", .block = id, .label = b.str("label") orelse "" });
+        list.append(rt.a, .{ .session = session, .window = "", .block = id, .label = b.str("label") orelse "" }) catch {};
     };
+}
+
+/// `sessionBlocks` for every session, all asked at once.
+fn everySessionBlocks() ![]Raw {
+    const ids = try sessionIds();
+    var argvs: std.ArrayListUnmanaged([]const []const u8) = .empty;
+    for (ids) |s| for ([_][]const u8{ "session.view", "session.list_blocks" }) |m| {
+        argvs.append(rt.a, rexArgv(&.{ "api", "call", "-s", s, m, "{}" })) catch {};
+    };
+    const res = proc.runAll(argvs.items, 10_000);
+    var list: std.ArrayListUnmanaged(Raw) = .empty;
+    for (ids, 0..) |s, i| {
+        const view = replyObj(res[2 * i]) orelse continue;
+        list.appendSlice(rt.a, viewBlocks(s, view)) catch {};
+        if (replyObj(res[2 * i + 1])) |listed| detachedBlocks(&list, s, listed);
+    }
     return list.items;
 }
 
@@ -304,11 +325,40 @@ fn allPanes(session: ?[]const u8) ![]Raw {
     var list: std.ArrayListUnmanaged(Raw) = .empty;
     if (session) |s| {
         try list.appendSlice(rt.a, try sessionBlocks(s));
-    } else for (try sessionIds()) |s| {
-        try list.appendSlice(rt.a, sessionBlocks(s) catch continue);
-    }
-    for (list.items) |*r| inspect(r);
+    } else try list.appendSlice(rt.a, try everySessionBlocks());
+    inspectAll(list.items);
     return list.items;
+}
+
+/// `inspect` for many blocks: each round of `rex block call`s runs at once, since one at a time adds up to a second
+/// or more with a few sessions open.
+fn inspectAll(rs: []Raw) void {
+    var argvs: std.ArrayListUnmanaged([]const []const u8) = .empty;
+    var who: std.ArrayListUnmanaged(*Raw) = .empty;
+    for (rs) |*r| {
+        if (r.command.len == 0 or r.cwd.len == 0) {
+            argvs.append(rt.a, rexArgv(&.{ "block", "call", "-s", r.session, "-b", r.block, "process" })) catch {};
+            who.append(rt.a, r) catch {};
+        }
+        if (r.title.len == 0) {
+            argvs.append(rt.a, rexArgv(&.{ "block", "call", "-s", r.session, "-b", r.block, "title" })) catch {};
+            who.append(rt.a, r) catch {};
+        }
+    }
+    for (proc.runAll(argvs.items, 10_000), who.items) |res, r| if (replyObj(res)) |o| absorb(r, o);
+    argvs.clearRetainingCapacity();
+    who.clearRetainingCapacity();
+    for (rs) |*r| if (r.command.len > 0 and !isShell(r.command)) {
+        argvs.append(rt.a, rexArgv(&.{ "block", "call", "-s", r.session, "-b", r.block, "program_status" })) catch {};
+        who.append(rt.a, r) catch {};
+    };
+    for (proc.runAll(argvs.items, 10_000), who.items) |res, r| if (replyObj(res)) |o| absorbStatus(r, o);
+}
+
+fn replyObj(r: proc.Result) ?*Obj {
+    if (!r.ok()) return null;
+    const v = json.parse(rt.trim(r.stdout)) catch return null;
+    return v.asObj();
 }
 
 fn rawPane(pane_id: []const u8) !Raw {

@@ -204,6 +204,63 @@ pub fn run(argv: []const []const u8, o: Opts) Result {
     return res;
 }
 
+/// Several commands at once, for small outputs: all start, then their stdout is read as it comes, so the whole takes
+/// about as long as the slowest. stdin and stderr are ignored; past `timeout_ms` the rest are killed.
+pub fn runAll(argvs: []const []const []const u8, timeout_ms: i64) []Result {
+    const res = rt.a.alloc(Result, argvs.len) catch @panic("out of memory");
+    const kids = rt.a.alloc(?std.process.Child, argvs.len) catch @panic("out of memory");
+    const outs = rt.a.alloc(std.ArrayListUnmanaged(u8), argvs.len) catch @panic("out of memory");
+    const fds = rt.a.alloc(std.posix.pollfd, argvs.len) catch @panic("out of memory");
+    for (argvs, 0..) |argv, i| {
+        res[i] = .{};
+        outs[i] = .empty;
+        fds[i] = .{ .fd = -1, .events = std.posix.POLL.IN, .revents = 0 };
+        kids[i] = std.process.spawn(rt.io, .{ .argv = argv, .stdin = .ignore, .stdout = .pipe, .stderr = .ignore }) catch |err| blk: {
+            res[i].spawn_error = rt.fmt("spawn {s} failed: {s}", .{ argv[0], @errorName(err) });
+            break :blk null;
+        };
+        if (kids[i]) |k| fds[i].fd = if (k.stdout) |f| f.handle else -1;
+    }
+    const deadline = rt.monoMs() + timeout_ms;
+    var buf: [65536]u8 = undefined;
+    while (true) {
+        var open: usize = 0;
+        for (fds) |f| if (f.fd >= 0) {
+            open += 1;
+        };
+        const left = deadline - rt.monoMs();
+        if (open == 0 or left <= 0) break;
+        // poll skips negative fds.
+        _ = std.posix.poll(fds, @intCast(@min(left, std.math.maxInt(i32)))) catch break;
+        for (fds, 0..) |*f, i| {
+            if (f.fd < 0 or f.revents == 0) continue;
+            const r = std.c.read(f.fd, &buf, buf.len);
+            if (r < 0 and std.posix.errno(r) == .INTR) continue;
+            if (r <= 0) {
+                _ = std.c.close(f.fd);
+                f.fd = -1;
+                continue;
+            }
+            outs[i].appendSlice(rt.a, buf[0..@intCast(r)]) catch {};
+        }
+    }
+    for (kids, 0..) |*k, i| if (k.*) |*child| {
+        if (fds[i].fd >= 0) {
+            res[i].timed_out = true;
+            if (child.id) |id| kill(@intCast(id), .KILL);
+            _ = std.c.close(fds[i].fd);
+        }
+        child.stdout = null;
+        if (child.wait(rt.io)) |t| switch (t) {
+            .exited => |code| res[i].status = code,
+            .signal => |sig| res[i].signal = sigName(sig),
+            else => {},
+        } else |_| {}
+        res[i].stdout = outs[i].items;
+    };
+    return res;
+}
+
 /// Start a detached child with stdio ignored; returns without waiting.
 pub fn spawnDetached(argv: []const []const u8, o: Opts) !void {
     _ = std.process.spawn(rt.io, .{
