@@ -1,6 +1,7 @@
 const std = @import("std");
 const rt = @import("../rt.zig");
 const json = @import("json.zig");
+const config = @import("config.zig");
 const fs = @import("fs.zig");
 const time = @import("time.zig");
 const paths = @import("paths.zig");
@@ -40,8 +41,9 @@ pub fn failedStreak(s: State, task: *Obj) []const []const u8 {
     return out.items;
 }
 
+/// The Retry limit setting, or LODESTAR_MAX_FAILED_ATTEMPTS when set; 0 is no limit.
 pub fn assertRetryBudget(s: State, task: *Obj) !void {
-    var limit = MAX_FAILED_ATTEMPTS;
+    var limit = if (config.loadConfig()) |c| config.settingsOf(c).max_failed_attempts else |_| MAX_FAILED_ATTEMPTS;
     if (rt.getenv("LODESTAR_MAX_FAILED_ATTEMPTS")) |raw| {
         if (args_mod.jsNumber(raw)) |n| {
             if (std.math.isFinite(n) and @floor(n) == n and n >= 0) limit = @intFromFloat(n);

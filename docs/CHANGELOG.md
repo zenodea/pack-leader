@@ -18,7 +18,9 @@
   without opening its list. In a list, `ctrl-j`/`ctrl-k` move, `ctrl-l` picks and `ctrl-h`
   backs out; `ctrl-j` used to pick, since terminals send it as a newline. On/off settings show as a dot, the page keeps a margin, and
   long pages scroll. New rows: **Routing** (model routing's provider) and **Usage pane**
-  (`config set --usage-pane on|off`).
+  (`config set --usage-pane on|off`), **Sidebar side**, **Crewmate bar**, **Retry limit**
+  and **Accent**. The accent follows herdr's under herdr and the terminal's palette elsewhere,
+  so it matches the terminal's theme.
 - **Rex** works as a multiplexer next to herdr and tmux: inside a Rex terminal Lodestar
   uses Rex (or set `LODESTAR_MUX=rex`). The skill now accepts herdr, tmux or Rex.
 - On Rex, agent status comes from Rex itself: Claude Code, Codex and fx report it to Rex,

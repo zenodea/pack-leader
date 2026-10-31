@@ -751,7 +751,8 @@ pub fn startCrewmate(o_in: StartOptions) !*Obj {
     const sel = p.selection.?;
 
     const background = rt.eql(o.placement, "background");
-    const bar_pane: ?[]const u8 = if (rt.eqlOpt(rt.getenv("LODESTAR_BAR"), "0") or o.crewLayout or background) null else blk: {
+    const bar_off = rt.eqlOpt(rt.getenv("LODESTAR_BAR"), "0") or !config.settingsOf(config.loadConfig() catch json.newObj()).crew_bar;
+    const bar_pane: ?[]const u8 = if (bar_off or o.crewLayout or background) null else blk: {
         const br = if (wt) |w| w.strNonEmpty("branch") else null;
         break :blk openLeaderBar(o.run, o.name, pane_id, br orelse (if (wt) |w| w.str("branch") else null) orelse fs.basename(cwd), if (br != null) "Branch" else "Dir", task.str("title") orelse "");
     };

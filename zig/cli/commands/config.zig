@@ -53,6 +53,20 @@ fn applySettingFlags(c: *Obj, a: *const Args) !void {
     if (has(a, "navigator")) c.putBool("navigator", try onOff(a, "navigator"));
     if (has(a, "popup")) c.putBool("popup", try onOff(a, "popup"));
     if (has(a, "usage-pane")) c.putBool("usage_pane", try onOff(a, "usage-pane"));
+    if (has(a, "crew-bar")) c.putBool("crew_bar", try onOff(a, "crew-bar"));
+    if (str(a, "sidebar-side")) |side| {
+        if (!rt.oneOf(side, &config.SIDEBAR_SIDES)) return rt.fail(null, "--sidebar-side takes right or left", .{});
+        c.putStr("sidebar_side", side);
+    }
+    if (str(a, "accent")) |accent| {
+        if (!config.validAccent(accent)) return rt.fail(null, "--accent takes theme, blue, cyan, green, yellow, magenta, red or a colour like #89b482", .{});
+        c.putStr("accent", accent);
+    }
+    if (has(a, "retry-limit")) {
+        const n = args_mod.jsNumber(str(a, "retry-limit") orelse "x");
+        if (n == null or @floor(n.?) != n.? or n.? < 0 or !std.math.isFinite(n.?)) return rt.fail(null, "--retry-limit takes a whole number, 0 for no limit", .{});
+        c.putInt("max_failed_attempts", @intFromFloat(n.?));
+    }
     if (has(a, "review")) c.putBool("review", try onOff(a, "review"));
     if (has(a, "stall-minutes")) {
         const n = args_mod.jsNumber(str(a, "stall-minutes") orelse "x");
@@ -89,7 +103,7 @@ fn openSettings(from_action: bool) !void {
 }
 
 const KIND_FLAGS = [_][]const u8{ "kind", "model", "thinking", "clear-model", "clear-thinking", "default" };
-const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "navigator", "popup", "usage-pane", "review", "stall-minutes", "handoff", "handoff-at" };
+const SETTING_FLAGS = [_][]const u8{ "router", "routing-config", "placement", "worktree-mode", "navigator", "popup", "usage-pane", "crew-bar", "sidebar-side", "accent", "retry-limit", "review", "stall-minutes", "handoff", "handoff-at" };
 
 fn anyFlag(a: *const Args, names: []const []const u8) bool {
     for (names) |n| if (has(a, n)) return true;

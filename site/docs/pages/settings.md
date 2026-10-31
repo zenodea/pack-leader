@@ -20,10 +20,14 @@ It opens in your terminal and covers:
 | Worktrees | Always give crewmates a worktree, never, or let the leader decide | Leader decides |
 | Navigator | Open the Navigator with every run | On |
 | Review | The leader checks each crewmate's work before accepting its report | On |
+| Retry limit | Failed attempts in a row before a task is no longer retried. `0` is no limit; `LODESTAR_MAX_FAILED_ATTEMPTS` still wins | 3 |
 | Stall alert | Minutes of silence before a crewmate that owes a report is flagged. `0` is off | 20 |
 | Handoff | Hand the leader over to a fresh session when its context fills | Off |
 | Handoff at | The context size, in tokens, that triggers it | 200,000 |
+| Sidebar side | Which side of the leader the sidebar opens on. `--left` still wins for one run | Right |
 | Usage pane | The sidebar opens a pane below the crew with plan limits and spend | On |
+| Crewmate bar | The strip above each crewmate with its branch and task. `LODESTAR_BAR=0` still turns it off | On |
+| Accent | The highlight colour. `theme` uses herdr's accent under herdr and the terminal's cyan elsewhere; the colour names come from the terminal's palette, so they follow its theme; or a colour like `#89b482`. `LODESTAR_ACCENT` still wins | theme |
 
 Keys:
 
@@ -53,6 +57,7 @@ lodestar config set --worktree-mode on
 lodestar config set --navigator off
 lodestar config set --popup off
 lodestar config set --usage-pane off
+lodestar config set --sidebar-side left --crew-bar off --accent blue --retry-limit 5
 lodestar config set --stall-minutes 30
 lodestar config set --handoff on --handoff-at 180000
 ```

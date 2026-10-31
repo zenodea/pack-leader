@@ -119,7 +119,8 @@ const TEXT =
     \\  lodestar config [show]                            the settings as JSON
     \\  lodestar config set [--routing-config FILE] [--router off|openai|jev] [--kind K] [--model M] [--thinking L] [--clear-model] [--clear-thinking] [--default]
     \\                     [--placement tab|split|background] [--popup on|off] [--worktree-mode on|off|leader|shared] [--navigator on|off]
-    \\                     [--usage-pane on|off] [--review on|off] [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
+    \\                     [--usage-pane on|off] [--sidebar-side right|left] [--crew-bar on|off] [--accent theme|blue|cyan|green|yellow|magenta|red|#RRGGBB]
+    \\                     [--retry-limit N] [--review on|off] [--stall-minutes N] [--handoff on|off] [--handoff-at TOKENS]
     \\  lodestar skill [--install]                        the guide; or install it into Claude Code, Codex and pi
     \\  lodestar sidebar                                  the crewmates, live (run by herdr in a pane)
     \\  lodestar popup PANE [--name NAME]                 a crewmate's screen to read and type into; ctrl-] closes (the sidebar's p, Rex)

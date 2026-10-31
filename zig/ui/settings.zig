@@ -319,6 +319,65 @@ fn cUsagePane(c: Config, ask: Ask) anyerror!void {
     c.putBool("usage_pane", !sUsagePane(c));
 }
 
+fn sSide(c: Config) []const u8 {
+    return settings(c).str("sidebar_side") orelse "right";
+}
+fn vSide(c: Config) []const u8 {
+    return sSide(c);
+}
+fn cSide(c: Config, ask: Ask) anyerror!void {
+    const items = [_]PickItem{ .{ .value = "right" }, .{ .value = "left" } };
+    const v = try ask(.{ .title = "Sidebar opens on the", .items = &items, .current = sSide(c) });
+    if (v) |x| if (x.len > 0) c.putStr("sidebar_side", x);
+}
+
+fn sCrewBar(c: Config) bool {
+    return settings(c).boolean("crew_bar") orelse true;
+}
+fn vCrewBar(c: Config) []const u8 {
+    return onOff(sCrewBar(c));
+}
+fn cCrewBar(c: Config, ask: Ask) anyerror!void {
+    _ = ask;
+    c.putBool("crew_bar", !sCrewBar(c));
+}
+
+fn sAccent(c: Config) []const u8 {
+    return settings(c).str("accent") orelse "theme";
+}
+/// The value in its own colour, so the row shows what it picks.
+fn vAccent(c: Config) []const u8 {
+    const a = sAccent(c);
+    const look = if (rt.eql(a, "theme")) theme.loadTheme() else theme.Theme{ .accent = a };
+    return rt.concat(&.{ theme.paint(look).apply("●"), " ", a });
+}
+fn cAccent(c: Config, ask: Ask) anyerror!void {
+    var items: std.ArrayListUnmanaged(PickItem) = .empty;
+    for (config.ACCENTS) |a| try items.append(rt.a, .{ .value = a, .description = if (rt.eql(a, "theme")) "herdr's accent under herdr, else the terminal's cyan" else "from the terminal's palette" });
+    const v = try ask(.{ .title = "Accent colour", .items = items.items, .current = sAccent(c), .allowCustom = true, .hint = "^j/^k move · enter picks, or type a colour like #89b482 · ^h or esc cancels" });
+    const x = v orelse return;
+    if (x.len == 0) return;
+    if (!config.validAccent(x)) return rt.fail(null, "\"{s}\" is not an accent: pick one, or type a colour like #89b482", .{x});
+    c.putStr("accent", x);
+}
+
+fn sRetries(c: Config) i64 {
+    return settings(c).int("max_failed_attempts") orelse 3;
+}
+fn retries(n: i64) []const u8 {
+    if (n == 0) return "no limit";
+    return if (n == 1) "1 attempt" else rt.fmt("{d} attempts", .{n});
+}
+fn vRetries(c: Config) []const u8 {
+    return retries(sRetries(c));
+}
+fn cRetries(c: Config, ask: Ask) anyerror!void {
+    var items: std.ArrayListUnmanaged(PickItem) = .empty;
+    for ([_]i64{ 1, 2, 3, 5, 0 }) |n| try items.append(rt.a, .{ .value = rt.fmt("{d}", .{n}), .label = retries(n) });
+    const v = try ask(.{ .title = "Failed attempts before a task stops", .items = items.items, .current = rt.fmt("{d}", .{sRetries(c)}), .allowCustom = true, .hint = "^j/^k move · or type a number and press enter · ^h or esc cancels" });
+    if (v) |x| c.putInt("max_failed_attempts", try parseMinutes(x));
+}
+
 pub const SETTINGS_ROWS = [_]SettingsRow{
     .{ .section = "Crew", .label = "Harness", .value = vHarness, .change = cHarness },
     .{ .section = "Crew", .label = "Model", .value = modelOrDefault, .change = cModel },
@@ -329,10 +388,14 @@ pub const SETTINGS_ROWS = [_]SettingsRow{
     .{ .section = "Crew", .label = "Worktrees", .value = vWorktree, .change = cWorktree },
     .{ .section = "Orchestrator", .label = "Navigator", .value = vNavigator, .change = cNavigator },
     .{ .section = "Orchestrator", .label = "Review", .value = vReview, .change = cReview },
+    .{ .section = "Orchestrator", .label = "Retry limit", .value = vRetries, .change = cRetries },
     .{ .section = "Orchestrator", .label = "Stall alert", .value = vStall, .change = cStall },
     .{ .section = "Orchestrator", .label = "Handoff", .value = vHandoff, .change = cHandoff },
     .{ .section = "Orchestrator", .label = "Handoff at", .value = vHandoffAt, .change = cHandoffAt },
-    .{ .section = "Sidebar", .label = "Usage pane", .value = vUsagePane, .change = cUsagePane },
+    .{ .section = "Display", .label = "Sidebar side", .value = vSide, .change = cSide },
+    .{ .section = "Display", .label = "Usage pane", .value = vUsagePane, .change = cUsagePane },
+    .{ .section = "Display", .label = "Crewmate bar", .value = vCrewBar, .change = cCrewBar },
+    .{ .section = "Display", .label = "Accent", .value = vAccent, .change = cAccent },
 };
 
 fn joinNonEmpty(parts: []const ?[]const u8, sep: []const u8) []const u8 {
@@ -499,7 +562,7 @@ fn isKey(key: term.Key, ch: []const u8) bool {
 pub fn runSettings() !Config {
     if (!term.isTty(0) or !term.isTty(1)) return rt.fail(null, "lodestar settings needs a terminal", .{});
     const c = try config.loadConfig();
-    const accent: ansi.Paint = if (theme.loadTheme().accent) |hex| .{ .color = ansi.rgb(hex) } else ansi.Paint.of(&ansi.fg.cyan);
+    const accent = theme.paint(theme.loadTheme());
     var sel: usize = 0;
     var notice: []const u8 = "";
     var raw: term.Raw = .{};
@@ -600,7 +663,7 @@ test "h and l step through a row's values, and a short page scrolls to the selec
     const page = renderSettings(c, last, 50, 16, "", .{});
     try std.testing.expectEqual(@as(usize, 16), page.len);
     var found = false;
-    for (page) |l| found = found or std.mem.indexOf(u8, ansi.stripSgr(l), "❯ Usage pane") != null;
+    for (page) |l| found = found or std.mem.indexOf(u8, ansi.stripSgr(l), "❯ Accent") != null;
     try std.testing.expect(found);
     try std.testing.expectEqualStrings("  j/k move   h/l change   enter pick   q close", ansi.stripSgr(page[14]));
 }

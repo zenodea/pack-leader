@@ -136,7 +136,7 @@ fn appendAll(list: *std.ArrayListUnmanaged([]const u8), items: []const []const u
 
 pub fn boxLines(w: Crewmate, t: ?Task, last: ?Message, st: []const u8, cols: i64, selected: bool, theme: Theme) []const []const u8 {
     const inner: usize = @intCast(@max(1, cols - 4));
-    const accent: Paint = if (theme.accent) |hex| .{ .color = ansi.rgb(hex) } else Paint.of(&fg.cyan);
+    const accent = theme_mod.paint(theme);
     const wname = w.str("name") orelse "";
     const name = if (selected) accent.apply(bold(wname)) else bold(wname);
     var harness_parts: std.ArrayListUnmanaged([]const u8) = .empty;

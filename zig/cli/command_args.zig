@@ -138,7 +138,7 @@ const commands = [_]Cmd{
     .{ .name = "usage", .flags = schema(&.{ "quiet", "watch" }, &.{}, &.{}) },
 };
 
-const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "navigator", "popup", "usage-pane", "review", "stall-minutes", "handoff", "handoff-at" }, &.{});
+const config_set: Schema = schema(&.{ "clear-model", "clear-thinking", "default" }, &.{ "kind", "model", "thinking", "router", "routing-config", "placement", "worktree-mode", "navigator", "popup", "usage-pane", "crew-bar", "sidebar-side", "accent", "retry-limit", "review", "stall-minutes", "handoff", "handoff-at" }, &.{});
 
 fn findGroup(name: []const u8) ?*const Group {
     for (&groups) |*g| if (rt.eql(g.name, name)) return g;

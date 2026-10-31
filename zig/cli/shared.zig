@@ -1,6 +1,7 @@
 const std = @import("std");
 const rt = @import("../rt.zig");
 const json = @import("../core/json.zig");
+const config = @import("../core/config.zig");
 const fs = @import("../core/fs.zig");
 const state = @import("../core/state.zig");
 const mux = @import("../mux/index.zig");
@@ -122,7 +123,9 @@ fn setSidebar(ctx: SidebarCtx, s: state.State) !void {
     if (state.getRun(s, ctx.run_id)) |r| r.putStr("sidebar_pane_id", ctx.pane);
 }
 
-pub fn openSidebar(target: []const u8, on_left: bool, focus: bool) ![]const u8 {
+/// `on_left` (`--left`) wins over the Sidebar side setting.
+pub fn openSidebar(target: []const u8, on_left_: bool, focus: bool) ![]const u8 {
+    const on_left = on_left_ or rt.eql(config.settingsOf(config.loadConfig() catch json.newObj()).sidebar_side, "left");
     const s = try state.load();
     var owner: ?state.Run = null;
     for (state.activeRuns(s)) |r| if (rt.eqlOpt(state.orchestratorPane(r), target)) {

@@ -2,7 +2,12 @@ const std = @import("std");
 const rt = @import("../rt.zig");
 const fs = @import("../core/fs.zig");
 const paths = @import("../core/paths.zig");
+const json = @import("../core/json.zig");
+const config = @import("../core/config.zig");
+const mux = @import("../mux/index.zig");
+const ansi = @import("ansi.zig");
 
+/// `accent` is a `#rrggbb` colour or a terminal palette name (config.ACCENTS); none means the terminal's cyan.
 pub const Theme = struct { accent: ?[]const u8 };
 
 pub const noTheme: Theme = .{ .accent = null };
@@ -64,17 +69,37 @@ pub fn herdrConfigFile() []const u8 {
     return fs.join(&.{ paths.herdr_home, "config.toml" });
 }
 
-pub fn loadThemeFrom(file: []const u8, crew_accent: ?[]const u8) Theme {
-    var t: Theme = noTheme;
-    if (fs.readFileOpt(file)) |text| t = parseTheme(text);
-    return .{ .accent = hexColor(crew_accent) orelse t.accent };
+/// A palette name as it is, a colour as `#rrggbb`, anything else null.
+fn accentValue(v: ?[]const u8) ?[]const u8 {
+    const x = v orelse return null;
+    if (rt.oneOf(x, config.ACCENTS[1..])) return x;
+    return hexColor(x);
 }
 
+/// The first of: `env_accent` (LODESTAR_ACCENT, which hands a crewmate's bar the leader's), the Accent setting unless
+/// it is "theme", and the multiplexer's own accent.
+pub fn resolve(env_accent: ?[]const u8, setting: []const u8, mux_accent: ?[]const u8) Theme {
+    if (accentValue(env_accent)) |a| return .{ .accent = a };
+    if (!rt.eql(setting, "theme")) if (accentValue(setting)) |a| return .{ .accent = a };
+    return .{ .accent = hexColor(mux_accent) };
+}
+
+/// herdr has an accent of its own; Rex and tmux follow the terminal's palette, which the palette names do too.
 pub fn loadTheme() Theme {
-    return loadThemeFrom(herdrConfigFile(), rt.getenv("LODESTAR_ACCENT"));
+    const setting = config.settingsOf(config.loadConfig() catch json.newObj()).accent;
+    const herdr = if (rt.eql(mux.mux().name, "herdr")) if (fs.readFileOpt(herdrConfigFile())) |t| parseTheme(t).accent else null else null;
+    return resolve(rt.getenv("LODESTAR_ACCENT"), setting, herdr);
 }
 
-test "parseTheme, hexColor and loadThemeFrom" {
+pub fn paint(t: Theme) ansi.Paint {
+    const a = t.accent orelse return ansi.Paint.of(&ansi.fg.cyan);
+    if (a[0] == '#') return .{ .color = ansi.rgb(a) };
+    const names = [_]struct { []const u8, ansi.StyleFn }{ .{ "blue", &ansi.fg.blue }, .{ "cyan", &ansi.fg.cyan }, .{ "green", &ansi.fg.green }, .{ "yellow", &ansi.fg.yellow }, .{ "magenta", &ansi.fg.magenta }, .{ "red", &ansi.fg.red } };
+    for (names) |n| if (rt.eql(a, n[0])) return ansi.Paint.of(n[1]);
+    return ansi.Paint.of(&ansi.fg.cyan);
+}
+
+test "parseTheme, hexColor and resolve" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var map = std.process.Environ.Map.init(arena.allocator());
@@ -102,6 +127,8 @@ test "parseTheme, hexColor and loadThemeFrom" {
     try std.testing.expectEqualStrings("#88c0d0", hexColor("#88C0D0").?);
     try std.testing.expectEqualStrings("#88c0d0", hexColor("88c0d0").?);
     try std.testing.expect(hexColor("reset") == null and hexColor("#fff") == null and hexColor(null) == null);
-    try std.testing.expect(loadThemeFrom("/nonexistent/config.toml", null).accent == null);
-    try std.testing.expectEqualStrings("#abcdef", loadThemeFrom("/nonexistent/config.toml", "#ABCDEF").accent.?);
+    try std.testing.expectEqualStrings("#abcdef", resolve("#ABCDEF", "blue", "#88c0d0").accent.?);
+    try std.testing.expectEqualStrings("blue", resolve(null, "blue", "#88c0d0").accent.?);
+    try std.testing.expectEqualStrings("#88c0d0", resolve(null, "theme", "#88c0d0").accent.?);
+    try std.testing.expect(resolve(null, "theme", null).accent == null);
 }

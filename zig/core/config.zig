@@ -9,17 +9,21 @@ const routing = @import("routing.zig");
 const Obj = json.Obj;
 const Value = json.Value;
 
-/// The config file document: { kind, routing?, kinds, placement?, worktree?, navigator?, popup?, usage_pane?, stall_minutes?,
-/// handoff?, ... }.
+/// The config file document: { kind, routing?, kinds, placement?, worktree?, navigator?, popup?, usage_pane?, sidebar_side?,
+/// crew_bar?, accent?, max_failed_attempts?, stall_minutes?, handoff?, ... }.
 pub const Config = *Obj;
 
 pub const PLACEMENTS = [_][]const u8{ "tab", "split", "background" };
 pub const WORKTREE_MODES = [_][]const u8{ "on", "off", "leader", "shared" };
+pub const SIDEBAR_SIDES = [_][]const u8{ "right", "left" };
+/// "theme" follows the multiplexer's accent, else the terminal's; the names are terminal palette colours, so they follow
+/// its theme too. A `#rrggbb` value is also accepted.
+pub const ACCENTS = [_][]const u8{ "theme", "blue", "cyan", "green", "yellow", "magenta", "red" };
 
 pub const HandoffSettings = struct { enabled: bool, at_tokens: i64 };
-pub const Settings = struct { placement: []const u8, worktree: []const u8, navigator: bool, popup: bool, usage_pane: bool, review: bool, stall_minutes: i64, handoff: HandoffSettings };
+pub const Settings = struct { placement: []const u8, worktree: []const u8, navigator: bool, popup: bool, usage_pane: bool, sidebar_side: []const u8, crew_bar: bool, accent: []const u8, max_failed_attempts: i64, review: bool, stall_minutes: i64, handoff: HandoffSettings };
 
-pub const DEFAULT_SETTINGS: Settings = .{ .placement = "tab", .worktree = "leader", .navigator = true, .popup = true, .usage_pane = true, .review = true, .stall_minutes = 20, .handoff = .{ .enabled = false, .at_tokens = 200_000 } };
+pub const DEFAULT_SETTINGS: Settings = .{ .placement = "tab", .worktree = "leader", .navigator = true, .popup = true, .usage_pane = true, .sidebar_side = "right", .crew_bar = true, .accent = "theme", .max_failed_attempts = 3, .review = true, .stall_minutes = 20, .handoff = .{ .enabled = false, .at_tokens = 200_000 } };
 
 pub fn settingsOf(config: Config) Settings {
     const handoff = config.obj("handoff");
@@ -29,6 +33,10 @@ pub fn settingsOf(config: Config) Settings {
         .navigator = config.boolean("navigator") orelse DEFAULT_SETTINGS.navigator,
         .popup = config.boolean("popup") orelse DEFAULT_SETTINGS.popup,
         .usage_pane = config.boolean("usage_pane") orelse DEFAULT_SETTINGS.usage_pane,
+        .sidebar_side = nonNullStr(config.get("sidebar_side")) orelse DEFAULT_SETTINGS.sidebar_side,
+        .crew_bar = config.boolean("crew_bar") orelse DEFAULT_SETTINGS.crew_bar,
+        .accent = nonNullStr(config.get("accent")) orelse DEFAULT_SETTINGS.accent,
+        .max_failed_attempts = config.int("max_failed_attempts") orelse DEFAULT_SETTINGS.max_failed_attempts,
         .review = config.boolean("review") orelse DEFAULT_SETTINGS.review,
         .stall_minutes = config.int("stall_minutes") orelse DEFAULT_SETTINGS.stall_minutes,
         .handoff = .{
@@ -51,6 +59,10 @@ pub fn settingsObj(st: Settings) *Obj {
         .{ "navigator", st.navigator },
         .{ "popup", st.popup },
         .{ "usage_pane", st.usage_pane },
+        .{ "sidebar_side", st.sidebar_side },
+        .{ "crew_bar", st.crew_bar },
+        .{ "accent", st.accent },
+        .{ "max_failed_attempts", st.max_failed_attempts },
         .{ "review", st.review },
         .{ "stall_minutes", st.stall_minutes },
         .{ "handoff", json.object(.{ .{ "enabled", st.handoff.enabled }, .{ "at_tokens", st.handoff.at_tokens } }) },
@@ -142,12 +154,24 @@ fn validateSettings(v: *const Obj) !void {
     if (v.get("navigator")) |o| if (o != .bool) return invalidConfig("\"navigator\" must be true or false", .{});
     if (v.get("popup")) |o| if (o != .bool) return invalidConfig("\"popup\" must be true or false", .{});
     if (v.get("usage_pane")) |o| if (o != .bool) return invalidConfig("\"usage_pane\" must be true or false", .{});
+    if (v.get("sidebar_side")) |p| if (!(p == .str and rt.oneOf(p.str, &SIDEBAR_SIDES))) return invalidConfig("\"sidebar_side\" must be one of {s}", .{joinList(&SIDEBAR_SIDES)});
+    if (v.get("crew_bar")) |o| if (o != .bool) return invalidConfig("\"crew_bar\" must be true or false", .{});
+    if (v.get("accent")) |p| if (!(p == .str and validAccent(p.str))) return invalidConfig("\"accent\" must be one of {s}, or a colour like #89b482", .{joinList(&ACCENTS)});
+    if (v.get("max_failed_attempts")) |s| if (!isWholeAtLeast(s, 0)) return invalidConfig("\"max_failed_attempts\" must be a whole number, 0 for no limit", .{});
     if (v.get("review")) |o| if (o != .bool) return invalidConfig("\"review\" must be true or false", .{});
     if (v.get("stall_minutes")) |s| if (!isWholeAtLeast(s, 0)) return invalidConfig("\"stall_minutes\" must be a whole number of minutes, 0 for off", .{});
     const handoff = v.get("handoff") orelse return;
     const h = handoff.asObj() orelse return invalidConfig("\"handoff\" must be an object", .{});
     if (h.get("enabled")) |e| if (e != .bool) return invalidConfig("\"handoff.enabled\" must be true or false", .{});
     if (h.get("at_tokens")) |t| if (!isWholeAtLeast(t, 1_000)) return invalidConfig("\"handoff.at_tokens\" must be a whole number of tokens, at least 1000", .{});
+}
+
+pub fn validAccent(s: []const u8) bool {
+    if (rt.oneOf(s, &ACCENTS)) return true;
+    const hex = if (s.len > 0 and s[0] == '#') s[1..] else s;
+    if (hex.len != 6) return false;
+    for (hex) |ch| if (!std.ascii.isHex(ch)) return false;
+    return true;
 }
 
 fn isWholeAtLeast(v: Value, min: f64) bool {

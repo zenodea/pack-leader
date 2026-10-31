@@ -93,7 +93,7 @@ pub fn run() !void {
     const tty = term.isTty(0);
     const parent: ?i64 = if (rt.getenvNonEmpty("LODESTAR_USAGE_PARENT_PID")) |s| std.fmt.parseInt(i64, s, 10) catch null else null;
     var pane: Pane = .{ .run = rt.getenvNonEmpty("LODESTAR_USAGE_RUN"), .started = rt.nowMs() };
-    if (theme.loadTheme().accent) |hex| pane.accent = .{ .color = ansi.rgb(hex) };
+    pane.accent = theme.paint(theme.loadTheme());
     var frame = Arena.init(std.heap.page_allocator);
     rt.a = frame.allocator();
     rt.writeStdout(ansi.screen.alt ++ ansi.screen.hideCursor ++ ansi.screen.clear);

@@ -15,6 +15,14 @@ cols=80
 redraw=0
 
 accent() {
+  case "${LODESTAR_ACCENT:-}" in
+    red) printf '\033[31m'; return ;;
+    green) printf '\033[32m'; return ;;
+    yellow) printf '\033[33m'; return ;;
+    blue) printf '\033[34m'; return ;;
+    magenta) printf '\033[35m'; return ;;
+    cyan) printf '\033[36m'; return ;;
+  esac
   if [[ "${LODESTAR_ACCENT:-}" =~ ^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$ ]]; then
     printf '\033[38;2;%d;%d;%dm' "$((16#${BASH_REMATCH[1]}))" "$((16#${BASH_REMATCH[2]}))" "$((16#${BASH_REMATCH[3]}))"
   else
